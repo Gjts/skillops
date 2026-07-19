@@ -1,0 +1,41 @@
+{
+  "name": "skillops",
+  "version": "0.3.1",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -b && vite build",
+    "test": "vitest run --root .",
+    "start": "node app/backend/server.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "scan": "node bin/skillops.mjs scan",
+    "emit": "node bin/skillops.mjs emit",
+    "codex:install": "node adapters/codex/install.mjs",
+    "codex:uninstall": "node adapters/codex/install.mjs --uninstall",
+    "codex:dry-run": "node adapters/codex/install.mjs --dry-run",
+    "claude:install": "node adapters/claude/install.mjs",
+    "claude:uninstall": "node adapters/claude/install.mjs --uninstall",
+    "claude:dry-run": "node adapters/claude/install.mjs --dry-run"
+  },
+  "dependencies": {
+    "lucide-react": "^1.25.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.3",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "jsdom": "^29.1.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10"
+  }
+}
