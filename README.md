@@ -98,10 +98,18 @@ SkillOps stores the preference locally in the browser, restores it on reload,
 and updates the document language metadata. All supported languages use a
 left-to-right layout.
 
-The sidebar appearance control switches the complete dashboard between light
-and dark themes. SkillOps follows the operating-system preference until the
+The sidebar appearance control opens a catalog of 25 complete product styles.
+It includes the original Synapse, Swiss, Lumina, nature, blueprint, Soft UI,
+and DevTools directions plus Material You, an Apple-inspired glass web
+approximation, Tesla Mono, Carbon, Fluent Mica, GitHub Primer, Polaris,
+Bauhaus, editorial ink, Solarized, phosphor terminal, Vaporwave, Cypherpunk,
+Nordic fjord, and Clay Studio. Each style changes typography, density,
+geometry, material, cards, controls, charts, and tables across every route.
+SkillOps maps
+the operating-system light or dark preference to DevTools or Synapse until the
 user makes a choice, then stores that choice locally and restores it before the
-next page is painted.
+next page is painted. Existing `skillops.theme.v1` light/dark preferences are
+migrated once to DevTools/Synapse so upgrades preserve the user's appearance.
 
 The main surfaces have reload-safe URLs: `/skills`, `/runs`, `/evaluations`, `/registry`, and `/settings`. Events refresh from the local store every three seconds, while runtime connection health refreshes every five seconds. Unchanged event polls use ETags and return an empty `304` response instead of transferring and parsing the full history again.
 

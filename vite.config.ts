@@ -1,6 +1,7 @@
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'node:path'
+import { themeBootstrapConfig } from './app/frontend/skillops/src/lib/themeCatalog'
 // @ts-expect-error Plain JavaScript module is shared with the production server.
 import { appendEvent, appendEvents, clearEvents, eventVersion, readEvents, readJsonBody } from './app/backend/event-store.mjs'
 // @ts-expect-error Plain JavaScript module is shared with the production server.
@@ -9,6 +10,15 @@ import { syncCodexDesktopEvents } from './app/backend/codex-desktop-ingest.mjs'
 import { enrichRuntimeConnections, readRuntimeConnections } from './app/backend/runtime-connections.mjs'
 // @ts-expect-error Plain JavaScript module is shared with the production server.
 import { scanInstalledSkills } from './app/backend/skill-scanner.mjs'
+
+function themeBootstrap(): Plugin {
+  return {
+    name: 'skillops-theme-bootstrap',
+    transformIndexHtml(html) {
+      return html.replace('__SKILLOPS_THEME_BOOTSTRAP__', JSON.stringify(themeBootstrapConfig))
+    },
+  }
+}
 
 function localEventApi(): Plugin {
   return {
@@ -106,7 +116,7 @@ function localEventApi(): Plugin {
 
 export default defineConfig({
   root: path.resolve('app/frontend/skillops'),
-  plugins: [react(), localEventApi()],
+  plugins: [themeBootstrap(), react(), localEventApi()],
   server: { port: 5173 },
   build: {
     outDir: path.resolve('dist'),

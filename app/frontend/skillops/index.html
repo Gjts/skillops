@@ -7,14 +7,30 @@
     <meta name="description" content="Local-first Skill and Agent observability for AI-native teams." />
     <script>
       (() => {
+        const config = __SKILLOPS_THEME_BOOTSTRAP__
+        const themeIds = config.themes.map(({ id }) => id)
         let theme = null
-        try { theme = window.localStorage.getItem('skillops.theme.v1') } catch {}
-        if (theme !== 'light' && theme !== 'dark') {
-          theme = window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        try {
+          theme = window.localStorage.getItem(config.storageKey)
+          if (!themeIds.includes(theme)) {
+            const legacy = window.localStorage.getItem(config.legacyStorageKey)
+            const migrated = config.legacyThemeMap[legacy]
+            if (migrated) {
+              theme = migrated
+              window.localStorage.setItem(config.storageKey, theme)
+              window.localStorage.removeItem(config.legacyStorageKey)
+            }
+          }
+        } catch {}
+        if (!themeIds.includes(theme)) {
+          theme = window.matchMedia?.('(prefers-color-scheme: dark)').matches
+            ? config.systemThemes.dark
+            : config.systemThemes.light
         }
+        const selected = config.themes.find(({ id }) => id === theme)
         document.documentElement.dataset.theme = theme
-        document.documentElement.style.colorScheme = theme
-        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#070b0e' : '#f3f6f7')
+        document.documentElement.style.colorScheme = selected.scheme
+        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', selected.metaColor)
       })()
     </script>
     <title>SkillOps</title>

@@ -5,9 +5,11 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Sidebar } from '../components/Sidebar'
 import { I18nProvider } from '../i18n/I18nProvider'
+import { themeOptions } from './themeCatalog'
 import { THEME_STORAGE_KEY } from './useTheme'
 
 const styles = readFileSync('app/frontend/skillops/src/styles.css', 'utf8')
+const themeCases = themeOptions.map(({ id }) => [id, `:root[data-theme='${id}'] {`] as const)
 
 function themeBlock(selector: string) {
   const start = styles.indexOf(selector)
@@ -38,6 +40,8 @@ function contrastRatio(foreground: string, background: string) {
 
 beforeEach(() => {
   window.localStorage.clear()
+  document.documentElement.removeAttribute('data-theme')
+  document.documentElement.style.colorScheme = ''
   vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({
     matches: false,
     addEventListener: vi.fn(),
@@ -51,31 +55,84 @@ afterEach(() => {
 })
 
 describe('theme accessibility', () => {
-  it('uses an action name without exposing a conflicting pressed state', () => {
-    window.localStorage.setItem(THEME_STORAGE_KEY, 'light')
+  it('publishes 25 unique product-wide themes', () => {
+    expect(themeOptions).toHaveLength(25)
+    expect(new Set(themeOptions.map(({ id }) => id)).size).toBe(themeOptions.length)
+  })
+
+  it('opens the theme chooser and applies the selected palette across SkillOps', () => {
+    window.localStorage.setItem(THEME_STORAGE_KEY, 'devtools')
     render(
       <I18nProvider>
         <Sidebar page="overview" open={false} onNavigate={vi.fn()} onToggle={vi.fn()} onClose={vi.fn()} />
       </I18nProvider>,
     )
 
-    const switchToDark = screen.getByRole('button', { name: 'Switch to dark mode' })
-    expect(switchToDark.hasAttribute('aria-pressed')).toBe(false)
+    const chooser = screen.getByRole('button', { name: 'Choose a theme: DevTools system' })
+    expect(chooser.hasAttribute('aria-pressed')).toBe(false)
+    fireEvent.click(chooser)
 
-    fireEvent.click(switchToDark)
-    const switchToLight = screen.getByRole('button', { name: 'Switch to light mode' })
-    expect(switchToLight.hasAttribute('aria-pressed')).toBe(false)
+    const dialog = screen.getByRole('dialog', { name: 'Choose a theme' })
+    expect(dialog.querySelectorAll('button[aria-pressed]').length).toBe(themeOptions.length)
+
+    const devtools = screen.getByRole('button', { name: 'DevTools system' })
+    expect(document.activeElement).toBe(devtools)
+
+    const close = screen.getByRole('button', { name: 'Close' })
+    close.focus()
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Clay studio' }))
+    fireEvent.keyDown(document, { key: 'Tab' })
+    expect(document.activeElement).toBe(close)
+
+    const blueprint = screen.getByRole('button', { name: 'Blueprint' })
+    fireEvent.click(blueprint)
+    expect(blueprint.getAttribute('aria-pressed')).toBe('true')
+    expect(document.documentElement.dataset.theme).toBe('blueprint')
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe('blueprint')
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Choose a theme' })).toBeNull()
+    expect(document.activeElement).toBe(chooser)
   })
 
-  it.each([
-    ['light', ':root {'],
-    ['dark', ":root[data-theme='dark'] {"],
-  ])('keeps %s subtle text above WCAG AA contrast on its theme surfaces', (_theme, selector) => {
+  it('restores focus to the chooser when the close button dismisses the dialog', () => {
+    render(
+      <I18nProvider>
+        <Sidebar page="overview" open={false} onNavigate={vi.fn()} onToggle={vi.fn()} onClose={vi.fn()} />
+      </I18nProvider>,
+    )
+
+    const chooser = screen.getByRole('button', { name: 'Choose a theme: DevTools system' })
+    fireEvent.click(chooser)
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+
+    expect(screen.queryByRole('dialog', { name: 'Choose a theme' })).toBeNull()
+    expect(document.activeElement).toBe(chooser)
+  })
+
+  it.each(themeCases)('keeps %s subtle text above WCAG AA contrast on its theme surfaces', (_theme, selector) => {
     const palette = themeBlock(selector)
     const subtle = hexToken(palette, '--subtle')
 
     for (const backgroundToken of ['--bg', '--surface', '--control-bg']) {
       expect(contrastRatio(subtle, hexToken(palette, backgroundToken))).toBeGreaterThanOrEqual(4.5)
     }
+  })
+
+  it.each(themeCases)('keeps %s sidebar copy and status colors readable', (_theme, selector) => {
+    const palette = themeBlock(selector)
+    const sidebar = hexToken(palette, '--sidebar-contrast-bg')
+
+    for (const foregroundToken of ['--sidebar-text', '--sidebar-muted', '--sidebar-success']) {
+      expect(contrastRatio(hexToken(palette, foregroundToken), sidebar)).toBeGreaterThanOrEqual(4.5)
+    }
+    for (const nonTextToken of ['--sidebar-accent', '--sidebar-focus']) {
+      expect(contrastRatio(hexToken(palette, nonTextToken), sidebar)).toBeGreaterThanOrEqual(3)
+    }
+  })
+
+  it('resets every themed sidebar width before positioning the chooser on narrow screens', () => {
+    expect(styles).toMatch(/@media \(max-width: 920px\)\s*{\s*:root,\s*:root\[data-theme\]\s*{\s*--sidebar-width:\s*0px;/)
   })
 })

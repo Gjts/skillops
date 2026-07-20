@@ -58,8 +58,8 @@ export function RunsChart({ events, days }: { events: SkillEvent[]; days: number
         <svg className="runs-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={t('charts.aria')}>
           <defs>
             <linearGradient id="successArea" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stopColor="#59dd79" stopOpacity=".18" />
-              <stop offset="1" stopColor="#59dd79" stopOpacity="0" />
+              <stop offset="0" stopColor="var(--success)" stopOpacity=".18" />
+              <stop offset="1" stopColor="var(--success)" stopOpacity="0" />
             </linearGradient>
           </defs>
           {[0, .25, .5, .75, 1].map((ratio) => {

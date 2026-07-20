@@ -25,7 +25,7 @@ Its primary responsibilities are:
 | Routing | Browser history plus pathname map |
 | State | React local state and derived memoized selectors |
 | Internationalization | Typed in-repo message catalog + React context; browser-local locale preference |
-| Theming | Root semantic CSS tokens; system-default light/dark mode with a browser-local override |
+| Theming | Root semantic design-system tokens; system-mapped light/dark mode with a browser-local 25-style override |
 | Charts | Lightweight React/SVG/CSS modules |
 | Tests | Vitest + Testing Library + jsdom |
 
@@ -57,9 +57,16 @@ production server falls back to `index.html` for extensionless SPA paths.
 - selected page, runtime, time range, menu, modal, and requested run.
 - selected UI locale, persisted under the versioned browser key
   `skillops.locale.v1`.
-- selected light or dark appearance after a manual choice, persisted under
-  `skillops.theme.v1`; before a manual choice, the dashboard follows
-  `prefers-color-scheme`.
+- selected appearance from the 25-style product catalog after a manual choice,
+  persisted under `skillops.theme.v2`; before a manual choice, the dashboard
+  maps `prefers-color-scheme` to the DevTools or Synapse design system. The
+  pre-paint bootstrap and React hook both migrate the legacy
+  `skillops.theme.v1` light/dark preference to those two themes.
+
+`src/lib/themeCatalog.ts` is the authoritative source for theme IDs, color
+schemes, browser theme colors, storage keys, legacy mappings, and system
+defaults. A Vite HTML transform serializes its bootstrap subset into the inline
+head script so the initial paint and the React runtime cannot drift.
 
 ### Derived state
 
@@ -158,7 +165,8 @@ uses the server's backup-first operation.
 
 | Component | Responsibility |
 | --- | --- |
-| `Sidebar` | Responsive navigation, root theme control, and local-mode identity |
+| `Sidebar` | Responsive navigation, global theme chooser, and local-mode identity |
+| `ThemeChooser` | Localized 25-style catalog with miniature product previews, selection state, and accessible popover behavior |
 | `KpiStrip` | Outcome-aware summary metrics |
 | `Charts` | Daily runs and runtime distribution |
 | `SkillTable` | Runtime-specific Skill metrics and definition details |
@@ -197,7 +205,7 @@ Implemented expectations include:
 - Escape-to-close and focus restoration for the connect dialog;
 - focus trapping inside the connect dialog;
 - accessible names for icon-only controls;
-- a keyboard-operable theme toggle with localized current and target states;
+- a keyboard-operable theme chooser with localized current and selected states;
 - mobile sidebar scrim and explicit close action;
 - horizontal containment for the wide Registry table.
 
@@ -220,8 +228,9 @@ Tests should use visible outcomes through each module's interface:
 - app tests for local/demo mode, routing, polling, import, and clearing;
 - internationalization tests for catalog completeness, persistence, translated
   application copy, document language, and fallback from unsupported locales;
-- theme tests for system defaults, manual persistence, root metadata, and
-  light/dark switching;
+- theme tests for system defaults, legacy migration, manual persistence, root
+  metadata, catalog selection, focus containment, responsive placement, and
+  palette/sidebar contrast;
 - run detail for event correlation.
 
 Avoid tests that assert private React state or implementation-only markup order.
