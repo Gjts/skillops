@@ -42,6 +42,12 @@ npm run claude:install
 Restart the runtime after installation. In runtimes that require hook trust,
 open `/hooks`, inspect the SkillOps commands, and approve them.
 
+### Choose the interface language
+
+Use the language selector at the bottom of the sidebar. The dashboard supports
+Chinese, English, French, Russian, Spanish, and Japanese. The selected language
+is saved in this browser and restored on the next visit.
+
 ## 3. Confirm that setup is real
 
 An **Installed** badge confirms that the effective config contains SkillOps

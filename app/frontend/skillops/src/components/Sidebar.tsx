@@ -5,19 +5,22 @@ import {
   ChartNoAxesCombined,
   ChevronRight,
   CircleGauge,
+  Languages,
   Menu,
   Settings,
   X,
 } from 'lucide-react'
+import { useI18n } from '../i18n/I18nProvider'
+import { localeOptions, type MessageKey } from '../i18n/messages'
 import type { PageId } from '../types'
 
-const navigation: Array<{ id: PageId; label: string; icon: typeof Activity }> = [
-  { id: 'overview', label: 'Overview', icon: CircleGauge },
-  { id: 'skills', label: 'Skills', icon: Braces },
-  { id: 'runs', label: 'Runs', icon: Activity },
-  { id: 'evaluations', label: 'Evaluation preview', icon: ChartNoAxesCombined },
-  { id: 'registry', label: 'Registry', icon: Boxes },
-  { id: 'settings', label: 'Settings', icon: Settings },
+const navigation: Array<{ id: PageId; label: MessageKey; icon: typeof Activity }> = [
+  { id: 'overview', label: 'nav.overview', icon: CircleGauge },
+  { id: 'skills', label: 'nav.skills', icon: Braces },
+  { id: 'runs', label: 'nav.runs', icon: Activity },
+  { id: 'evaluations', label: 'nav.evaluations', icon: ChartNoAxesCombined },
+  { id: 'registry', label: 'nav.registry', icon: Boxes },
+  { id: 'settings', label: 'nav.settings', icon: Settings },
 ]
 
 interface SidebarProps {
@@ -29,18 +32,19 @@ interface SidebarProps {
 }
 
 export function Sidebar({ page, open, onNavigate, onToggle, onClose }: SidebarProps) {
+  const { locale, setLocale, t } = useI18n()
   return (
     <>
-      <button className="mobile-menu" type="button" onClick={onToggle} aria-label="Toggle navigation">
+      <button className="mobile-menu" type="button" onClick={onToggle} aria-label={t('nav.toggle')}>
         {open ? <X size={19} /> : <Menu size={19} />}
       </button>
-      {open && <button className="sidebar-scrim" type="button" aria-label="Close navigation" onClick={onClose} />}
+      {open && <button className="sidebar-scrim" type="button" aria-label={t('nav.close')} onClick={onClose} />}
       <aside className={`sidebar ${open ? 'is-open' : ''}`}>
         <div className="brand">
           <span className="brand-mark" aria-hidden="true"><ChevronRight size={21} /><span /></span>
           <span>SkillOps</span>
         </div>
-        <nav className="navigation" aria-label="Main navigation">
+        <nav className="navigation" aria-label={t('nav.main')}>
           {navigation.map((item) => {
             const Icon = item.icon
             return (
@@ -51,17 +55,24 @@ export function Sidebar({ page, open, onNavigate, onToggle, onClose }: SidebarPr
                 onClick={() => { onNavigate(item.id); onClose() }}
               >
                 <Icon size={18} strokeWidth={1.7} />
-                <span>{item.label}</span>
+                <span>{t(item.label)}</span>
               </button>
             )
           })}
         </nav>
         <div className="sidebar-bottom">
+          <label className="language-picker">
+            <Languages size={15} aria-hidden="true" />
+            <span>{t('common.language')}</span>
+            <select aria-label={t('common.language')} value={locale} onChange={(event) => setLocale(event.target.value as typeof locale)}>
+              {localeOptions.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}
+            </select>
+          </label>
           <div className="local-status">
             <span className="status-dot" />
-            <div><strong>Local mode</strong><span>Data stays on this machine</span></div>
+            <div><strong>{t('nav.localMode')}</strong><span>{t('nav.dataStaysLocal')}</span></div>
           </div>
-          <div className="profile local-workspace"><span className="avatar">LW</span><div><strong>Local workspace</strong><span>No account required</span></div></div>
+          <div className="profile local-workspace"><span className="avatar">LW</span><div><strong>{t('nav.localWorkspace')}</strong><span>{t('nav.noAccount')}</span></div></div>
         </div>
       </aside>
     </>

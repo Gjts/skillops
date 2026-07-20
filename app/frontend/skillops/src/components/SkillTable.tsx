@@ -1,7 +1,9 @@
 import { Bot, Box, ChevronDown, ChevronRight, Code2, Search } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { skillDefinitionById, skillRegistry } from '../data/seed'
-import { bySkill, formatDuration, runtimeLabel } from '../lib/analytics'
+import { useI18n } from '../i18n/I18nProvider'
+import { demoDescriptionKeys } from '../i18n/demo'
+import { bySkill, runtimeLabel } from '../lib/analytics'
 import type { Runtime, SkillEvent } from '../types'
 import { Sparkline } from './Charts'
 
@@ -18,6 +20,7 @@ interface SkillTableProps {
 }
 
 export function SkillTable({ events, definitionEvents = events, limit, searchable = false, days = 7, demo = false, onViewRun }: SkillTableProps) {
+  const { formatNumber, t } = useI18n()
   const [expanded, setExpanded] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const metrics = useMemo(() => bySkill(events, days), [events, days])
@@ -36,27 +39,30 @@ export function SkillTable({ events, definitionEvents = events, limit, searchabl
   return (
     <section className="panel skill-table-panel">
       <header className="panel-header table-header">
-        <div><h2>Skill performance</h2><span>{metrics.length} active Skills observed in this period</span></div>
-        {searchable && <label className="search-control"><Search size={15} /><input aria-label="Search skills" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search skills" /></label>}
+        <div><h2>{t('skills.performance')}</h2><span>{t('skills.activeCount', { count: formatNumber(metrics.length) })}</span></div>
+        {searchable && <label className="search-control"><Search size={15} /><input aria-label={t('skills.search')} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('skills.search')} /></label>}
       </header>
       <div className="table-scroll">
         <table className="skill-table">
-          <thead><tr><th aria-label="Expand" /><th>Skill <span className="sort">↑</span></th><th>Version</th><th>Primary runtime</th><th>Runs <span className="sort">↓</span></th><th>Success</th><th>Cost</th><th>Trend</th></tr></thead>
+          <thead><tr><th aria-label={t('skills.expand')} /><th>Skill <span className="sort">↑</span></th><th>{t('common.version')}</th><th>{t('skills.primaryRuntime')}</th><th>{t('nav.runs')} <span className="sort">↓</span></th><th>{t('skills.success')}</th><th>{t('common.cost')}</th><th>{t('charts.trend')}</th></tr></thead>
           <tbody>
             {visible.map((metric) => {
               const seedDefinition = demo ? skillDefinitionById.get(metric.skillId) : undefined
               const discovered = discoveredByKey.get(metric.key) ?? []
+              const demoDescriptionKey = seedDefinition ? demoDescriptionKeys[seedDefinition.id] : undefined
               const definition = seedDefinition ? {
-                description: seedDefinition.description,
+                description: demoDescriptionKey
+                  ? t(demoDescriptionKey)
+                  : t('demo.skill.teamCapability', { capability: seedDefinition.id.replaceAll('-', ' ') }),
                 tags: seedDefinition.tags,
                 paths: [seedDefinition.path],
               } : {
-                description: discovered.find((event) => event.description)?.description ?? 'No description metadata was recorded for this local Skill.',
+                description: discovered.find((event) => event.description)?.description ?? t('skills.noDescription'),
                 tags: [...new Set(discovered.flatMap((event) => event.tags ?? [event.provider, event.source]).filter(Boolean) as string[])],
                 paths: [...new Set(discovered.map((event) => event.sourcePath).filter(Boolean) as string[])],
               }
               if (!definition.tags.length) definition.tags = [metric.runtime]
-              if (!definition.paths.length) definition.paths = ['Observed from local runtime events']
+              if (!definition.paths.length) definition.paths = [t('skills.observedSource')]
               const Icon = runtimeIcon[metric.runtime]
               const isExpanded = expanded === metric.key
               return (
@@ -71,7 +77,7 @@ export function SkillTable({ events, definitionEvents = events, limit, searchabl
                 />
               )
             })}
-            {!visible.length && <tr><td className="registry-empty" colSpan={8}>No Skill runs were observed in this period.</td></tr>}
+            {!visible.length && <tr><td className="registry-empty" colSpan={8}>{t('skills.noRuns')}</td></tr>}
           </tbody>
         </table>
       </div>
@@ -87,28 +93,29 @@ function SkillRows({ metric, definition, Icon, expanded, onToggle, onViewRun }: 
   onToggle: () => void
   onViewRun?: (runId: string) => void
 }) {
+  const { formatDuration, formatNumber, t } = useI18n()
   return (
     <>
       <tr className={expanded ? 'is-expanded' : ''} onClick={onToggle} tabIndex={0} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onToggle() } }}>
-        <td><button type="button" aria-label={expanded ? 'Collapse Skill details' : 'Expand Skill details'} onClick={(event) => { event.stopPropagation(); onToggle() }}>{expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</button></td>
+        <td><button type="button" aria-label={expanded ? t('skills.collapse') : t('skills.expand')} onClick={(event) => { event.stopPropagation(); onToggle() }}>{expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</button></td>
         <td><strong>{metric.skillId}</strong></td>
         <td><span className="version">{metric.version}</span></td>
         <td><span className="runtime-cell"><Icon size={15} />{runtimeLabel[metric.runtime]}</span></td>
-        <td>{metric.runs.toLocaleString()}</td>
-        <td><span className={metric.successRate === null ? 'unknown-text' : metric.successRate >= 90 ? 'success-text' : 'warning-text'}>{metric.lifecycleOnly ? 'Lifecycle only' : metric.successRate === null ? 'Unknown' : `${metric.successRate.toFixed(1)}%`}</span></td>
-        <td>${metric.cost.toFixed(2)}</td>
+        <td>{formatNumber(metric.runs)}</td>
+        <td><span className={metric.successRate === null ? 'unknown-text' : metric.successRate >= 90 ? 'success-text' : 'warning-text'}>{metric.lifecycleOnly ? t('skills.lifecycleOnly') : metric.successRate === null ? t('common.unknown') : `${formatNumber(metric.successRate, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`}</span></td>
+        <td>${formatNumber(metric.cost, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
         <td><Sparkline values={metric.trend} /></td>
       </tr>
       {expanded && (
         <tr className="detail-row">
           <td colSpan={8}>
             <div className="skill-detail">
-              <div><span>Description</span><p>{definition.description}</p></div>
-              <div><span>Tags</span><p className="mono">{definition.tags.length ? definition.tags.join(', ') : 'No tags recorded'}</p></div>
-              <div><span>Definition sources</span><div className="definition-paths">{definition.paths.map((path) => <p className="mono source-path" key={path}>{path}</p>)}</div></div>
-              <div><span>Avg duration</span><p>{formatDuration(metric.avgDuration)}</p></div>
-              <div><span>Known outcomes</span><p className={metric.knownOutcomes ? 'success-text' : 'unknown-text'}>{metric.knownOutcomes.toLocaleString()}</p></div>
-              {onViewRun && <div className="skill-detail-action"><span>Latest activity</span><button className="button secondary" type="button" onClick={() => onViewRun(metric.latestRunId)}>View latest run</button></div>}
+              <div><span>{t('skills.description')}</span><p>{definition.description}</p></div>
+              <div><span>{t('skills.tags')}</span><p className="mono">{definition.tags.length ? definition.tags.join(', ') : t('common.noTags')}</p></div>
+              <div><span>{t('skills.sources')}</span><div className="definition-paths">{definition.paths.map((path) => <p className="mono source-path" key={path}>{path}</p>)}</div></div>
+              <div><span>{t('skills.avgDuration')}</span><p>{formatDuration(metric.avgDuration)}</p></div>
+              <div><span>{t('skills.knownOutcomes')}</span><p className={metric.knownOutcomes ? 'success-text' : 'unknown-text'}>{formatNumber(metric.knownOutcomes)}</p></div>
+              {onViewRun && <div className="skill-detail-action"><span>{t('skills.latestActivity')}</span><button className="button secondary" type="button" onClick={() => onViewRun(metric.latestRunId)}>{t('skills.viewLatest')}</button></div>}
             </div>
           </td>
         </tr>

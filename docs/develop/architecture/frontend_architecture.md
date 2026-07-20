@@ -24,6 +24,7 @@ Its primary responsibilities are:
 | Icons | Lucide React |
 | Routing | Browser history plus pathname map |
 | State | React local state and derived memoized selectors |
+| Internationalization | Typed in-repo message catalog + React context; browser-local locale preference |
 | Charts | Lightweight React/SVG/CSS modules |
 | Tests | Vitest + Testing Library + jsdom |
 
@@ -53,6 +54,8 @@ production server falls back to `index.html` for extensionless SPA paths.
 - `mode`: `loading`, `local`, or `demo`;
 - `eventEtag`: last event-store version;
 - selected page, runtime, time range, menu, modal, and requested run.
+- selected UI locale, persisted under the versioned browser key
+  `skillops.locale.v1`.
 
 ### Derived state
 
@@ -196,6 +199,11 @@ Implemented expectations include:
 New interactive modules must preserve keyboard navigation and avoid using color
 as the only status signal.
 
+The complete interface supports Simplified Chinese, English, French, Russian,
+Spanish, and Japanese. Locale changes update translated copy, number and date
+formatting, and the document `lang` attribute. All supported languages use
+left-to-right document direction.
+
 ## 12. Frontend test surface
 
 Tests should use visible outcomes through each module's interface:
@@ -205,6 +213,8 @@ Tests should use visible outcomes through each module's interface:
 - connect modal for copy, status, focus, and refresh behavior;
 - registry for scope/category/issue calculations;
 - app tests for local/demo mode, routing, polling, import, and clearing;
+- internationalization tests for catalog completeness, persistence, translated
+  application copy, document language, and fallback from unsupported locales;
 - run detail for event correlation.
 
 Avoid tests that assert private React state or implementation-only markup order.

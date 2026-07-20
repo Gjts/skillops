@@ -24,8 +24,10 @@ import { RunDetail } from './components/RunDetail'
 import { Sidebar } from './components/Sidebar'
 import { SkillTable } from './components/SkillTable'
 import { createSeedEvents } from './data/seed'
+import { useI18n } from './i18n/I18nProvider'
+import type { MessageKey } from './i18n/messages'
 import { filterEvents, runtimeLabel, summarize, terminalRuns } from './lib/analytics'
-import { parseEventFile } from './lib/import-events'
+import { EventFileError, parseEventFile, type EventFileErrorCode } from './lib/import-events'
 import type { PageId, Runtime, RuntimeConnection, SkillEvent } from './types'
 
 const EVENT_REFRESH_MS = 3_000
@@ -54,16 +56,34 @@ const checkingConnections: RuntimeConnection[] = [
   { runtime: 'cursor', status: 'preview' },
 ]
 
-const pageTitle: Record<PageId, string> = {
-  overview: 'Overview',
-  skills: 'Skills',
-  runs: 'Runs',
-  evaluations: 'Evaluations',
-  registry: 'Registry',
-  settings: 'Settings',
+const pageTitle: Record<PageId, MessageKey> = {
+  overview: 'nav.overview',
+  skills: 'nav.skills',
+  runs: 'nav.runs',
+  evaluations: 'nav.evaluations',
+  registry: 'nav.registry',
+  settings: 'nav.settings',
 }
 
+const importErrorKey: Record<EventFileErrorCode, MessageKey> = {
+  'empty-file': 'runs.emptyFile',
+  'invalid-json': 'runs.invalidJson',
+  'invalid-jsonl': 'runs.invalidJsonl',
+  'invalid-events': 'runs.invalidEvents',
+}
+
+type ImportFeedback =
+  | { kind: 'success'; count: number }
+  | { kind: 'error'; code: EventFileErrorCode; line?: number }
+  | { kind: 'error'; code: 'request-failed'; line?: number }
+
+type DataFeedback =
+  | { kind: 'exported'; count: number }
+  | { kind: 'cleared'; count: number; backupFile?: string }
+  | { kind: 'clear-failed'; error?: string }
+
 export default function App() {
+  const { t } = useI18n()
   const [page, setPage] = useState<PageId>(currentPage)
   const [events, setEvents] = useState<SkillEvent[]>([])
   const [runtime, setRuntime] = useState<Runtime | 'all'>('all')
@@ -80,9 +100,9 @@ export default function App() {
   const loadConnections = useCallback(async () => {
     try {
       const response = await fetch('/api/connections')
-      if (!response.ok) throw new Error(`Runtime connection API returned ${response.status}.`)
+      if (!response.ok) throw new Error(t('errors.connectionStatus', { status: response.status }))
       const items = await response.json() as RuntimeConnection[]
-      if (!Array.isArray(items)) throw new Error('Runtime connection API returned an invalid response.')
+      if (!Array.isArray(items)) throw new Error(t('errors.connectionInvalid'))
       setConnections(items)
       return items
     } catch {
@@ -90,7 +110,7 @@ export default function App() {
       setConnections(unavailable)
       return unavailable
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     let cancelled = false
@@ -98,10 +118,10 @@ export default function App() {
       try {
         const response = await fetch('/api/events', eventEtag.current ? { headers: { 'If-None-Match': eventEtag.current } } : undefined)
         if (response.status === 304) return
-        if (!response.ok) throw new Error(`Local event API returned ${response.status}.`)
+        if (!response.ok) throw new Error(t('errors.eventStatus', { status: response.status }))
         const localEvents = await response.json() as SkillEvent[]
         if (cancelled) return
-        if (!Array.isArray(localEvents)) throw new Error('Local event API returned an invalid response.')
+        if (!Array.isArray(localEvents)) throw new Error(t('errors.eventInvalid'))
         setEvents(localEvents)
         eventEtag.current = response.headers?.get?.('etag') ?? null
         setMode('local')
@@ -111,14 +131,14 @@ export default function App() {
         if (initial) {
           setEvents(createSeedEvents())
           setMode('demo')
-          setLoadError(error instanceof Error ? error.message : 'The local event API is unavailable.')
+          setLoadError(error instanceof Error ? error.message : t('errors.localUnavailable'))
         }
       }
     }
     void load(true)
     const interval = window.setInterval(() => { void load(false) }, EVENT_REFRESH_MS)
     return () => { cancelled = true; window.clearInterval(interval) }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     void loadConnections()
@@ -157,11 +177,11 @@ export default function App() {
       body: JSON.stringify(incoming),
     })
     const result = await response.json() as { importedCount?: number; error?: string }
-    if (!response.ok) throw new Error(result.error || `Import API returned ${response.status}.`)
+    if (!response.ok) throw new Error(result.error || t('errors.importStatus', { status: response.status }))
     const refreshed = await fetch('/api/events')
-    if (!refreshed.ok) throw new Error(`Events were imported, but refresh returned ${refreshed.status}.`)
+    if (!refreshed.ok) throw new Error(t('errors.importRefresh', { status: refreshed.status }))
     const localEvents = await refreshed.json() as SkillEvent[]
-    if (!Array.isArray(localEvents)) throw new Error('Local event API returned an invalid response.')
+    if (!Array.isArray(localEvents)) throw new Error(t('errors.eventInvalid'))
     setEvents(localEvents)
     eventEtag.current = refreshed.headers?.get?.('etag') ?? null
     setMode('local')
@@ -172,7 +192,7 @@ export default function App() {
   const clearLocalEvents = async () => {
     const response = await fetch('/api/events', { method: 'DELETE' })
     const result = await response.json() as { removed?: number; backupFile?: string; error?: string }
-    if (!response.ok) throw new Error(result.error || `Clear API returned ${response.status}.`)
+    if (!response.ok) throw new Error(result.error || t('errors.clearStatus', { status: response.status }))
     setEvents([])
     eventEtag.current = null
     setMode('local')
@@ -180,24 +200,24 @@ export default function App() {
   }
 
   const showEventFilters = page === 'overview' || page === 'skills' || page === 'runs'
-  const modeLabel = page === 'registry' ? 'Live inventory'
-    : page === 'evaluations' ? 'Sample evaluation'
-      : mode === 'loading' ? 'Loading local events…' : mode === 'demo' ? 'Demo dataset' : 'Local events'
+  const modeLabel = page === 'registry' ? t('mode.liveInventory')
+    : page === 'evaluations' ? t('mode.sampleEvaluation')
+      : mode === 'loading' ? t('mode.loadingEvents') : mode === 'demo' ? t('mode.demoDataset') : t('mode.localEvents')
 
   return (
     <div className="app-shell">
       <Sidebar page={page} open={menuOpen} onNavigate={navigate} onToggle={() => setMenuOpen((open) => !open)} onClose={() => setMenuOpen(false)} />
       <main className="app-main">
         <header className="topbar">
-          <div className="title-wrap"><h1>{pageTitle[page]}</h1><span className={`data-mode ${mode}`}>{modeLabel}</span></div>
+          <div className="title-wrap"><h1>{t(pageTitle[page])}</h1><span className={`data-mode ${mode}`}>{modeLabel}</span></div>
           <div className="topbar-actions">
-            {showEventFilters && <label className="select-control date-select"><CalendarDays size={16} /><select aria-label="Date range" value={days} onChange={(event) => setDays(Number(event.target.value))}><option value={7}>Last 7 days</option><option value={14}>Last 14 days</option><option value={30}>Last 30 days</option></select><ChevronDown size={14} /></label>}
-            {showEventFilters && <label className="select-control runtime-select"><Code2 size={16} /><select aria-label="Runtime" value={runtime} onChange={(event) => setRuntime(event.target.value as Runtime | 'all')}><option value="all">All runtimes</option><option value="codex">Codex</option><option value="claude-code">Claude Code</option><option value="cursor">Cursor</option></select><ChevronDown size={14} /></label>}
-            <button className="button primary connect-button" type="button" onClick={() => openConnect(runtime === 'all' ? 'codex' : runtime)}><PlugZap size={16} />Connect runtime</button>
+            {showEventFilters && <label className="select-control date-select"><CalendarDays size={16} /><select aria-label={t('common.dateRange')} value={days} onChange={(event) => setDays(Number(event.target.value))}><option value={7}>{t('common.lastDays', { count: 7 })}</option><option value={14}>{t('common.lastDays', { count: 14 })}</option><option value={30}>{t('common.lastDays', { count: 30 })}</option></select><ChevronDown size={14} /></label>}
+            {showEventFilters && <label className="select-control runtime-select"><Code2 size={16} /><select aria-label={t('common.runtime')} value={runtime} onChange={(event) => setRuntime(event.target.value as Runtime | 'all')}><option value="all">{t('common.allRuntimes')}</option><option value="codex">Codex</option><option value="claude-code">Claude Code</option><option value="cursor">Cursor</option></select><ChevronDown size={14} /></label>}
+            <button className="button primary connect-button" type="button" onClick={() => openConnect(runtime === 'all' ? 'codex' : runtime)}><PlugZap size={16} />{t('common.connectRuntime')}</button>
           </div>
         </header>
 
-        {loadError && page !== 'registry' && <div className="data-warning" role="alert">Local events could not be loaded: {loadError} Showing the clearly labeled demo dataset.</div>}
+        {loadError && page !== 'registry' && <div className="data-warning" role="alert">{t('mode.loadWarning', { error: loadError })}</div>}
 
         {page === 'overview' && (
           <div className="dashboard-layout">
@@ -205,7 +225,7 @@ export default function App() {
               <KpiStrip {...summary} mode={mode === 'demo' ? 'demo' : 'local'} />
               {visibleRuns.length ? <><div className="charts-grid"><RunsChart events={filtered} days={days} /><RuntimeDistribution events={filtered} /></div><SkillTable events={filtered} definitionEvents={events} limit={4} days={days} demo={mode === 'demo'} onViewRun={openRun} />{mode === 'demo' && <Insight onCompare={() => navigate('evaluations')} />}</> : <EmptyActivity runtime={runtime} days={days} onConnect={() => openConnect(runtime === 'all' ? 'codex' : runtime)} onShowAll={runtime === 'all' ? undefined : () => setRuntime('all')} />}
             </div>
-            <ActivityRail events={filtered} onViewAll={() => navigate('runs')} onSelectRun={(run) => openRun(run.id)} onConnect={() => openConnect(runtime === 'all' ? 'codex' : runtime)} refreshLabel="Refreshes every 3s" />
+            <ActivityRail events={filtered} onViewAll={() => navigate('runs')} onSelectRun={(run) => openRun(run.id)} onConnect={() => openConnect(runtime === 'all' ? 'codex' : runtime)} refreshLabel={t('activity.refresh')} />
           </div>
         )}
         {page === 'skills' && <div className="single-page">{visibleRuns.length ? <SkillTable events={filtered} definitionEvents={events} searchable days={days} demo={mode === 'demo'} onViewRun={openRun} /> : <EmptyActivity runtime={runtime} days={days} onConnect={() => openConnect(runtime === 'all' ? 'codex' : runtime)} onShowAll={runtime === 'all' ? undefined : () => setRuntime('all')} />}</div>}
@@ -220,26 +240,29 @@ export default function App() {
 }
 
 function EmptyActivity({ runtime, days, onConnect, onShowAll }: { runtime: Runtime | 'all'; days: number; onConnect: () => void; onShowAll?: () => void }) {
-  const label = runtime === 'all' ? 'any runtime' : runtimeLabel[runtime]
-  return <section className="panel empty-state" aria-labelledby="empty-activity-title"><span className="empty-state-icon"><PlugZap size={22} /></span><div><h2 id="empty-activity-title">No Skill runs from {label}</h2><p>No terminal Skill events were recorded in the last {days} days. Verify the adapter, use a Skill once, then refresh.</p></div><div><button className="button primary" type="button" onClick={onConnect}>Connect {runtime === 'all' ? 'Codex' : runtimeLabel[runtime]}</button>{onShowAll && <button className="button secondary" type="button" onClick={onShowAll}>Show all runtimes</button>}</div></section>
+  const { t } = useI18n()
+  const label = runtime === 'all' ? t('empty.anyRuntime') : runtimeLabel[runtime]
+  const target = runtime === 'all' ? 'Codex' : runtimeLabel[runtime]
+  return <section className="panel empty-state" aria-labelledby="empty-activity-title"><span className="empty-state-icon"><PlugZap size={22} /></span><div><h2 id="empty-activity-title">{t('empty.title', { runtime: label })}</h2><p>{t('empty.description', { days })}</p></div><div><button className="button primary" type="button" onClick={onConnect}>{t('empty.connectTarget', { runtime: target })}</button>{onShowAll && <button className="button secondary" type="button" onClick={onShowAll}>{t('empty.showAll')}</button>}</div></section>
 }
 
 function Insight({ onCompare }: { onCompare: () => void }) {
+  const { t } = useI18n()
   return (
     <section className="insight-bar">
       <span className="insight-icon"><Lightbulb size={22} /></span>
-      <div className="insight-label"><strong>Insight</strong><span>Version recommendation</span></div>
-      <p><strong>frontend-builder v2.1.0</strong> has a lower success rate than v2.2.0 in evaluation runs. Consider upgrading to improve reliability.</p>
-      <button className="button secondary" type="button" onClick={onCompare}>View skill</button>
-      <button className="button primary" type="button" onClick={onCompare}>Compare versions</button>
+      <div className="insight-label"><strong>{t('insight.title')}</strong><span>{t('insight.recommendation')}</span></div>
+      <p>{t('insight.description')}</p>
+      <button className="button secondary" type="button" onClick={onCompare}>{t('insight.viewSkill')}</button>
+      <button className="button primary" type="button" onClick={onCompare}>{t('insight.compare')}</button>
     </section>
   )
 }
 
 function RunsPage({ events, allEvents, requestedRunId, onRequestedRunHandled, onConnect, onImport }: { events: SkillEvent[]; allEvents: SkillEvent[]; requestedRunId: string | null; onRequestedRunHandled: () => void; onConnect: () => void; onImport: (events: SkillEvent[]) => Promise<number> }) {
+  const { formatNumber, t } = useI18n()
   const input = useRef<HTMLInputElement>(null)
-  const [importError, setImportError] = useState<string | null>(null)
-  const [importStatus, setImportStatus] = useState<string | null>(null)
+  const [importFeedback, setImportFeedback] = useState<ImportFeedback | null>(null)
   const [importing, setImporting] = useState(false)
   const [query, setQuery] = useState('')
   const [runPage, setRunPage] = useState(0)
@@ -256,7 +279,12 @@ function RunsPage({ events, allEvents, requestedRunId, onRequestedRunHandled, on
   const pageEvents = matchingRuns.slice(safePage * pageSize, (safePage + 1) * pageSize)
   const firstRun = matchingRuns.length ? safePage * pageSize + 1 : 0
   const lastRun = Math.min((safePage + 1) * pageSize, matchingRuns.length)
-  const resultLabel = `${firstRun}–${lastRun} of ${matchingRuns.length} ${matchingRuns.length === 1 ? 'run' : 'runs'}`
+  const resultLabel = t('runs.resultCount', {
+    first: formatNumber(firstRun),
+    last: formatNumber(lastRun),
+    count: formatNumber(matchingRuns.length),
+    unit: t(matchingRuns.length === 1 ? 'common.run' : 'common.runs'),
+  })
   useEffect(() => {
     if (!requestedRunId) return
     const run = terminalRuns(allEvents).find((event) => event.id === requestedRunId)
@@ -266,33 +294,40 @@ function RunsPage({ events, allEvents, requestedRunId, onRequestedRunHandled, on
   const handleFile = async (file?: File) => {
     if (!file) return
     setImporting(true)
-    setImportStatus(null)
+    setImportFeedback(null)
     try {
       const importedCount = await onImport(parseEventFile(await file.text()))
-      setImportError(null)
-      setImportStatus(`Imported ${importedCount} new ${importedCount === 1 ? 'event' : 'events'} into the local event store.`)
+      setImportFeedback({ kind: 'success', count: importedCount })
     } catch (error) {
-      setImportError(error instanceof Error ? error.message : 'Could not import this event file.')
+      setImportFeedback(error instanceof EventFileError
+        ? { kind: 'error', code: error.code, line: error.line }
+        : { kind: 'error', code: 'request-failed' })
     } finally {
       setImporting(false)
     }
   }
+  const importError = importFeedback?.kind === 'error'
+    ? t(importFeedback.code === 'request-failed' ? 'runs.couldNotImport' : importErrorKey[importFeedback.code], { line: importFeedback.line ?? '' })
+    : null
+  const importStatus = importFeedback?.kind === 'success'
+    ? t(importFeedback.count === 1 ? 'runs.importedOne' : 'runs.importedMany', { count: formatNumber(importFeedback.count) })
+    : null
   return (
     <div className="single-page">
-      <div className="page-intro"><div><h2>Execution timeline</h2><p>Inspect terminal Skill events across every connected runtime.</p></div><button className="button secondary" type="button" disabled={importing} onClick={() => input.current?.click()}><Upload size={15} />{importing ? 'Importing…' : 'Import JSON or JSONL'}</button><input ref={input} type="file" accept=".jsonl,.json,application/json" hidden onChange={(event) => { void handleFile(event.target.files?.[0]); event.target.value = '' }} /></div>
-      {importError && <div className="data-warning" role="alert">Import failed: {importError}</div>}
+      <div className="page-intro"><div><h2>{t('runs.timeline')}</h2><p>{t('runs.description')}</p></div><button className="button secondary" type="button" disabled={importing} onClick={() => input.current?.click()}><Upload size={15} />{importing ? t('runs.importing') : t('runs.importFile')}</button><input ref={input} type="file" accept=".jsonl,.json,application/json" hidden onChange={(event) => { void handleFile(event.target.files?.[0]); event.target.value = '' }} /></div>
+      {importError && <div className="data-warning" role="alert">{t('runs.importFailed', { error: importError })}</div>}
       {importStatus && <div className="import-status" role="status">{importStatus}</div>}
       <div className="runtime-lifecycles">
         <RuntimeLifecycle events={events} runtime="codex" />
         <RuntimeLifecycle events={events} runtime="claude-code" />
       </div>
       <div className="runs-toolbar">
-        <label className="search-control"><Search size={15} /><input type="search" aria-label="Search runs" placeholder="Search skill, run ID, or project" value={query} onChange={(event) => { setQuery(event.target.value); setRunPage(0) }} /></label>
+        <label className="search-control"><Search size={15} /><input type="search" aria-label={t('runs.search')} placeholder={t('runs.searchPlaceholder')} value={query} onChange={(event) => { setQuery(event.target.value); setRunPage(0) }} /></label>
         <span>{resultLabel}</span>
         <div className="pagination-controls">
-          <button type="button" aria-label="Previous page" disabled={safePage === 0} onClick={() => setRunPage((page) => Math.max(0, page - 1))}><ChevronLeft size={15} /></button>
-          <span>Page {safePage + 1} of {pageCount}</span>
-          <button type="button" aria-label="Next page" disabled={safePage >= pageCount - 1} onClick={() => setRunPage((page) => Math.min(pageCount - 1, page + 1))}><ChevronRight size={15} /></button>
+          <button type="button" aria-label={t('common.previousPage')} disabled={safePage === 0} onClick={() => setRunPage((page) => Math.max(0, page - 1))}><ChevronLeft size={15} /></button>
+          <span>{t('common.pageOf', { page: formatNumber(safePage + 1), count: formatNumber(pageCount) })}</span>
+          <button type="button" aria-label={t('common.nextPage')} disabled={safePage >= pageCount - 1} onClick={() => setRunPage((page) => Math.min(pageCount - 1, page + 1))}><ChevronRight size={15} /></button>
         </div>
       </div>
       <ActivityRail events={pageEvents} expanded onSelectRun={setSelectedRun} onConnect={onConnect} />
@@ -302,60 +337,64 @@ function RunsPage({ events, allEvents, requestedRunId, onRequestedRunHandled, on
 }
 
 function EvaluationsPage() {
+  const { formatDuration, formatNumber, t } = useI18n()
+  const percent = (value: number, signed = false) => `${formatNumber(value, { minimumFractionDigits: 1, maximumFractionDigits: 1, signDisplay: signed ? 'always' : 'auto' })}%`
   const comparisons = [
-    { label: 'Success rate', current: '89.6%', candidate: '95.6%', delta: '+6.0pp' },
-    { label: 'Median duration', current: '3m 42s', candidate: '3m 09s', delta: '-14.9%' },
-    { label: 'Cost per success', current: '$0.17', candidate: '$0.15', delta: '-11.8%' },
+    { label: t('evaluation.successRate'), current: percent(89.6), candidate: percent(95.6), delta: t('units.percentagePoints', { value: formatNumber(6, { minimumFractionDigits: 1, maximumFractionDigits: 1, signDisplay: 'always' }) }) },
+    { label: t('evaluation.medianDuration'), current: formatDuration(222_000), candidate: formatDuration(189_000), delta: percent(-14.9, true) },
+    { label: t('evaluation.costPerSuccess'), current: `$${formatNumber(.17, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, candidate: `$${formatNumber(.15, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, delta: percent(-11.8, true) },
   ]
   return (
     <div className="single-page evaluation-page">
-      <div className="page-intro"><div><div className="sample-heading"><h2>Evaluation preview</h2><span className="data-mode">Sample only</span></div><p>A read-only example of the comparison workflow. No evaluation runner or promotion pipeline is connected.</p></div></div>
-      <div className="registry-warning" role="note">Preview data is illustrative and never changes an installed Skill or runtime configuration.</div>
+      <div className="page-intro"><div><div className="sample-heading"><h2>{t('evaluation.title')}</h2><span className="data-mode">{t('evaluation.sampleOnly')}</span></div><p>{t('evaluation.description')}</p></div></div>
+      <div className="registry-warning" role="note">{t('evaluation.notice')}</div>
       <section className="panel comparison-panel">
-        <header className="comparison-header"><span>Metric</span><strong>v2.1.0 · current</strong><strong>v2.2.0 · candidate</strong><span>Change</span></header>
+        <header className="comparison-header"><span>{t('common.metric')}</span><strong>v2.1.0 · {t('common.current')}</strong><strong>v2.2.0 · {t('common.candidate')}</strong><span>{t('common.change')}</span></header>
         {comparisons.map((item) => <div className="comparison-row" key={item.label}><span>{item.label}</span><strong>{item.current}</strong><strong className="success-text">{item.candidate}</strong><span className="delta-positive">{item.delta}</span></div>)}
       </section>
-      <section className="evaluation-verdict preview"><span><ShieldCheck size={24} /></span><div><strong>Decision controls are intentionally unavailable</strong><p>Connect a future evaluation runner before enabling comparisons, rollout decisions, or promotion actions.</p></div></section>
+      <section className="evaluation-verdict preview"><span><ShieldCheck size={24} /></span><div><strong>{t('evaluation.unavailable')}</strong><p>{t('evaluation.futureRunner')}</p></div></section>
     </div>
   )
 }
 
 function RuntimeLifecycle({ events, runtime }: { events: SkillEvent[]; runtime: Extract<Runtime, 'codex' | 'claude-code'> }) {
+  const { formatNumber, t } = useI18n()
   const items = [
-    { label: 'Sessions', value: events.filter((event) => event.event === 'session.started' && event.runtime === runtime).length },
-    { label: 'Prompts', value: events.filter((event) => event.event === 'prompt.submitted' && event.runtime === runtime).length },
-    { label: 'Tool calls', value: events.filter((event) => event.event === 'tool.completed' && event.runtime === runtime).length },
-    { label: 'Subagents', value: events.filter((event) => event.event === 'subagent.started' && event.runtime === runtime).length },
+    { label: t('runs.sessions'), value: events.filter((event) => event.event === 'session.started' && event.runtime === runtime).length },
+    { label: t('runs.prompts'), value: events.filter((event) => event.event === 'prompt.submitted' && event.runtime === runtime).length },
+    { label: t('runs.toolCalls'), value: events.filter((event) => event.event === 'tool.completed' && event.runtime === runtime).length },
+    { label: t('runs.subagents'), value: events.filter((event) => event.event === 'subagent.started' && event.runtime === runtime).length },
   ]
-  return <section className="lifecycle-section" aria-label={`${runtimeLabel[runtime]} lifecycle activity`}><h3>{runtimeLabel[runtime]}</h3><div className="codex-lifecycle">{items.map((item) => <div key={item.label}><span>{item.label}</span><strong>{item.value.toLocaleString()}</strong></div>)}</div></section>
+  return <section className="lifecycle-section" aria-label={t('runs.lifecycleActivity', { runtime: runtimeLabel[runtime] })}><h3>{runtimeLabel[runtime]}</h3><div className="codex-lifecycle">{items.map((item) => <div key={item.label}><span>{item.label}</span><strong>{formatNumber(item.value)}</strong></div>)}</div></section>
 }
 
 function SettingsPage({ connections, events, localData, onConnect, onRefresh, onClear }: { connections: RuntimeConnection[]; events: SkillEvent[]; localData: boolean; onConnect: (runtime: Runtime) => void; onRefresh: () => Promise<RuntimeConnection[]>; onClear: () => Promise<{ removed: number; backupFile?: string }> }) {
+  const { formatDateTime, formatNumber, t } = useI18n()
   const [confirmClear, setConfirmClear] = useState(false)
-  const [dataStatus, setDataStatus] = useState<string | null>(null)
+  const [dataFeedback, setDataFeedback] = useState<DataFeedback | null>(null)
   const [clearing, setClearing] = useState(false)
   const statusFor = (runtime: Runtime) => {
     const status = connections.find((connection) => connection.runtime === runtime)?.status ?? 'unavailable'
     return {
-      checking: 'Checking…',
-      installed: 'Installed',
-      'not-installed': 'Not installed',
-      preview: 'Preview',
-      broken: 'Broken',
-      error: 'Config error',
-      unavailable: 'Unavailable',
+      checking: t('common.checking'),
+      installed: t('common.installed'),
+      'not-installed': t('common.notInstalled'),
+      preview: t('common.preview'),
+      broken: t('common.broken'),
+      error: t('common.configError'),
+      unavailable: t('common.unavailable'),
     }[status]
   }
-  const runtimes: Array<{ runtime: Runtime; name: string; detail: string; status: string; icon: typeof Code2 }> = [
-    { runtime: 'codex', name: 'Codex', detail: 'Native lifecycle hooks and Skill detection', status: statusFor('codex'), icon: Code2 },
-    { runtime: 'claude-code', name: 'Claude Code', detail: 'Native hooks with exact slash-command and Skill-tool detection', status: statusFor('claude-code'), icon: Bot },
-    { runtime: 'cursor', name: 'Cursor', detail: 'Agent hooks preview adapter', status: statusFor('cursor'), icon: Box },
+  const runtimes: Array<{ runtime: Runtime; name: string; detail: string; status: string; broken: boolean; icon: typeof Code2 }> = [
+    { runtime: 'codex', name: 'Codex', detail: t('settings.codexDetail'), status: statusFor('codex'), broken: connections.find((item) => item.runtime === 'codex')?.status === 'broken', icon: Code2 },
+    { runtime: 'claude-code', name: 'Claude Code', detail: t('settings.claudeDetail'), status: statusFor('claude-code'), broken: connections.find((item) => item.runtime === 'claude-code')?.status === 'broken', icon: Bot },
+    { runtime: 'cursor', name: 'Cursor', detail: t('settings.cursorDetail'), status: statusFor('cursor'), broken: connections.find((item) => item.runtime === 'cursor')?.status === 'broken', icon: Box },
   ]
   const activityFor = (runtime: Runtime) => {
     const connection = connections.find((item) => item.runtime === runtime)
-    if (!connection?.eventCount) return 'No runtime activity recorded'
-    const lastSeen = connection.lastEventAt ? new Date(connection.lastEventAt).toLocaleString() : 'time unavailable'
-    return `${connection.eventCount.toLocaleString()} runtime events · Last activity ${lastSeen}`
+    if (!connection?.eventCount) return t('connect.noActivity')
+    const lastSeen = connection.lastEventAt ? formatDateTime(connection.lastEventAt) : t('settings.timeUnavailable')
+    return t('settings.activityCount', { count: formatNumber(connection.eventCount), time: lastSeen })
   }
   const runtimeEvents = events.filter((event) => event.event !== 'skill.discovered')
   const lastEvent = [...runtimeEvents].sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp))[0]
@@ -367,31 +406,41 @@ function SettingsPage({ connections, events, localData, onConnect, onRefresh, on
     anchor.download = `skillops-events-${new Date().toISOString().slice(0, 10)}.jsonl`
     anchor.click()
     URL.revokeObjectURL(url)
-    setDataStatus(`Exported ${events.length.toLocaleString()} local events.`)
+    setDataFeedback({ kind: 'exported', count: events.length })
   }
   const clear = async () => {
     setClearing(true)
     try {
       const result = await onClear()
-      setDataStatus(`Cleared ${result.removed.toLocaleString()} events. A local backup was created${result.backupFile ? ` at ${result.backupFile}` : ''}.`)
+      setDataFeedback({ kind: 'cleared', count: result.removed, backupFile: result.backupFile })
       setConfirmClear(false)
     } catch (error) {
-      setDataStatus(error instanceof Error ? `Clear failed: ${error.message}` : 'Clear failed.')
+      setDataFeedback({ kind: 'clear-failed', error: error instanceof Error ? error.message : undefined })
     } finally { setClearing(false) }
   }
+  const dataStatus = dataFeedback?.kind === 'exported'
+    ? t('settings.exported', { count: formatNumber(dataFeedback.count) })
+    : dataFeedback?.kind === 'cleared'
+      ? t('settings.cleared', {
+        count: formatNumber(dataFeedback.count),
+        path: dataFeedback.backupFile ? t('settings.backupPath', { path: dataFeedback.backupFile }) : '',
+      })
+      : dataFeedback?.kind === 'clear-failed'
+        ? t('settings.clearFailed', { error: dataFeedback.error ?? t('common.unknown') })
+        : null
   return (
     <div className="single-page settings-page">
-      <div className="page-intro"><div><h2>Runtime connections</h2><p>Keep source code local while collecting normalized execution metadata.</p></div><button className="button secondary" type="button" onClick={() => void onRefresh()}>Refresh status</button></div>
-      <section className="panel connection-list">{runtimes.map((runtime) => { const Icon = runtime.icon; return <div className="connection-row" key={runtime.name}><span className="runtime-icon"><Icon size={18} /></span><div><strong>{runtime.name}</strong><span>{runtime.detail}</span><small>{activityFor(runtime.runtime)}</small></div><span className={`connection-status ${runtime.status === 'Broken' ? 'broken' : ''}`}>{runtime.status}</span><button className="button secondary" type="button" aria-label={`Configure ${runtime.name}`} onClick={() => onConnect(runtime.runtime)}>Configure</button></div> })}</section>
+      <div className="page-intro"><div><h2>{t('settings.runtimeConnections')}</h2><p>{t('settings.description')}</p></div><button className="button secondary" type="button" onClick={() => void onRefresh()}>{t('settings.refresh')}</button></div>
+      <section className="panel connection-list">{runtimes.map((runtime) => { const Icon = runtime.icon; return <div className="connection-row" key={runtime.name}><span className="runtime-icon"><Icon size={18} /></span><div><strong>{runtime.name}</strong><span>{runtime.detail}</span><small>{activityFor(runtime.runtime)}</small></div><span className={`connection-status ${runtime.broken ? 'broken' : ''}`}>{runtime.status}</span><button className="button secondary" type="button" aria-label={t('settings.configureRuntime', { runtime: runtime.name })} onClick={() => onConnect(runtime.runtime)}>{t('common.configure')}</button></div> })}</section>
       <section className="panel data-controls" aria-labelledby="local-data-title">
-        <header><div><h2 id="local-data-title">Local event data</h2><p>Inspect, export, or clear the normalized metadata stored on this machine.</p></div><strong>{events.length.toLocaleString()} events</strong></header>
-        <dl><div><dt>Storage</dt><dd className="mono">data/events.jsonl</dd></div><div><dt>Last runtime event</dt><dd>{lastEvent ? new Date(lastEvent.timestamp).toLocaleString() : 'No runtime activity recorded'}</dd></div><div><dt>Content boundary</dt><dd>No raw prompts, transcripts, tool output, or source code</dd></div></dl>
-        <footer><button className="button secondary" type="button" disabled={!localData} onClick={exportEvents}><Download size={15} />Export JSONL</button><button className="button danger" type="button" disabled={!localData || clearing} onClick={() => setConfirmClear(true)}><Trash2 size={15} />Clear event data</button></footer>
-        {!localData && <p className="data-control-note">Start the local API before exporting or clearing data. Demo events are never written.</p>}
+        <header><div><h2 id="local-data-title">{t('settings.localData')}</h2><p>{t('settings.localDataDescription')}</p></div><strong>{t('settings.eventCount', { count: formatNumber(events.length) })}</strong></header>
+        <dl><div><dt>{t('settings.storage')}</dt><dd className="mono">data/events.jsonl</dd></div><div><dt>{t('settings.lastRuntimeEvent')}</dt><dd>{lastEvent ? formatDateTime(lastEvent.timestamp) : t('connect.noActivity')}</dd></div><div><dt>{t('settings.contentBoundary')}</dt><dd>{t('settings.noRawContent')}</dd></div></dl>
+        <footer><button className="button secondary" type="button" disabled={!localData} onClick={exportEvents}><Download size={15} />{t('settings.export')}</button><button className="button danger" type="button" disabled={!localData || clearing} onClick={() => setConfirmClear(true)}><Trash2 size={15} />{t('settings.clear')}</button></footer>
+        {!localData && <p className="data-control-note">{t('settings.apiRequired')}</p>}
         {dataStatus && <p className="data-control-note" role="status">{dataStatus}</p>}
       </section>
-      {confirmClear && <div className="confirm-clear" role="alertdialog" aria-modal="true" aria-labelledby="confirm-clear-title"><div><h2 id="confirm-clear-title">Clear {events.length.toLocaleString()} local events?</h2><p>The current JSONL file will be copied to a timestamped local backup before it is cleared.</p></div><div><button className="button secondary" type="button" onClick={() => setConfirmClear(false)}>Cancel</button><button className="button danger" type="button" disabled={clearing} onClick={() => void clear()}>{clearing ? 'Clearing…' : 'Clear and create backup'}</button></div></div>}
-      <section className="privacy-note"><ShieldCheck size={20} /><div><strong>Local-first by design</strong><p>Raw prompts, transcripts, and source code are not uploaded. The MVP stores normalized events in <span className="mono">data/events.jsonl</span>.</p></div></section>
+      {confirmClear && <div className="confirm-clear" role="alertdialog" aria-modal="true" aria-labelledby="confirm-clear-title"><div><h2 id="confirm-clear-title">{t('settings.confirmTitle', { count: formatNumber(events.length) })}</h2><p>{t('settings.confirmDescription')}</p></div><div><button className="button secondary" type="button" onClick={() => setConfirmClear(false)}>{t('common.cancel')}</button><button className="button danger" type="button" disabled={clearing} onClick={() => void clear()}>{clearing ? t('settings.clearing') : t('settings.clearBackup')}</button></div></div>}
+      <section className="privacy-note"><ShieldCheck size={20} /><div><strong>{t('settings.localFirst')}</strong><p>{t('settings.privacy')}</p></div></section>
     </div>
   )
 }

@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { parseEventFile } from './import-events'
+import { EventFileError, parseEventFile } from './import-events'
 
 const event = { id: 'one', event: 'session.started', runtime: 'codex', timestamp: '2026-07-19T00:00:00.000Z' }
+
+function readError(action: () => unknown) {
+  try { action() } catch (error) { return error }
+  throw new Error('Expected action to throw')
+}
 
 describe('event file import', () => {
   it('accepts both JSON arrays and JSONL records', () => {
@@ -10,7 +15,15 @@ describe('event file import', () => {
   })
 
   it('reports the broken JSONL line', () => {
-    expect(() => parseEventFile(`${JSON.stringify(event)}\n{"event":`)).toThrow('line 2')
+    const error = readError(() => parseEventFile(`${JSON.stringify(event)}\n{"event":`))
+    expect(error).toBeInstanceOf(EventFileError)
+    expect(error).toMatchObject({ code: 'invalid-jsonl', line: 2 })
+  })
+
+  it('classifies empty, malformed JSON, and invalid event data for localization', () => {
+    expect(readError(() => parseEventFile(''))).toMatchObject({ code: 'empty-file' })
+    expect(readError(() => parseEventFile('[{"event":'))).toMatchObject({ code: 'invalid-json' })
+    expect(readError(() => parseEventFile(JSON.stringify([{ ...event, runtime: 'not-real' }])))).toMatchObject({ code: 'invalid-events' })
   })
 
   it('rejects unsupported event names, runtimes, and timestamps', () => {

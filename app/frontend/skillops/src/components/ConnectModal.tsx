@@ -1,12 +1,14 @@
 import { Bot, Box, Check, Clipboard, Code2, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { useI18n } from '../i18n/I18nProvider'
+import type { MessageKey } from '../i18n/messages'
 import { runtimeLabel } from '../lib/analytics'
 import type { Runtime, RuntimeConnection } from '../types'
 
-const options: Array<{ runtime: Runtime; icon: typeof Code2; status: string; detail: string; command: string }> = [
-  { runtime: 'codex', icon: Code2, status: 'Native adapter', detail: 'Session, Tool, Subagent and Skill detection hooks', command: 'npm run codex:install' },
-  { runtime: 'claude-code', icon: Bot, status: 'Native adapter', detail: 'Session, Tool, Subagent, slash-command and Skill-tool hooks', command: 'npm run claude:install' },
-  { runtime: 'cursor', icon: Box, status: 'Preview adapter', detail: 'Agent hooks + local event bridge', command: 'npm run emit -- skill.started --skill frontend-builder --runtime cursor' },
+const options: Array<{ runtime: Runtime; icon: typeof Code2; status: MessageKey; detail: MessageKey; command: string }> = [
+  { runtime: 'codex', icon: Code2, status: 'connect.nativeAdapter', detail: 'connect.codexDetail', command: 'npm run codex:install' },
+  { runtime: 'claude-code', icon: Bot, status: 'connect.nativeAdapter', detail: 'connect.claudeDetail', command: 'npm run claude:install' },
+  { runtime: 'cursor', icon: Box, status: 'connect.previewAdapter', detail: 'connect.cursorDetail', command: 'npm run emit -- skill.started --skill frontend-builder --runtime cursor' },
 ]
 
 const fallbackConnections: RuntimeConnection[] = [
@@ -23,6 +25,7 @@ type ConnectModalProps = {
 }
 
 export function ConnectModal({ initialRuntime = 'codex', connections = fallbackConnections, onRefresh = async () => connections, onClose }: ConnectModalProps) {
+  const { formatDateTime, formatNumber, t } = useI18n()
   const [selected, setSelected] = useState<Runtime>(initialRuntime)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const [inspectedConnections, setInspectedConnections] = useState(connections)
@@ -71,38 +74,38 @@ export function ConnectModal({ initialRuntime = 'codex', connections = fallbackC
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section ref={dialogRef} className="modal" role="dialog" aria-modal="true" aria-labelledby="connect-title" onKeyDown={trapFocus} onMouseDown={(event) => event.stopPropagation()}>
-        <header><div><h2 id="connect-title">Connect a runtime</h2><p>Choose how SkillOps will receive lifecycle events.</p></div><button type="button" aria-label="Close" onClick={onClose}><X size={18} /></button></header>
+        <header><div><h2 id="connect-title">{t('connect.title')}</h2><p>{t('connect.description')}</p></div><button type="button" aria-label={t('common.close')} onClick={onClose}><X size={18} /></button></header>
         <div className="runtime-options">
           {options.map((option) => {
             const Icon = option.icon
             return (
               <button ref={option.runtime === initialRuntime ? initialOptionRef : undefined} className={selected === option.runtime ? 'runtime-option selected' : 'runtime-option'} key={option.runtime} type="button" onClick={() => { setSelected(option.runtime); setCopyState('idle') }}>
                 <span className={`runtime-icon ${option.runtime}`}><Icon size={18} /></span>
-                <span><strong>{runtimeLabel[option.runtime]}</strong><small>{option.detail}</small></span>
+                <span><strong>{runtimeLabel[option.runtime]}</strong><small>{t(option.detail)}</small></span>
                 {selected === option.runtime && <Check size={17} />}
               </button>
             )
           })}
         </div>
         <div className="connection-step">
-          <span className="step-label">1 · Install adapter</span>
-          <p>{current.status}. Run this command from the SkillOps project terminal:</p>
-          <div className="command-box"><code>{current.command}</code><button type="button" onClick={copy} aria-label={copyState === 'copied' ? 'Command copied' : copyState === 'failed' ? 'Copy failed' : 'Copy command'}>{copyState === 'copied' ? <Check size={15} /> : <Clipboard size={15} />}</button></div>
-          {copyState !== 'idle' && <span className={copyState === 'failed' ? 'copy-feedback failed-text' : 'copy-feedback success-text'} role="status" aria-live="polite">{copyState === 'copied' ? 'Command copied.' : 'Copy failed. Select the command and copy it manually.'}</span>}
+          <span className="step-label">{t('connect.installStep')}</span>
+          <p>{t('connect.installInstruction', { status: t(current.status) })}</p>
+          <div className="command-box"><code>{current.command}</code><button type="button" onClick={copy} aria-label={copyState === 'copied' ? t('connect.commandCopiedLabel') : copyState === 'failed' ? t('connect.copyFailedLabel') : t('connect.copyCommand')}>{copyState === 'copied' ? <Check size={15} /> : <Clipboard size={15} />}</button></div>
+          {copyState !== 'idle' && <span className={copyState === 'failed' ? 'copy-feedback failed-text' : 'copy-feedback success-text'} role="status" aria-live="polite">{copyState === 'copied' ? t('connect.commandCopied') : t('connect.copyFailed')}</span>}
         </div>
         <div className="connection-step verification-step">
-          <span className="step-label">2 · Verify installation</span>
-          <p className={connection.status === 'installed' ? 'success-text' : connection.status === 'broken' || connection.status === 'error' ? 'failed-text' : ''}>{connection.status === 'installed' ? 'Adapter installed' : connection.status === 'broken' ? 'Adapter configuration is broken' : connection.status === 'error' ? 'Adapter configuration could not be read' : connection.status === 'preview' ? 'Preview adapter is not installable yet' : connection.status === 'checking' ? 'Checking adapter…' : connection.status === 'unavailable' ? 'Connection service unavailable' : 'Adapter not installed'}</p>
-          <button className="button secondary" type="button" disabled={refreshing} onClick={() => void refresh()}>{refreshing ? 'Checking…' : 'Check installation'}</button>
+          <span className="step-label">{t('connect.verifyStep')}</span>
+          <p className={connection.status === 'installed' ? 'success-text' : connection.status === 'broken' || connection.status === 'error' ? 'failed-text' : ''}>{connection.status === 'installed' ? t('connect.adapterInstalled') : connection.status === 'broken' ? t('connect.adapterBroken') : connection.status === 'error' ? t('connect.adapterUnreadable') : connection.status === 'preview' ? t('connect.previewUnavailable') : connection.status === 'checking' ? t('connect.checkingAdapter') : connection.status === 'unavailable' ? t('connect.serviceUnavailable') : t('connect.adapterNotInstalled')}</p>
+          <button className="button secondary" type="button" disabled={refreshing} onClick={() => void refresh()}>{refreshing ? t('common.checking') : t('connect.checkInstallation')}</button>
         </div>
         <div className="connection-step verification-step">
-          <span className="step-label">3 · Confirm live activity</span>
-          <p>{connection.eventCount ? `${connection.eventCount} runtime events recorded` : 'No runtime activity recorded'}</p>
-          {connection.lastEventAt && <small>Last activity {new Date(connection.lastEventAt).toLocaleString()}</small>}
-          {!connection.eventCount && connection.status === 'installed' && <small>Use a Skill in {runtimeLabel[selected]}, then refresh to confirm the complete connection.</small>}
-          {connection.status === 'installed' && selected !== 'cursor' && <small>Remove this adapter later with <code>npm run {selected === 'codex' ? 'codex' : 'claude'}:uninstall</code>.</small>}
+          <span className="step-label">{t('connect.activityStep')}</span>
+          <p>{connection.eventCount ? t('connect.eventsRecorded', { count: formatNumber(connection.eventCount) }) : t('connect.noActivity')}</p>
+          {connection.lastEventAt && <small>{t('connect.lastActivity', { time: formatDateTime(connection.lastEventAt) })}</small>}
+          {!connection.eventCount && connection.status === 'installed' && <small>{t('connect.useSkill', { runtime: runtimeLabel[selected] })}</small>}
+          {connection.status === 'installed' && selected !== 'cursor' && <small>{t('connect.removeLater', { command: `npm run ${selected === 'codex' ? 'codex' : 'claude'}:uninstall` })}</small>}
         </div>
-        <footer><button className="button secondary" type="button" onClick={onClose}>Cancel</button><button className="button primary" type="button" disabled={connection.status !== 'installed'} onClick={onClose}>Finish setup</button></footer>
+        <footer><button className="button secondary" type="button" onClick={onClose}>{t('common.cancel')}</button><button className="button primary" type="button" disabled={connection.status !== 'installed'} onClick={onClose}>{t('connect.finish')}</button></footer>
       </section>
     </div>
   )

@@ -39,6 +39,7 @@ Restart Claude Code and run `/hooks` to verify the definitions. The adapter obse
 The MVP includes:
 
 - A responsive dashboard for runs, success rate, cost, runtime distribution, Skill performance, and recent failures.
+- A persistent language selector for Chinese, English, French, Russian, Spanish, and Japanese.
 - A normalized event schema for `discovered`, `matched`, `started`, `completed`, `failed`, and `skipped` events.
 - A local JSONL event store and HTTP API.
 - A CLI that scans common Skill locations and emits lifecycle events from hooks.
@@ -91,6 +92,11 @@ npm run dev
 ```
 
 Open `http://localhost:5173`. An empty local event store is shown as a real zero state. The deterministic demonstration dataset is used only when the local event API cannot be reached, and is labeled clearly in the UI.
+
+Use the language selector in the sidebar to switch the complete dashboard UI.
+SkillOps stores the preference locally in the browser, restores it on reload,
+and updates the document language metadata. All supported languages use a
+left-to-right layout.
 
 The main surfaces have reload-safe URLs: `/skills`, `/runs`, `/evaluations`, `/registry`, and `/settings`. Events refresh from the local store every three seconds, while runtime connection health refreshes every five seconds. Unchanged event polls use ETags and return an empty `304` response instead of transferring and parsing the full history again.
 
