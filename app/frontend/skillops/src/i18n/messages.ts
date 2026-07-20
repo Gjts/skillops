@@ -14,6 +14,11 @@ export const localeOptions: Array<{ code: Locale; label: string; intl: string }>
 export const messages = {
   'meta.description': { zh: '面向 AI 原生团队的本地优先 Skill 与代理可观测平台。', en: 'Local-first Skill and Agent observability for AI-native teams.', fr: 'Observabilité locale des Skills et agents pour les équipes IA.', ru: 'Локальная наблюдаемость Skills и агентов для команд ИИ.', es: 'Observabilidad local de Skills y agentes para equipos de IA.', ja: 'AI ネイティブチーム向けのローカルファーストな Skill とエージェントの可観測性。' },
   'common.language': { zh: '语言', en: 'Language', fr: 'Langue', ru: 'Язык', es: 'Idioma', ja: '言語' },
+  'common.appearance': { zh: '外观', en: 'Appearance', fr: 'Apparence', ru: 'Оформление', es: 'Apariencia', ja: '外観' },
+  'common.lightMode': { zh: '浅色模式', en: 'Light mode', fr: 'Mode clair', ru: 'Светлая тема', es: 'Modo claro', ja: 'ライトモード' },
+  'common.darkMode': { zh: '深色模式', en: 'Dark mode', fr: 'Mode sombre', ru: 'Тёмная тема', es: 'Modo oscuro', ja: 'ダークモード' },
+  'common.switchToLight': { zh: '切换到浅色模式', en: 'Switch to light mode', fr: 'Passer au mode clair', ru: 'Включить светлую тему', es: 'Cambiar al modo claro', ja: 'ライトモードに切り替え' },
+  'common.switchToDark': { zh: '切换到深色模式', en: 'Switch to dark mode', fr: 'Passer au mode sombre', ru: 'Включить тёмную тему', es: 'Cambiar al modo oscuro', ja: 'ダークモードに切り替え' },
   'common.all': { zh: '全部', en: 'All', fr: 'Tout', ru: 'Все', es: 'Todo', ja: 'すべて' },
   'common.allRuntimes': { zh: '所有运行时', en: 'All runtimes', fr: 'Tous les environnements', ru: 'Все среды выполнения', es: 'Todos los entornos', ja: 'すべてのランタイム' },
   'common.runtime': { zh: '运行时', en: 'Runtime', fr: 'Environnement', ru: 'Среда выполнения', es: 'Entorno', ja: 'ランタイム' },

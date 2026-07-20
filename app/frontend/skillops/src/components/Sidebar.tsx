@@ -7,11 +7,14 @@ import {
   CircleGauge,
   Languages,
   Menu,
+  Moon,
   Settings,
+  Sun,
   X,
 } from 'lucide-react'
 import { useI18n } from '../i18n/I18nProvider'
 import { localeOptions, type MessageKey } from '../i18n/messages'
+import { useTheme } from '../lib/useTheme'
 import type { PageId } from '../types'
 
 const navigation: Array<{ id: PageId; label: MessageKey; icon: typeof Activity }> = [
@@ -33,6 +36,8 @@ interface SidebarProps {
 
 export function Sidebar({ page, open, onNavigate, onToggle, onClose }: SidebarProps) {
   const { locale, setLocale, t } = useI18n()
+  const { theme, toggleTheme } = useTheme()
+  const nextThemeLabel = theme === 'dark' ? t('common.switchToLight') : t('common.switchToDark')
   return (
     <>
       <button className="mobile-menu" type="button" onClick={onToggle} aria-label={t('nav.toggle')}>
@@ -61,6 +66,11 @@ export function Sidebar({ page, open, onNavigate, onToggle, onClose }: SidebarPr
           })}
         </nav>
         <div className="sidebar-bottom">
+          <button className="theme-toggle" type="button" onClick={toggleTheme} aria-label={nextThemeLabel} title={nextThemeLabel}>
+            <span className="theme-toggle-icon" aria-hidden="true">{theme === 'dark' ? <Moon size={15} /> : <Sun size={15} />}</span>
+            <span className="theme-toggle-copy"><span>{t('common.appearance')}</span><strong>{theme === 'dark' ? t('common.darkMode') : t('common.lightMode')}</strong></span>
+            <span className="theme-toggle-track" aria-hidden="true"><span /></span>
+          </button>
           <label className="language-picker">
             <Languages size={15} aria-hidden="true" />
             <span>{t('common.language')}</span>

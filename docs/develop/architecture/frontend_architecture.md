@@ -25,6 +25,7 @@ Its primary responsibilities are:
 | Routing | Browser history plus pathname map |
 | State | React local state and derived memoized selectors |
 | Internationalization | Typed in-repo message catalog + React context; browser-local locale preference |
+| Theming | Root semantic CSS tokens; system-default light/dark mode with a browser-local override |
 | Charts | Lightweight React/SVG/CSS modules |
 | Tests | Vitest + Testing Library + jsdom |
 
@@ -56,6 +57,9 @@ production server falls back to `index.html` for extensionless SPA paths.
 - selected page, runtime, time range, menu, modal, and requested run.
 - selected UI locale, persisted under the versioned browser key
   `skillops.locale.v1`.
+- selected light or dark appearance after a manual choice, persisted under
+  `skillops.theme.v1`; before a manual choice, the dashboard follows
+  `prefers-color-scheme`.
 
 ### Derived state
 
@@ -154,7 +158,7 @@ uses the server's backup-first operation.
 
 | Component | Responsibility |
 | --- | --- |
-| `Sidebar` | Responsive navigation and local-mode identity |
+| `Sidebar` | Responsive navigation, root theme control, and local-mode identity |
 | `KpiStrip` | Outcome-aware summary metrics |
 | `Charts` | Daily runs and runtime distribution |
 | `SkillTable` | Runtime-specific Skill metrics and definition details |
@@ -193,6 +197,7 @@ Implemented expectations include:
 - Escape-to-close and focus restoration for the connect dialog;
 - focus trapping inside the connect dialog;
 - accessible names for icon-only controls;
+- a keyboard-operable theme toggle with localized current and target states;
 - mobile sidebar scrim and explicit close action;
 - horizontal containment for the wide Registry table.
 
@@ -215,6 +220,8 @@ Tests should use visible outcomes through each module's interface:
 - app tests for local/demo mode, routing, polling, import, and clearing;
 - internationalization tests for catalog completeness, persistence, translated
   application copy, document language, and fallback from unsupported locales;
+- theme tests for system defaults, manual persistence, root metadata, and
+  light/dark switching;
 - run detail for event correlation.
 
 Avoid tests that assert private React state or implementation-only markup order.

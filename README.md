@@ -98,6 +98,11 @@ SkillOps stores the preference locally in the browser, restores it on reload,
 and updates the document language metadata. All supported languages use a
 left-to-right layout.
 
+The sidebar appearance control switches the complete dashboard between light
+and dark themes. SkillOps follows the operating-system preference until the
+user makes a choice, then stores that choice locally and restores it before the
+next page is painted.
+
 The main surfaces have reload-safe URLs: `/skills`, `/runs`, `/evaluations`, `/registry`, and `/settings`. Events refresh from the local store every three seconds, while runtime connection health refreshes every five seconds. Unchanged event polls use ETags and return an empty `304` response instead of transferring and parsing the full history again.
 
 For a production-style local build:
