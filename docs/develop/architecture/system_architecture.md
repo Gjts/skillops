@@ -19,24 +19,33 @@ flowchart LR
     CL[Claude Code] --> CLA[Claude adapter]
     CS[Codex Desktop sessions] --> ING[Desktop ingest]
     FS[Skill folders and plugin registries] --> SCAN[Skill scanner]
+    FS --> AGENT[Bounded read-only evaluation tools]
+    GH[Public GitHub SKILL.md] --> EVAL[Candidate comparison]
+    EVAL --> LLM[Selected LLM provider]
+    AGENT --> EVAL
 
     CA --> STORE[Normalized JSONL event store]
     CLA --> STORE
     ING --> STORE
     SCAN --> API[Local HTTP interface]
     STORE --> API
+    SCAN --> EVAL
+    EVAL --> API
     API --> UI
 ```
 
-All arrows remain on the user's machine in v0.3.1.
+Telemetry, inventory, and event-store arrows remain on the user's machine.
+Skill Lab adds two explicit user-initiated network boundaries: reading a public
+GitHub candidate and sending an evaluation/chat request to the configured LLM
+provider. Neither flow writes prompts, model output, or credentials to disk.
 
 ## 3. Repository modules
 
 | Module | Interface | Implementation responsibility |
 | --- | --- | --- |
-| `app/frontend/skillops` | Local HTTP responses and shared event types | Routing, rendering, filtering, analytics, import/export UX |
-| `app/backend` | Event, scan, connection, and static-file behavior | JSONL persistence, scanning, desktop ingestion, config inspection |
-| `app/shared` | `normalizeEvent(s)` invariants | Event allowlist, types, enums, outcome normalization |
+| `app/frontend/skillops` | Local HTTP responses, shared event types, provider catalog | Routing, rendering, filtering, analytics, import/export, Skill Lab and memory-only AI settings |
+| `app/backend` | Event, scan, connection, evaluation, and static-file behavior | JSONL persistence, scanning, desktop ingestion, config inspection, candidate comparison, bounded read-only agent tools, and provider calls |
+| `app/shared` | `normalizeEvent(s)` invariants and AI provider catalog | Event allowlist/types/enums/outcome normalization plus provider identity/default metadata shared by frontend and backend |
 | `adapters/codex` | Codex hook payload to normalized events | Install merge, signal detection, non-blocking hook execution |
 | `adapters/claude` | Claude hook payload to normalized events | Config resolution, install merge, exact/heuristic detection |
 | `bin` | Root npm CLI commands | Scan plus manual lifecycle emission |
@@ -118,6 +127,24 @@ GET /api/connections
 
 Historical events do not determine installation status.
 
+### 5.5 Candidate comparison and A/B evaluation
+
+```text
+User submits public GitHub URL
+  → backend discovers bounded SKILL.md candidates
+  → selected candidate is compared with enabled local definitions
+  → browser selects an allowlisted scanned path as baseline
+  → backend re-downloads the candidate and verifies its analyzed SHA-256 hash
+  → backend runs both definitions sequentially in the selected mode
+      prompt-only: one provider call per definition, no workspace access
+      agent: bounded allowlisted list/read/search workspace tools
+  → third provider call judges anonymous Answer A / Answer B
+  → result remains in browser memory; no Skill or runtime config is changed
+```
+
+The frontend never requests arbitrary local files. The backend accepts a
+baseline only when the exact path is present in the current live scan.
+
 ## 6. Local HTTP interface
 
 | Method | Path | Purpose |
@@ -128,6 +155,9 @@ Historical events do not determine installation status.
 | `POST` | `/api/import` | Atomically validate/deduplicate/append an event array |
 | `POST` | `/api/scan` | Return live installed definitions |
 | `GET` | `/api/connections` | Return runtime config status and activity |
+| `POST` | `/api/evaluations/compare` | Discover a public GitHub candidate and rank local overlaps |
+| `POST` | `/api/evaluations/run` | Run a hash-pinned, memory-only baseline/candidate A/B evaluation |
+| `POST` | `/api/assistant/chat` | Ask the configured provider using inventory/evaluation metadata |
 
 The Vite development middleware and production Node server implement the same
 application interface. Changes must be kept behaviorally aligned.
@@ -154,6 +184,8 @@ interfaces without independent deployment needs.
 | Discovery keys | Backend event store | `data/discovery-index.json` |
 | Runtime hook configuration | Host runtime | Codex/Claude config files |
 | Filter, page, modal state | Frontend | In-memory; page identity also in URL |
+| AI provider settings and API key | Frontend | React page memory only; cleared by reload/page close |
+| Evaluation task, outputs, and chat | Frontend | In-memory only |
 | Demo dataset | Frontend | In-memory only when local event API is unavailable |
 | Production frontend | Build | `dist/`, ignored by Git |
 
@@ -165,7 +197,18 @@ interfaces without independent deployment needs.
 - **Filesystem seam**: the scanner tolerates missing/inaccessible conventional
   directories and prevents recursion loops through canonical paths.
 - **HTTP seam**: the interface is unauthenticated and therefore loopback-only by
-  default.
+  default. Evaluation POSTs additionally require a loopback Host, same-origin
+  browser request when Origin is present, and `application/json`.
+- **Candidate network seam**: only public `github.com` and
+  `raw.githubusercontent.com` HTTPS locations are accepted; downloaded Skill
+  files and repository-tree responses are size/count bounded.
+- **Provider network seam**: a user-selected HTTPS endpoint receives the
+  in-memory key and requested prompt; keyless Ollama HTTP is loopback-only.
+  Credentials and responses are never persisted by SkillOps.
+- **Evaluation-agent seam**: prompt-only runs have no workspace access. Agent
+  runs can list/search/read bounded allowed text, deny hidden/common secret,
+  runtime, dependency/build paths and symlinks, redact credential-like lines,
+  and expose no write/process/network tool.
 - **Configuration seam**: installers preserve unrelated values and identify
   their handlers with explicit markers.
 

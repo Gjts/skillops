@@ -19,6 +19,10 @@ collector.
 - Browser clients beyond the local user are not trusted; therefore the HTTP
   interface binds to loopback by default.
 - Plugin Skill metadata may be malformed and is treated as data, not executable code.
+- Public GitHub candidate content and LLM-provider responses are untrusted input.
+- A custom HTTPS AI Base URL is trusted by the user to receive the configured
+  API key and the explicit evaluation/chat request. Keyless Ollama HTTP is
+  restricted to loopback.
 
 ## 3. Data collected
 
@@ -49,6 +53,14 @@ Built-in adapters must not persist:
 - raw payment or personal account data;
 - raw error payloads that may embed task content.
 
+Skill Lab additionally keeps API keys, evaluation tasks/criteria, generated
+answers, judge rationales, and chat messages out of persistent SkillOps storage.
+Those values exist in browser/request memory and are transmitted to the selected
+provider only when the user initiates a call. They are not written to browser
+storage. When the user selects read-only agent mode, requested allowed
+workspace excerpts also exist in request memory and are transmitted to that
+provider; they are never appended to SkillOps storage.
+
 The shared event allowlist is a persistence control, not merely a display filter.
 
 ## 5. Data flow and storage
@@ -60,9 +72,19 @@ flowchart LR
     N --> J[Local events.jsonl]
     J --> L[Loopback HTTP interface]
     L --> B[Local browser]
+    G[Public GitHub SKILL.md] --> L
+    W[Non-sensitive workspace text] --> R[Bounded read-only agent tools]
+    R --> L
+    B --> L
+    L --> P[Selected LLM provider]
 ```
 
-There is no built-in cloud upload or account synchronization in v0.3.1.
+There is no background cloud upload, telemetry export, or account synchronization
+in v0.3.1. The GitHub and provider arrows are explicit Skill Lab actions, not
+runtime collection. Prompt-only evaluation and assistant chat do not read local
+workspace contents. Read-only agent mode exposes only bounded allowlisted tools,
+and the loopback backend performs provider calls so local files remain behind
+that explicit interface.
 
 ## 6. Local HTTP exposure
 
@@ -79,6 +101,9 @@ Vite development mode also binds to `127.0.0.1` through the package command.
 Because the interface can read, append, import, and clear local events, changing
 the bind address without authentication creates a material data-integrity and
 privacy risk. Non-loopback deployment is outside the supported security model.
+Evaluation/chat POST handlers additionally validate the loopback Host, reject
+cross-site or mismatched browser Origins, require `application/json`, disable
+response caching, and apply `nosniff` before touching inventory or providers.
 
 ## 7. Input validation controls
 
@@ -107,6 +132,37 @@ to the SPA.
 Traversal is depth-bounded, canonical-path deduplicated, and tolerant of missing
 or access-denied conventional directories. Markdown frontmatter is parsed as
 text; Skill code is not executed.
+
+### Candidate discovery
+
+- accepts HTTPS `github.com` or `raw.githubusercontent.com` only;
+- requires `SKILL.md` for direct raw/blob links;
+- rejects truncated repository trees;
+- caps discovered entries at 40 and one downloaded definition at 256 KB;
+- treats remote Markdown as text and never executes it.
+
+### Evaluation and assistant
+
+- an A/B baseline path must match the exact path from a current enabled scan;
+- the candidate SHA-256 content hash must still match its analysis response;
+- request bodies, task, criteria, provider fields, message count, nested context, and string lengths are bounded;
+- assistant context excludes local paths and local Skill file contents;
+- Answer A/B ordering is stable-blinded before judging;
+- a judge winner that contradicts its normalized scores is rejected;
+- credentials are not echoed in success payloads or persisted error records;
+- credentialed custom Base URLs require HTTPS and reject embedded credentials,
+  query strings, and fragments; keyless Ollama HTTP must use loopback;
+- remote candidate and provider response bodies are byte-bounded while streaming.
+
+Read-only agent mode has an additional capability boundary:
+
+- tools are limited to list, literal search, and read of bounded workspace text;
+- hidden names, credential/key names, `data/`, `.opc`, VCS data, dependencies, caches,
+  coverage, and build output are blocked;
+- lines containing common credential labels are redacted before matching or return;
+- absolute paths, traversal, symlinks, unsupported file types, oversized files,
+  excess results, excess model rounds, and excess tool calls are rejected;
+- no write, delete, process execution, arbitrary network, or runtime-config tool exists.
 
 ## 8. Hook installer safety
 
@@ -168,6 +224,12 @@ permissions and disk-encryption policy.
 | Plugin symlink loop | Canonical path visited set + depth bound | Very large valid trees can still cost scan time |
 | Partial concurrent write | newline repair, locks for discovery | General single-event appends rely on OS append semantics |
 | Backup retains deleted history | Explicit local backup | Operator must manage backup lifecycle |
+| Malicious candidate causes oversized/network work | GitHub-only URL allowlist, tree/file bounds, timeout | Public GitHub content can still contain adversarial instructions evaluated by the selected model |
+| DNS rebinding/cross-site page invokes evaluation API | Loopback Host, same-origin browser checks, JSON-only POST | Non-browser local processes under the same OS user remain trusted |
+| Custom endpoint steals API key | HTTPS requirement, no embedded credentials, UI warning, memory-only configuration | User must trust the endpoint they configure |
+| Agent exposes sensitive workspace data | Explicit mode, denied paths/types, credential-line redaction, bounded read-only tools, negative privacy tests | Allowed source can still embed sensitive data and excerpts are intentionally disclosed to the selected provider |
+| Evaluation content persists accidentally | No evaluation store; event allowlist unchanged; privacy tests | Browser/provider retention follows their own policies |
+| LLM judge creates false confidence | Blind A/B labels and task-specific wording | One model judgment is evidence for one case, not universal quality |
 
 ## 12. Privacy review for new fields
 
@@ -193,6 +255,9 @@ escape hatch.
 - [ ] Reinstall adapters after moving the repository.
 - [ ] Review backup retention after clearing data.
 - [ ] Do not use manual success outcomes without a trusted evaluator.
+- [ ] Use only trusted AI Base URLs and review the selected provider's data policy.
+- [ ] Avoid placing secrets or proprietary source in Skill Lab tasks or chat.
+- [ ] Use prompt-only mode when workspace excerpts must not leave the machine.
 
 ## 14. Reporting a security issue
 

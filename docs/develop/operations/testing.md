@@ -15,6 +15,8 @@ Tests prioritize the failures most harmful to SkillOps users:
 - exposing the unauthenticated HTTP interface beyond loopback;
 - mixing Codex/Claude/plugin/global/project inventory categories;
 - clearing local history without a recoverable backup.
+- leaking API keys, local Skill contents/paths, evaluation tasks, or model output;
+- presenting one A/B judge result as a universal Skill-quality claim.
 
 ## 2. Automated test layers
 
@@ -27,7 +29,10 @@ numeric finiteness, tags, required Skill ID, and outcome contradictions.
 
 Verify JSONL append/read/import, atomic validation, ID deduplication, discovery
 locking/indexing, scanner sources, plugin enablement, runtime connection status,
-and Codex Desktop ingestion/deduplication.
+Codex Desktop ingestion/deduplication, candidate bounds/similarity, baseline
+allowlisting, hash pinning, provider HTTPS/loopback normalization, HTTP
+origin/content-type guards, score-consistent blind judging, bounded workspace
+agent tools, and chat-context minimization.
 
 ### Adapter tests
 
@@ -39,6 +44,10 @@ resolution, and non-blocking error behavior.
 
 Verify analytics semantics, charts, routing/data modes, import/clear flows,
 runtime connection UI, Registry separation/health filters, and run correlation.
+Skill Lab tests exercise candidate discovery rendering, session provider setup,
+reasoning-effort validation and compatibility, A/B result display, and
+contextual chat. Drawer tests verify default non-rendering, contextual prompt
+seeding, Escape dismissal, and focus restoration.
 
 ### Smoke test
 
@@ -46,6 +55,7 @@ Spawns the production server on an isolated loopback port and validates:
 
 - built frontend and SPA fallback;
 - local event HTTP operations;
+- candidate-comparison HTTP behavior without an external model call;
 - privacy validation;
 - loopback host behavior;
 - clean process shutdown.
@@ -169,6 +179,25 @@ Repeat Scenario D using an explicit `/skill-name` or Skill tool invocation and
 Use isolated fixture settings that contain a SkillOps marker pointing to a
 missing `.mjs` file. Confirm status is Broken, not Installed or Not installed.
 
+### Scenario I: Skill Lab session flow
+
+1. Paste a public GitHub Skill URL and confirm candidate metadata renders.
+2. Confirm the top local match comes from the live enabled inventory.
+3. Open AI settings, select a provider, and verify the key is hidden by default.
+4. Confirm no key/config value appears in local or session browser storage.
+5. Select an explicit reasoning effort and confirm the provider receives it.
+6. Run one prompt-only task and confirm the result labels that mode.
+7. For GPT-5.6, confirm read-only agent mode is blocked until reasoning effort
+   is `none`.
+8. Select read-only workspace agent mode, acknowledge its provider-disclosure
+   text, run again, and confirm the result labels read-only agent mode.
+9. Confirm the evaluation stays full width until **Ask SkillOps** or a contextual
+   assistant action opens the drawer.
+10. Close the drawer with Escape and confirm focus returns to its invoking
+    control; on a narrow viewport confirm it renders as a bottom sheet.
+11. Confirm the result says no Skill was installed or promoted.
+12. Reload and confirm the API key is cleared.
+
 ## 7. Browser route matrix
 
 Every route must load directly and after refresh:
@@ -197,6 +226,13 @@ For every new hook payload field, test that events do not persist:
 - environment values/tokens;
 - full provider configuration;
 - raw error payloads.
+- evaluation tasks/criteria and generated/judge output;
+- assistant chat messages;
+- AI provider API keys.
+
+For read-only evaluation tools, also assert that `.env`, credential/key files,
+`data/`, `.opc`, dependencies, build output, traversal, and symlinks cannot be
+listed, searched, or read, and that no mutation/process/network tool is exposed.
 
 Unknown fields should be absent from the stored JSONL record, not merely hidden
 in the UI.

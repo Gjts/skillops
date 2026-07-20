@@ -43,7 +43,8 @@ The MVP includes:
 - A normalized event schema for `discovered`, `matched`, `started`, `completed`, `failed`, and `skipped` events.
 - A local JSONL event store and HTTP API.
 - A CLI that scans common Skill locations and emits lifecycle events from hooks.
-- Runtime connection guidance and a version evaluation surface.
+- Runtime connection guidance plus a live candidate comparison, A/B evaluation,
+  and AI-assisted interpretation surface.
 
 ## Project structure
 
@@ -51,7 +52,7 @@ The MVP includes:
 app/
   backend/             Local API, event storage, Skill scanning, runtime health
   frontend/skillops/   React/Vite dashboard
-  shared/              Normalized event schema shared across application layers
+  shared/              Event schema and AI provider catalog shared across layers
 adapters/               Codex and Claude Code runtime adapters
 bin/                    SkillOps CLI
 docs/
@@ -143,7 +144,33 @@ The scanner checks these conventional locations when they exist:
 
 The Registry page reports unique enabled Skill names separately from enabled definitions, commands, plugin definitions, and disabled definitions. Runtime connection status is read from the current Codex and Claude Code hook configuration files rather than inferred from historical events. A configuration that still contains SkillOps entries but points to a missing hook script is reported as **Broken**.
 
-The Evaluations page is an explicitly labeled local sample. Its comparison and promotion controls update sample UI state only; they do not install, deploy, or modify a runtime Skill.
+The **Skill Lab** page accepts a public GitHub repository, tree, blob, or raw
+`SKILL.md` URL. It downloads only public candidate definitions, ranks them
+against enabled local Skills with a deterministic content comparison, and lets
+the user select one local definition as an A/B baseline. Prompt-only mode runs
+each definition as one model prompt. The optional read-only agent mode can list,
+search, and read bounded allowed workspace text while blocking hidden/common
+secret paths, credential-like lines, runtime data, build output, traversal, and
+all writes. A final blinded model
+request scores the outputs. The analyzed candidate's SHA-256 content hash is
+rechecked before either run. Results and generated outputs stay in browser
+memory; the workflow does not install, promote, deploy, or edit a Skill.
+
+OpenAI, Gemini, Anthropic, Azure OpenAI, Ollama, OpenRouter, MiniMax, GLM, and
+DeepSeek are supported. AI settings and API keys exist only in React page
+memory, are sent through the loopback server for the requested provider call,
+and are cleared by a reload or page close. Credentialed endpoints require
+HTTPS; keyless Ollama HTTP is limited to loopback. SkillOps never writes the
+key, evaluation task, acceptance criteria, chat messages, workspace excerpts,
+or model output to disk. User-initiated provider requests do send their stated
+content, and read-only agent mode may send requested allowed workspace excerpts,
+to the selected provider. Review allowed source for embedded sensitive data;
+the selected provider's own data policy still applies.
+
+OpenAI-compatible transports also expose an explicit reasoning-effort control.
+GPT-5.6 Chat Completions agent runs require reasoning effort **None**; prompt-only
+runs may use the other supported efforts. Baseline, candidate, and judge provider
+work runs sequentially so concurrency-limited endpoints can complete reliably.
 
 ## Emit lifecycle events
 

@@ -91,7 +91,7 @@ describe('SkillOps internationalization', () => {
     expect(document.documentElement.lang).toBe('ja')
   })
 
-  it('retranslates import feedback and uses locale-aware sample metrics', async () => {
+  it('retranslates import feedback and the live Skill Lab mode', async () => {
     window.localStorage.setItem('skillops.locale.v1', 'en')
     window.history.replaceState({}, '', '/runs')
     let stored: object[] = []
@@ -111,10 +111,9 @@ describe('SkillOps internationalization', () => {
     expect(screen.getByRole('status').textContent).toBe('新しいイベント1件をローカルイベントストアにインポートしました。')
 
     fireEvent.change(screen.getByLabelText('言語'), { target: { value: 'fr' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Aperçu des évaluations' }))
-    expect(screen.getByText('89,6%')).toBeTruthy()
-    expect(screen.getByText('3 min 42 s')).toBeTruthy()
-    expect(screen.getByText('+6,0 pt')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Skill Lab' }))
+    expect(screen.getByRole('heading', { level: 1, name: 'Skill Lab' })).toBeTruthy()
+    expect(screen.getByText('Évaluation en direct')).toBeTruthy()
   })
 
   it('localizes validation errors, demo KPI values, and synthetic project providers', async () => {

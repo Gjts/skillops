@@ -10,6 +10,8 @@ The backend provides a small local interface for:
 - normalized append-only event persistence;
 - atomic import and recoverable clearing;
 - live installed-Skill inventory;
+- public GitHub candidate discovery and deterministic local comparison;
+- memory-only multi-provider A/B evaluation and assistant requests;
 - Codex Desktop incremental ingestion;
 - runtime configuration health;
 - production SPA serving.
@@ -29,7 +31,8 @@ collection failure isolated from the host coding runtime.
 | Validation | Shared allowlist normalizer in `app/shared` |
 | Tests | Vitest Node tests and smoke process |
 
-There is no database, account system, remote collector, or background daemon.
+There is no database, account system, remote telemetry collector, or background
+daemon. Skill Lab network calls occur only after an explicit browser request.
 
 ## 3. Backend modules
 
@@ -59,9 +62,27 @@ validation, and activity enrichment.
 Owns incremental parsing of recent Codex Desktop session records and conservative
 Skill path detection from actual file-read commands.
 
+### `skill-evaluations.mjs`
+
+Owns bounded public GitHub `SKILL.md` discovery, local baseline allowlisting,
+deterministic similarity scoring, provider request normalization, blinded A/B
+judging, chat context minimization, and the three evaluation HTTP handlers.
+It validates optional reasoning effort, retries one transient GitHub read, and
+never writes credentials, tasks, prompts, or model responses to disk.
+
+### `evaluation-agent.mjs`
+
+Owns the optional read-only evaluation loop and its workspace tools. It exposes
+only bounded file listing, literal search, and text-file reads; blocks secret,
+runtime-data, dependency, build-output, traversal, and symlink paths; and has no
+write, process, or network tool. Model rounds and total tool calls are capped.
+
 ## 4. HTTP contract
 
 All successful JSON responses use `Content-Type: application/json`.
+Evaluation and assistant POST handlers additionally reject non-loopback Host
+headers, cross-site or mismatched browser Origins, and non-JSON content types
+before scanning local inventory or contacting a provider.
 
 ### `GET /api/events`
 
@@ -134,6 +155,33 @@ Performs Codex Desktop sync, reads effective runtime configuration, and returns:
   }
 ]
 ```
+
+### `POST /api/evaluations/compare`
+
+Accepts a public GitHub URL and optional candidate path. The server discovers at
+most 40 `SKILL.md` entries, downloads one file with a 256 KB limit, reads
+enabled local definitions, and returns candidate metadata plus the six closest
+matches. Local Skill contents are not returned.
+
+### `POST /api/evaluations/run`
+
+Accepts a previously discovered candidate reference and SHA-256 content hash,
+an exact baseline path from the current live scan, one task, acceptance
+criteria, execution mode, and in-memory provider configuration. The backend
+re-downloads the candidate and rejects a changed hash. Baseline and candidate
+run sequentially in prompt-only mode or through bounded read-only workspace
+tools so concurrency-limited providers are supported; a final request judges
+anonymous Answer A/Answer B and its winner must agree with the normalized
+scores. Full results are returned to the requesting browser but are not
+persisted. OpenAI-compatible requests may carry a validated `reasoning_effort`;
+GPT-5.6 Chat Completions tool calls are rejected unless it is `none`.
+
+### `POST /api/assistant/chat`
+
+Accepts up to 24 in-memory user/assistant messages. Provider context contains
+bounded enabled inventory names/versions/descriptions plus sanitized task,
+criteria, candidate/match descriptions, similarity signals, and A/B outputs.
+Local source paths and Skill contents are excluded from chat context.
 
 ## 5. Event-store invariants
 
@@ -252,6 +300,13 @@ CC Switch configuration participates in Claude home resolution as documented in
 - Production static-file resolution rejects paths escaping `dist/`.
 - The server is unauthenticated; non-loopback binding is an explicit operator risk.
 - Raw source/transcript/tool data is not part of the backend event interface.
+- Candidate discovery accepts only HTTPS `github.com` and
+  `raw.githubusercontent.com` locations and rejects truncated/oversized inputs.
+- Provider credentials exist only in the current request. Custom HTTP(S) Base
+  URLs are allowed because local Ollama and compatible endpoints are a product
+  requirement; the UI warns that the chosen endpoint receives the key.
+- Evaluation prompts, generated answers, judge rationales, and chat messages are
+  returned in memory and are never appended to the event store or diagnostics.
 
 ## 12. Backend verification checklist
 
@@ -261,4 +316,6 @@ CC Switch configuration participates in Claude home resolution as documented in
 - [ ] Scanner fixtures cover global/project/plugin/disabled/command cases.
 - [ ] Connection tests cover installed, absent, broken, and config-error states.
 - [ ] Codex Desktop parser tests reject false-positive path mentions.
+- [ ] Candidate bounds, local baseline allowlisting, blind judging, provider
+  normalization, and chat-context minimization tests pass.
 - [ ] `npm run smoke` covers HTTP privacy, API, SPA routing, and loopback behavior.

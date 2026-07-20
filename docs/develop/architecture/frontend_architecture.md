@@ -1,7 +1,7 @@
 # Frontend architecture: SkillOps dashboard
 
 > Version: v0.3.1
-> Status: implemented, with an explicitly marked Evaluations preview
+> Status: implemented, including the live Skill Lab evaluation workspace
 
 ## 1. Frontend goals
 
@@ -12,7 +12,7 @@ Its primary responsibilities are:
 - separate runtime workspaces before category totals;
 - distinguish lifecycle completion from evaluated success;
 - make local/demo/unavailable state obvious;
-- provide usable import, export, clear, and connection workflows;
+- provide usable import, export, clear, connection, comparison, and evaluation workflows;
 - remain responsive and reload-safe without a routing dependency.
 
 ## 2. Stack
@@ -29,8 +29,10 @@ Its primary responsibilities are:
 | Charts | Lightweight React/SVG/CSS modules |
 | Tests | Vitest + Testing Library + jsdom |
 
-There is no remote client SDK, authentication state, router package, or global
-state library in v0.3.1.
+There is no remote client SDK, account authentication state, router package, or
+global state library in v0.3.1. AI provider credentials exist only in React
+page memory and are submitted to the loopback API for an explicit call. Reload
+or page close clears them; browser storage is not used.
 
 ## 3. Routes and page intent
 
@@ -39,7 +41,7 @@ state library in v0.3.1.
 | `/` | Overview | Events + connections |
 | `/skills` | Skills | Terminal events + discovery metadata |
 | `/runs` | Runs | Terminal and correlated lifecycle events |
-| `/evaluations` | Evaluation preview | Hard-coded illustrative sample only |
+| `/evaluations` | Skill Lab | Live GitHub candidate comparison, A/B evaluation, and assistant chat |
 | `/registry` | Registry | Live scan, falling back to discovery events on failure |
 | `/settings` | Settings | Connections + local events |
 
@@ -54,14 +56,16 @@ production server falls back to `index.html` for extensionless SPA paths.
 - `connections`: runtime configuration/activity results;
 - `mode`: `loading`, `local`, or `demo`;
 - `eventEtag`: last event-store version;
-- selected page, runtime, time range, menu, modal, and requested run.
+- selected page, runtime, time range, menu, modal, and requested run;
 - selected UI locale, persisted under the versioned browser key
-  `skillops.locale.v1`.
+  `skillops.locale.v1`;
 - selected appearance from the 25-style product catalog after a manual choice,
   persisted under `skillops.theme.v2`; before a manual choice, the dashboard
   maps `prefers-color-scheme` to the DevTools or Synapse design system. The
   pre-paint bootstrap and React hook both migrate the legacy
-  `skillops.theme.v1` light/dark preference to those two themes.
+  `skillops.theme.v1` light/dark preference to those two themes;
+- candidate URL/selection, local baseline, A/B inputs/results, and chat messages;
+- active AI provider settings initialized in page memory from the shared catalog.
 
 `src/lib/themeCatalog.ts` is the authoritative source for theme IDs, color
 schemes, browser theme colors, storage keys, legacy mappings, and system
@@ -161,6 +165,36 @@ Connection rows show config truth separately from activity. Export serializes
 the current local event array as JSONL. Clear requires a confirmation dialog and
 uses the server's backup-first operation.
 
+### Skill Lab
+
+`EvaluationWorkspace` owns the user-visible workflow but reads no filesystem
+content directly. Candidate discovery, local baseline resolution, Skill-content
+comparison, and provider requests all cross the loopback API. The workspace:
+
+- accepts a public GitHub Skill location and handles repositories with multiple
+  `SKILL.md` candidates;
+- displays deterministic overlap scores and lets the user choose a live scanned
+  local baseline;
+- collects one task and explicit acceptance criteria;
+- sends the analyzed candidate content hash and selected prompt-only/read-only
+  agent mode with each A/B request;
+- renders baseline/candidate scores, timings, token counts, session outputs,
+  and a blinded judge rationale;
+- passes bounded inventory metadata, task/criteria, comparison signals, and
+  in-memory result outputs to assistant chat without local paths or Skill contents.
+
+Assistant chat is not a permanent layout column. `EvaluationWorkspace` exposes
+context actions beside baseline selection, A/B task setup, and the result, while
+`SkillOpsAssistantDrawer` opens as an on-demand right drawer. The drawer traps
+focus, closes with Escape or its scrim, restores the invoking control, and
+collapses to a bottom sheet on narrow screens without shrinking the main flow.
+
+`AiSettingsModal` follows the supplied provider-grid reference. It supports
+nine providers, traps focus, restores focus on close, hides keys by default,
+retains settings only in current page memory, and exposes reasoning effort for
+OpenAI-compatible transports. `EvaluationWorkspace` surfaces the GPT-5.6
+Chat Completions tool-call constraint and disables incompatible agent runs.
+
 ## 8. Component map
 
 | Component | Responsibility |
@@ -174,6 +208,8 @@ uses the server's backup-first operation.
 | `RunDetail` | Correlated evidence for one selected run |
 | `RegistryPage` | Live inventory and health analysis |
 | `ConnectModal` | Install command, config check, and live-activity check |
+| `EvaluationWorkspace` | Candidate discovery, local match selection, A/B run, result, and contextual chat |
+| `AiSettingsModal` | Memory-only multi-provider/model/endpoint configuration |
 
 ## 9. Import/export behavior
 
@@ -231,13 +267,18 @@ Tests should use visible outcomes through each module's interface:
 - theme tests for system defaults, legacy migration, manual persistence, root
   metadata, catalog selection, focus containment, responsive placement, and
   palette/sidebar contrast;
+- Skill Lab tests for candidate analysis, session provider/reasoning setup,
+  GPT-5.6 agent compatibility, A/B results, contextual chat, and assistant-drawer
+  focus/close behavior;
 - run detail for event correlation.
 
 Avoid tests that assert private React state or implementation-only markup order.
 
 ## 13. Planned frontend work
 
-- Real evaluation runner results and promotion workflow.
+- Multi-case evaluation suites, confidence/sample-size presentation, and
+  read-only report export.
+- Promotion workflow only after recoverable mutation semantics are designed.
 - Saved views/filters if user evidence justifies persistence.
 - Event-store retention controls.
 - Large-history virtualization or server-side aggregation after JSONL scale limits are measured.

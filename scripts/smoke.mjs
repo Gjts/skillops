@@ -43,6 +43,23 @@ try {
   const installed = await scanResponse.json()
   if (!scanResponse.ok || !Array.isArray(installed)) throw new Error('Installed Skill scan API did not return an array.')
 
+  const invalidComparisonResponse = await fetch(`http://127.0.0.1:${port}/api/evaluations/compare`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  })
+  const invalidComparison = await invalidComparisonResponse.json()
+  if (invalidComparisonResponse.status !== 400 || !invalidComparison.error?.includes('Candidate URL')) {
+    throw new Error('Evaluation comparison API did not validate its candidate URL.')
+  }
+
+  const invalidChatResponse = await fetch(`http://127.0.0.1:${port}/api/assistant/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  })
+  if (invalidChatResponse.status !== 400) throw new Error('Evaluation assistant API did not reject an incomplete request.')
+
   const connectionsResponse = await fetch(`http://127.0.0.1:${port}/api/connections`)
   const connections = await connectionsResponse.json()
   if (!connectionsResponse.ok || !Array.isArray(connections) || !connections.some((item) => item.runtime === 'codex')) {
@@ -102,7 +119,7 @@ try {
   if (missingAsset.status !== 404) throw new Error('Missing asset did not return 404.')
   const nestedApiRoute = await fetch(`http://127.0.0.1:${port}/api/events/extra`)
   if (!(nestedApiRoute.headers.get('content-type') || '').includes('text/html')) throw new Error('Nested event path was incorrectly handled as the event API.')
-  console.log('Smoke test passed: loopback frontend, SPA routing, privacy validation, and local API are healthy.')
+  console.log('Smoke test passed: loopback frontend, SPA routing, privacy validation, evaluation routes, and local API are healthy.')
 } finally {
   const exit = server.exitCode === null ? once(server, 'exit') : Promise.resolve()
   server.kill('SIGTERM')

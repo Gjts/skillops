@@ -41,8 +41,8 @@ describe('SkillOps primary flow', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'Skills' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'No Skill runs from any runtime' })).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Evaluation preview' }))
-    expect(screen.getByRole('heading', { level: 2, name: 'Evaluation preview' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Skill Lab' }))
+    expect(screen.getByRole('heading', { level: 2, name: 'Compare a new open-source Skill' })).toBeTruthy()
     expect(document.querySelector('.sidebar')?.classList.contains('is-open')).toBe(false)
   })
 
@@ -138,12 +138,13 @@ describe('SkillOps primary flow', () => {
     expect(screen.getByText('needle-skill')).toBeTruthy()
   })
 
-  it('keeps sample evaluations read-only and explicit about unavailable actions', () => {
+  it('opens the live Skill Lab and its memory-only AI settings', () => {
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: 'Evaluation preview' }))
-    expect(screen.getByText('Decision controls are intentionally unavailable')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'New comparison' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Promote candidate' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Skill Lab' }))
+    expect(screen.getByRole('textbox', { name: 'Candidate GitHub URL' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Configure AI' }))
+    expect(screen.getByRole('dialog', { name: 'AI settings' })).toBeTruthy()
+    expect(screen.getByText("API keys stay only in this page's memory. Reloading or closing the page clears them.")).toBeTruthy()
   })
 
   it('shows every real Skill row on the unbounded Skills page', async () => {

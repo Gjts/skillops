@@ -180,21 +180,26 @@ Status: implemented baseline
 ## 10. Milestone 8: Real evaluation runner
 
 Priority: P2
-Status: planned; current page is sample-only
+Status: in progress; one-off session evaluation is implemented
 
-- [ ] Define local evaluation input/result schema.
-- [ ] Add evaluator adapter distinct from lifecycle hooks.
+- [x] Define bounded one-task session evaluation input/result schema.
+- [x] Add evaluator service distinct from lifecycle hooks and event persistence.
+- [x] Discover public GitHub candidates and compare them with live local definitions.
+- [x] Run current/candidate variants sequentially for constrained providers and blind the judge order.
+- [x] Keep credentials, tasks, answers, and chat out of persistent storage.
 - [ ] Store acceptance-test evidence references without task content leakage.
-- [ ] Compare current/candidate versions using real evaluated outcomes.
+- [x] Compare current/candidate versions using real task-specific scores.
+- [x] Offer explicit prompt-only and bounded read-only workspace agent modes.
+- [x] Pin analyzed candidate content by SHA-256 before execution.
 - [ ] Show sample size and outcome coverage.
 - [ ] Export a read-only comparison report.
-- [ ] Replace or isolate current hard-coded sample.
+- [x] Replace the hard-coded sample with the live Skill Lab workspace.
 
 Acceptance:
 
-- [ ] Every success value is traceable to evaluator evidence.
-- [ ] Unknown lifecycle completions cannot enter evaluated metrics.
-- [ ] No install/promotion action is enabled in this milestone.
+- [x] Every displayed score is traceable to the in-session judge response.
+- [x] Unknown lifecycle completions cannot enter Skill Lab scores.
+- [x] No install/promotion action is enabled in this milestone.
 
 ## 11. Milestone 9: Safe Skill actions
 

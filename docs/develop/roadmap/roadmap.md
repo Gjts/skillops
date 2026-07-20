@@ -28,7 +28,9 @@ semantics are weak.
 - Claude Code native hook adapter with CC Switch-aware config resolution.
 - Live Registry across global/project/plugin definitions.
 - Runtime-first inventory, source/provider categories, duplicate/conflict health.
-- Overview, Skills, Runs, Registry, Settings, and Evaluation preview surfaces.
+- Overview, Skills, Runs, Registry, Settings, and live Skill Lab surfaces.
+- Public GitHub candidate discovery, deterministic local overlap ranking,
+  memory-only prompt/agent multi-provider A/B evaluation, and contextual assistant chat.
 - Outcome coverage and lifecycle-only semantics.
 - Atomic import, local export, backup-first clear, discovery deduplication.
 - Automated unit/integration/UI tests, build, and smoke verification.
@@ -54,13 +56,13 @@ Exit criteria:
 
 ## 4. Phase 2: Evaluation truth
 
-Goal: replace the sample Evaluation preview with a real evaluator interface.
+Goal: deepen the initial memory-only evaluator into repeatable evaluation evidence.
 
 Candidate outcomes:
 
-- local evaluation-run input and result schema;
-- acceptance-test/evaluator adapter separate from lifecycle adapters;
-- version A/B comparison using real evaluated outcomes;
+- multi-case evaluation-suite input and result schema;
+- optional metadata-only evidence persistence separate from lifecycle adapters;
+- repeatable version A/B comparison across representative cases;
 - outcome-coverage thresholds and confidence presentation;
 - read-only report export;
 - no promotion/mutation until comparison semantics are validated.
@@ -69,7 +71,7 @@ Exit criteria:
 
 - every success claim links to evaluator evidence;
 - lifecycle-only records cannot enter evaluated denominators;
-- sample data is removed or remains unmistakably isolated.
+- one-off judge results remain labeled as task-specific evidence.
 
 ## 5. Phase 3: Controlled Skill lifecycle actions
 

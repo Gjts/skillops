@@ -59,6 +59,9 @@ loopback binding, export, retention, and removal behavior.
 - Show honest outcome coverage: lifecycle-only completions are not successes.
 - Allow validated JSON/JSONL import, JSONL export, and recoverable clearing.
 - Provide reload-safe dashboard routes and live local refresh.
+- Discover public GitHub Skill candidates and rank overlap with enabled local definitions.
+- Run an in-memory, blinded, task-specific A/B evaluation in prompt-only or bounded read-only agent mode.
+- Provide contextual assistant chat without exposing local Skill paths or Skill-definition contents.
 
 ### 4.2 Product quality goals
 
@@ -70,12 +73,12 @@ loopback binding, export, retention, and removal behavior.
 
 ## 5. Non-goals for v0.3.1
 
-- Cloud accounts, team workspaces, synchronization, or remote ingestion.
-- Reading or storing raw prompt text, transcripts, tool payloads, source code,
-  model output, or credentials.
+- Cloud accounts, team workspaces, synchronization, or remote runtime/event ingestion.
+- Persisting raw prompt text, transcripts, tool payloads, source code, model
+  output, evaluation tasks, chat messages, or credentials.
 - Proving implicit Skill selection when the runtime exposes no observable signal.
 - Declaring task success from a normal lifecycle completion.
-- Installing, promoting, or deploying a Skill from the Evaluations preview.
+- Installing, promoting, or deploying a Skill from Skill Lab.
 - Managing or editing `SKILL.md` definitions.
 - A production-ready Cursor adapter.
 
@@ -91,6 +94,8 @@ loopback binding, export, retention, and removal behavior.
 | Evaluated run | A run whose outcome is known as success or failed. |
 | Lifecycle only | A completed run with `outcome: unknown`. |
 | Connection | Inspection result for installed hook configuration plus observed activity. |
+| Candidate | One public GitHub `SKILL.md` selected for comparison; not installed locally. |
+| A/B evaluation | One task run against a local baseline and remote candidate, then blind-judged by the configured model. |
 
 ## 7. Primary user journeys
 
@@ -186,10 +191,17 @@ Implemented:
 
 ### 8.4 Evaluations — `/evaluations`
 
-Preview only:
+Implemented as Skill Lab:
 
-- illustrative current/candidate comparison;
-- no evaluator, promotion, rollout, installation, or persistence behavior.
+- public GitHub candidate discovery with multi-Skill repository selection;
+- deterministic comparison against enabled local definitions;
+- explicit local baseline selection;
+- task and acceptance-criteria input;
+- sequential baseline/candidate prompt-only or read-only agent runs plus a final blind judge call;
+- candidate SHA-256 pinning between analysis and execution;
+- in-memory result/output display and contextual assistant chat;
+- nine page-memory providers with editable model/Base URL and compatible reasoning effort;
+- no promotion, rollout, installation, definition mutation, or result persistence.
 
 ### 8.5 Registry — `/registry`
 
@@ -249,6 +261,33 @@ Success rate is computed only from explicit success and failure outcomes.
 Unknown lifecycle completions are shown separately and excluded from the
 denominator.
 
+### FR-7 Candidate and baseline safety
+
+Candidate discovery is limited to bounded public GitHub `SKILL.md` content. A
+local baseline is accepted only when its exact path appears in the current
+enabled live scan; the frontend cannot use the evaluation interface to read an
+arbitrary local path.
+
+### FR-8 Memory-only AI evaluation
+
+AI credentials and settings use React page memory and are never written to
+browser storage. The local server may hold a key, task, Skill contents,
+requested workspace excerpts, generated output, or chat message only for the
+current request and must not append them to events, logs, backups, or another
+store. Credentialed endpoints require HTTPS; keyless Ollama HTTP is restricted
+to loopback. Evaluation results are task-specific evidence and never mutate
+lifecycle-event outcomes automatically.
+
+### FR-9 Evaluation integrity and agent boundary
+
+The backend must re-download the candidate and match its analyzed SHA-256 hash
+before executing either variant. Prompt-only mode has no workspace access.
+Read-only agent mode exposes only bounded list/read/literal-search tools over
+allowed workspace text; it blocks hidden/common secret paths and credential-like
+lines, runtime data, dependency and
+build output, traversal, symlinks, process/network tools, and writes. The blind
+judge winner must agree with its normalized scores.
+
 ## 10. Success measures
 
 Product measures should be calculated locally and must not introduce remote
@@ -293,6 +332,16 @@ JSONL is appropriate for the current local MVP but has no automatic retention.
 Export/clear and backup behavior exist; retention controls and aggregation are
 planned.
 
+### External candidate and model providers
+
+Skill Lab intentionally crosses the local boundary only after a user action.
+GitHub receives candidate file requests; the configured model endpoint receives
+the Skill definitions, task/criteria or chat messages, the in-memory key, and—
+only in read-only agent mode—requested allowed workspace excerpts. URL,
+HTTPS/loopback, origin, size, count, timeout, hash, and local-path controls limit
+SkillOps behavior, but each provider's data policy remains outside SkillOps
+control.
+
 ## 12. MVP release acceptance
 
 - [x] Local development and production-style start commands work.
@@ -303,6 +352,8 @@ planned.
 - [x] Import, export, clear, and backup workflows exist.
 - [x] Event polling supports ETag/304 responses.
 - [x] Local API and SPA routes pass smoke verification.
+- [x] Skill Lab compares public candidates with live local definitions.
+- [x] Memory-only AI settings, hash-pinned blinded A/B results, bounded read-only agent mode, and contextual chat exist.
 - [ ] Cursor native adapter is implemented.
-- [ ] Evaluation runner and real version promotion exist.
+- [ ] Multi-case evaluation confidence, report export, and real version promotion exist.
 - [ ] Automatic retention and event-store compaction policy exist.

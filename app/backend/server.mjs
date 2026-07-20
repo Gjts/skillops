@@ -3,6 +3,7 @@ import { stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import path from 'node:path'
 import { appendEvent, appendEvents, clearEvents, eventVersion, readEvents, readJsonBody } from './event-store.mjs'
+import { handleEvaluationApi } from './skill-evaluations.mjs'
 import { syncCodexDesktopEvents } from './codex-desktop-ingest.mjs'
 import { enrichRuntimeConnections, readRuntimeConnections } from './runtime-connections.mjs'
 import { scanInstalledSkills } from './skill-scanner.mjs'
@@ -20,6 +21,8 @@ const mime = {
 
 createServer(async (request, response) => {
   const pathname = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`).pathname
+  if (await handleEvaluationApi(request, response, pathname)) return
+
   if (pathname === '/api/connections') {
     response.setHeader('Content-Type', 'application/json')
     if (request.method !== 'GET') {

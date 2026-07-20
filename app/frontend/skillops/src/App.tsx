@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityRail } from './components/ActivityRail'
 import { ConnectModal } from './components/ConnectModal'
 import { RuntimeDistribution, RunsChart } from './components/Charts'
+import { EvaluationWorkspace } from './components/EvaluationWorkspace'
 import { KpiStrip } from './components/KpiStrip'
 import { RegistryPage } from './components/RegistryPage'
 import { RunDetail } from './components/RunDetail'
@@ -201,7 +202,7 @@ export default function App() {
 
   const showEventFilters = page === 'overview' || page === 'skills' || page === 'runs'
   const modeLabel = page === 'registry' ? t('mode.liveInventory')
-    : page === 'evaluations' ? t('mode.sampleEvaluation')
+    : page === 'evaluations' ? t('mode.liveEvaluation')
       : mode === 'loading' ? t('mode.loadingEvents') : mode === 'demo' ? t('mode.demoDataset') : t('mode.localEvents')
 
   return (
@@ -230,7 +231,7 @@ export default function App() {
         )}
         {page === 'skills' && <div className="single-page">{visibleRuns.length ? <SkillTable events={filtered} definitionEvents={events} searchable days={days} demo={mode === 'demo'} onViewRun={openRun} /> : <EmptyActivity runtime={runtime} days={days} onConnect={() => openConnect(runtime === 'all' ? 'codex' : runtime)} onShowAll={runtime === 'all' ? undefined : () => setRuntime('all')} />}</div>}
         {page === 'runs' && <RunsPage events={filtered} allEvents={events} requestedRunId={requestedRunId} onRequestedRunHandled={() => setRequestedRunId(null)} onConnect={() => openConnect(runtime === 'all' ? 'codex' : runtime)} onImport={importEvents} />}
-        {page === 'evaluations' && <EvaluationsPage />}
+        {page === 'evaluations' && <EvaluationWorkspace />}
         {page === 'registry' && <RegistryPage events={events} />}
         {page === 'settings' && <SettingsPage connections={connections} events={events} localData={mode === 'local'} onConnect={openConnect} onRefresh={loadConnections} onClear={clearLocalEvents} />}
       </main>
@@ -336,26 +337,6 @@ function RunsPage({ events, allEvents, requestedRunId, onRequestedRunHandled, on
   )
 }
 
-function EvaluationsPage() {
-  const { formatDuration, formatNumber, t } = useI18n()
-  const percent = (value: number, signed = false) => `${formatNumber(value, { minimumFractionDigits: 1, maximumFractionDigits: 1, signDisplay: signed ? 'always' : 'auto' })}%`
-  const comparisons = [
-    { label: t('evaluation.successRate'), current: percent(89.6), candidate: percent(95.6), delta: t('units.percentagePoints', { value: formatNumber(6, { minimumFractionDigits: 1, maximumFractionDigits: 1, signDisplay: 'always' }) }) },
-    { label: t('evaluation.medianDuration'), current: formatDuration(222_000), candidate: formatDuration(189_000), delta: percent(-14.9, true) },
-    { label: t('evaluation.costPerSuccess'), current: `$${formatNumber(.17, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, candidate: `$${formatNumber(.15, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, delta: percent(-11.8, true) },
-  ]
-  return (
-    <div className="single-page evaluation-page">
-      <div className="page-intro"><div><div className="sample-heading"><h2>{t('evaluation.title')}</h2><span className="data-mode">{t('evaluation.sampleOnly')}</span></div><p>{t('evaluation.description')}</p></div></div>
-      <div className="registry-warning" role="note">{t('evaluation.notice')}</div>
-      <section className="panel comparison-panel">
-        <header className="comparison-header"><span>{t('common.metric')}</span><strong>v2.1.0 · {t('common.current')}</strong><strong>v2.2.0 · {t('common.candidate')}</strong><span>{t('common.change')}</span></header>
-        {comparisons.map((item) => <div className="comparison-row" key={item.label}><span>{item.label}</span><strong>{item.current}</strong><strong className="success-text">{item.candidate}</strong><span className="delta-positive">{item.delta}</span></div>)}
-      </section>
-      <section className="evaluation-verdict preview"><span><ShieldCheck size={24} /></span><div><strong>{t('evaluation.unavailable')}</strong><p>{t('evaluation.futureRunner')}</p></div></section>
-    </div>
-  )
-}
 
 function RuntimeLifecycle({ events, runtime }: { events: SkillEvent[]; runtime: Extract<Runtime, 'codex' | 'claude-code'> }) {
   const { formatNumber, t } = useI18n()

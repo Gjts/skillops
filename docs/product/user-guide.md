@@ -93,10 +93,60 @@ both Codex and Claude Code remains two runtime-specific rows.
 Shows `skill.completed` and `skill.failed` events. Select a run for correlated
 session/turn detail. Search matches Skill name, event ID, and project.
 
-### Evaluation preview
+### Skill Lab
 
-This page is illustrative. Its numbers are sample data and no control installs,
-promotes, or modifies a Skill.
+Use Skill Lab to compare a public GitHub Skill with enabled definitions already
+on this machine:
+
+1. Paste a public GitHub repository, tree, blob, or raw `SKILL.md` URL.
+2. Select the candidate when the repository contains multiple Skills.
+3. Review deterministic similarity scores and choose the intended local baseline.
+4. Describe one representative task and concrete acceptance criteria.
+5. Choose prompt-only or read-only workspace agent execution.
+6. Configure an AI provider and run the A/B test.
+
+The baseline and candidate receive identical task input and run sequentially,
+followed by the blinded judge. This supports provider accounts that allow only
+one in-flight request.
+Prompt-only mode gives each definition one model call and no workspace access.
+Read-only agent mode lets each side request bounded file listing, literal search,
+and text-file reads; `.env`, credential/key files, `data/`, build output,
+dependency caches, traversal, symlinks, writes, processes, and extra network
+tools are blocked, and credential-like lines are redacted. Requested allowed
+excerpts are sent to the selected provider, so review workspace source for
+embedded sensitive data before selecting this mode. A final call receives the two outputs as anonymous Answer A/Answer B
+values and returns consistent scores and rationale. This is evidence for one
+task and one set of criteria, not a universal quality claim. The page never
+installs, promotes, deploys, or edits either definition.
+
+The assistant chat receives bounded inventory metadata plus the current task,
+criteria, candidate/match descriptions, comparison signals, and in-memory
+evaluation result/output when available. It does not receive local Skill paths
+or local Skill file contents. Open it from **Ask SkillOps**, or use the contextual
+actions beside baseline selection, A/B task setup, and the evaluation result.
+The desktop chat opens in a right-side drawer instead of reducing the evaluation
+workspace width; narrow screens use a bottom sheet. Closing the chat preserves
+the in-memory conversation for the current page session.
+
+### AI settings
+
+AI settings support OpenAI, Gemini, Anthropic, Azure OpenAI, Ollama,
+OpenRouter, MiniMax, GLM, and DeepSeek. Keys and settings exist only in React
+page memory, are sent through the loopback SkillOps server only for a requested
+call, and are removed by a reload or page close. They are not written to browser
+storage. Credentialed provider endpoints require HTTPS; keyless Ollama HTTP is
+accepted only on a loopback address. A custom Base URL receives the configured
+key, so use only an endpoint you trust. OpenAI-compatible transports expose
+`none`, `low`, `medium`, `high`, `xhigh`, and `max` reasoning efforts when the
+selected model supports them. GPT-5.6 defaults to Medium when the field is left
+at provider default; its Chat Completions tool calls require **None**, so Skill
+Lab blocks read-only agent runs until that value is selected.
+
+Evaluation tasks, acceptance criteria, generated outputs, judge rationales, and
+chat messages remain in browser memory and are not appended to the event store.
+They are sent to the selected model provider, whose data policy applies.
+Read-only agent mode additionally sends only workspace excerpts requested
+through its bounded tool interface.
 
 ### Registry
 
@@ -166,6 +216,9 @@ npm run dev
 SkillOps does not automatically upload the store. Backups created by clear are
 kept beside the active event file and must be removed manually if no longer
 needed.
+
+Skill Lab session state is separate from `data/events.jsonl`: AI credentials,
+tasks, chat messages, and generated output are not written there.
 
 ## 8. Disconnect a runtime
 

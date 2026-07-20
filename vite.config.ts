@@ -5,6 +5,8 @@ import { themeBootstrapConfig } from './app/frontend/skillops/src/lib/themeCatal
 // @ts-expect-error Plain JavaScript module is shared with the production server.
 import { appendEvent, appendEvents, clearEvents, eventVersion, readEvents, readJsonBody } from './app/backend/event-store.mjs'
 // @ts-expect-error Plain JavaScript module is shared with the production server.
+import { handleEvaluationApi } from './app/backend/skill-evaluations.mjs'
+// @ts-expect-error Plain JavaScript module is shared with the production server.
 import { syncCodexDesktopEvents } from './app/backend/codex-desktop-ingest.mjs'
 // @ts-expect-error Plain JavaScript module is shared with the production server.
 import { enrichRuntimeConnections, readRuntimeConnections } from './app/backend/runtime-connections.mjs'
@@ -20,12 +22,24 @@ function themeBootstrap(): Plugin {
   }
 }
 
+function stripNodeShebangs(): Plugin {
+  return {
+    name: 'skillops-strip-node-shebangs',
+    enforce: 'pre',
+    transform(source, id) {
+      if (!id.endsWith('.mjs') || !source.startsWith('#!')) return
+      return source.replace(/^#![^\r\n]*(?:\r?\n|$)/, '')
+    },
+  }
+}
+
 function localEventApi(): Plugin {
   return {
     name: 'skillops-local-event-api',
     configureServer(server) {
       server.middlewares.use(async (request, response, next) => {
         const pathname = new URL(request.url || '/', 'http://localhost').pathname
+        if (await handleEvaluationApi(request, response, pathname)) return
         if (pathname === '/api/connections') {
           response.setHeader('Content-Type', 'application/json')
           if (request.method !== 'GET') {
@@ -116,7 +130,7 @@ function localEventApi(): Plugin {
 
 export default defineConfig({
   root: path.resolve('app/frontend/skillops'),
-  plugins: [themeBootstrap(), react(), localEventApi()],
+  plugins: [stripNodeShebangs(), themeBootstrap(), react(), localEventApi()],
   server: { port: 5173 },
   build: {
     outDir: path.resolve('dist'),

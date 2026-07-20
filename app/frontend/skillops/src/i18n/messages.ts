@@ -112,7 +112,7 @@ export const messages = {
   'nav.overview': { zh: '概览', en: 'Overview', fr: 'Vue d’ensemble', ru: 'Обзор', es: 'Resumen', ja: '概要' },
   'nav.skills': { zh: 'Skills', en: 'Skills', fr: 'Skills', ru: 'Skills', es: 'Skills', ja: 'Skills' },
   'nav.runs': { zh: '运行记录', en: 'Runs', fr: 'Exécutions', ru: 'Запуски', es: 'Ejecuciones', ja: '実行履歴' },
-  'nav.evaluations': { zh: '评估预览', en: 'Evaluation preview', fr: 'Aperçu des évaluations', ru: 'Предпросмотр оценок', es: 'Vista previa de evaluaciones', ja: '評価プレビュー' },
+  'nav.evaluations': { zh: 'Skill Lab', en: 'Skill Lab', fr: 'Skill Lab', ru: 'Skill Lab', es: 'Skill Lab', ja: 'Skill Lab' },
   'nav.registry': { zh: '注册表', en: 'Registry', fr: 'Registre', ru: 'Реестр', es: 'Registro', ja: 'レジストリ' },
   'nav.settings': { zh: '设置', en: 'Settings', fr: 'Paramètres', ru: 'Настройки', es: 'Ajustes', ja: '設定' },
   'nav.toggle': { zh: '切换导航', en: 'Toggle navigation', fr: 'Afficher ou masquer la navigation', ru: 'Переключить навигацию', es: 'Alternar navegación', ja: 'ナビゲーションを切り替え' },
@@ -124,7 +124,7 @@ export const messages = {
   'nav.noAccount': { zh: '无需账户', en: 'No account required', fr: 'Aucun compte requis', ru: 'Учётная запись не требуется', es: 'No se requiere cuenta', ja: 'アカウント不要' },
 
   'mode.liveInventory': { zh: '实时清单', en: 'Live inventory', fr: 'Inventaire en direct', ru: 'Живой инвентарь', es: 'Inventario en vivo', ja: 'ライブインベントリ' },
-  'mode.sampleEvaluation': { zh: '示例评估', en: 'Sample evaluation', fr: 'Évaluation d’exemple', ru: 'Пример оценки', es: 'Evaluación de ejemplo', ja: 'サンプル評価' },
+  'mode.liveEvaluation': { zh: '实时评估', en: 'Live evaluation', fr: 'Évaluation en direct', ru: 'Живая оценка', es: 'Evaluación en vivo', ja: 'ライブ評価' },
   'mode.loadingEvents': { zh: '正在加载本地事件…', en: 'Loading local events…', fr: 'Chargement des événements locaux…', ru: 'Загрузка локальных событий…', es: 'Cargando eventos locales…', ja: 'ローカルイベントを読み込み中…' },
   'mode.demoDataset': { zh: '演示数据集', en: 'Demo dataset', fr: 'Jeu de données de démonstration', ru: 'Демонстрационные данные', es: 'Conjunto de datos de demostración', ja: 'デモデータセット' },
   'mode.localEvents': { zh: '本地事件', en: 'Local events', fr: 'Événements locaux', ru: 'Локальные события', es: 'Eventos locales', ja: 'ローカルイベント' },
@@ -172,15 +172,6 @@ export const messages = {
   'runs.toolCalls': { zh: '工具调用', en: 'Tool calls', fr: 'Appels d’outils', ru: 'Вызовы инструментов', es: 'Llamadas a herramientas', ja: 'ツール呼び出し' },
   'runs.subagents': { zh: '子代理', en: 'Subagents', fr: 'Sous-agents', ru: 'Субагенты', es: 'Subagentes', ja: 'サブエージェント' },
 
-  'evaluation.title': { zh: '评估预览', en: 'Evaluation preview', fr: 'Aperçu de l’évaluation', ru: 'Предпросмотр оценки', es: 'Vista previa de la evaluación', ja: '評価プレビュー' },
-  'evaluation.sampleOnly': { zh: '仅为示例', en: 'Sample only', fr: 'Exemple uniquement', ru: 'Только пример', es: 'Solo muestra', ja: 'サンプルのみ' },
-  'evaluation.description': { zh: '这是比较流程的只读示例。尚未连接评估运行器或晋级流水线。', en: 'A read-only example of the comparison workflow. No evaluation runner or promotion pipeline is connected.', fr: 'Exemple en lecture seule du flux de comparaison. Aucun moteur d’évaluation ni pipeline de promotion n’est connecté.', ru: 'Пример процесса сравнения только для чтения. Средство оценки и конвейер продвижения не подключены.', es: 'Ejemplo de solo lectura del flujo de comparación. No hay un evaluador ni una canalización de promoción conectados.', ja: '比較ワークフローの読み取り専用サンプルです。評価ランナーや昇格パイプラインは接続されていません。' },
-  'evaluation.notice': { zh: '预览数据仅用于说明，绝不会更改已安装的 Skill 或运行时配置。', en: 'Preview data is illustrative and never changes an installed Skill or runtime configuration.', fr: 'Les données d’aperçu sont illustratives et ne modifient jamais un Skill installé ni la configuration d’exécution.', ru: 'Данные предпросмотра приведены для примера и не меняют установленные Skill или конфигурацию среды.', es: 'Los datos de vista previa son ilustrativos y nunca cambian un Skill instalado ni la configuración del entorno.', ja: 'プレビューデータは説明用で、インストール済み Skill やランタイム設定を変更しません。' },
-  'evaluation.successRate': { zh: '成功率', en: 'Success rate', fr: 'Taux de réussite', ru: 'Доля успеха', es: 'Tasa de éxito', ja: '成功率' },
-  'evaluation.medianDuration': { zh: '中位耗时', en: 'Median duration', fr: 'Durée médiane', ru: 'Медианная длительность', es: 'Duración mediana', ja: '所要時間中央値' },
-  'evaluation.costPerSuccess': { zh: '每次成功成本', en: 'Cost per success', fr: 'Coût par réussite', ru: 'Стоимость успешного запуска', es: 'Coste por éxito', ja: '成功あたりのコスト' },
-  'evaluation.unavailable': { zh: '决策控件目前有意不可用', en: 'Decision controls are intentionally unavailable', fr: 'Les contrôles de décision sont volontairement indisponibles', ru: 'Элементы принятия решений намеренно недоступны', es: 'Los controles de decisión no están disponibles intencionadamente', ja: '意思決定コントロールは意図的に無効です' },
-  'evaluation.futureRunner': { zh: '启用比较、发布决策或晋级操作前，请先连接未来的评估运行器。', en: 'Connect a future evaluation runner before enabling comparisons, rollout decisions, or promotion actions.', fr: 'Connectez un futur moteur d’évaluation avant d’activer les comparaisons, décisions de déploiement ou promotions.', ru: 'Подключите будущий модуль оценки, прежде чем включать сравнения, решения о развёртывании или продвижение.', es: 'Conecta un futuro evaluador antes de habilitar comparaciones, decisiones de despliegue o acciones de promoción.', ja: '比較、ロールアウト判断、昇格操作を有効にする前に、将来の評価ランナーを接続してください。' },
 
   'activity.title': { zh: '最近活动', en: 'Recent activity', fr: 'Activité récente', ru: 'Недавняя активность', es: 'Actividad reciente', ja: '最近のアクティビティ' },
   'activity.latest': { zh: '来自所有运行时的最新终止态 Skill 事件', en: 'Latest terminal Skill events from every runtime', fr: 'Derniers événements Skill terminaux de chaque environnement', ru: 'Последние конечные события Skill из всех сред', es: 'Últimos eventos terminales de Skill de cada entorno', ja: 'すべてのランタイムからの最新終端 Skill イベント' },
