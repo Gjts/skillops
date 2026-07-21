@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "example-skill-quality",
+  "name": "Example Skill quality suite",
+  "version": "1.0.0",
+  "owner": "skillops-maintainers",
+  "sensitivity": "synthetic",
+  "artifactKind": "skill",
+  "repeats": 1,
+  "dataset": "example-skill-cases.json"
+}

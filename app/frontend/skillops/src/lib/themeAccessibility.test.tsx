@@ -135,4 +135,10 @@ describe('theme accessibility', () => {
   it('resets every themed sidebar width before positioning the chooser on narrow screens', () => {
     expect(styles).toMatch(/@media \(max-width: 920px\)\s*{\s*:root,\s*:root\[data-theme\]\s*{\s*--sidebar-width:\s*0px;/)
   })
+
+  it('keeps keyboard focus visible, managed views responsive, and reduced motion bounded', () => {
+    expect(styles).toMatch(/button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, tr:focus-visible\s*{[^}]*outline:\s*2px solid var\(--accent\)/)
+    expect(styles).toMatch(/@media \(max-width: 900px\)\s*{[^}]*\.managed-suite-grid\s*{\s*grid-template-columns:\s*1fr;/s)
+    expect(styles).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*{\s*\*, \*::before, \*::after\s*{[^}]*animation-duration:\s*\.01ms !important;/s)
+  })
 })

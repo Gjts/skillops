@@ -58,6 +58,19 @@ describe('SkillOps primary flow', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'Skills' })).toBeTruthy()
   })
 
+  it('loads Governance directly and exposes it in primary navigation', async () => {
+    window.history.replaceState({}, '', '/governance')
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => input === '/api/capabilities' ? { items: [] } : [],
+    })))
+    render(<App />)
+    expect(screen.getByRole('heading', { level: 1, name: 'Governance' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { level: 2, name: 'Capability governance' })).toBeTruthy()
+  })
+
   it('polls the event API so newly recorded runs appear without reloading', async () => {
     vi.useFakeTimers()
     let events: object[] = []

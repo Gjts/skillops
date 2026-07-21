@@ -5,7 +5,7 @@ import { themeBootstrapConfig } from './app/frontend/skillops/src/lib/themeCatal
 // @ts-expect-error Plain JavaScript module is shared with the production server.
 import { appendEvent, appendEvents, clearEvents, eventVersion, readEvents, readJsonBody } from './app/backend/event-store.mjs'
 // @ts-expect-error Plain JavaScript module is shared with the production server.
-import { handleEvaluationApi } from './app/backend/skill-evaluations.mjs'
+import { handleEvaluationApi, initializeManagedEvaluationServices } from './app/backend/skill-evaluations.mjs'
 // @ts-expect-error Plain JavaScript module is shared with the production server.
 import { syncCodexDesktopEvents } from './app/backend/codex-desktop-ingest.mjs'
 // @ts-expect-error Plain JavaScript module is shared with the production server.
@@ -37,6 +37,8 @@ function localEventApi(): Plugin {
   return {
     name: 'skillops-local-event-api',
     configureServer(server) {
+      const managedServices = initializeManagedEvaluationServices()
+      server.httpServer?.once('close', () => { void managedServices.then((services: { manager: { shutdown(): Promise<void> } }) => services.manager.shutdown()) })
       server.middlewares.use(async (request, response, next) => {
         const pathname = new URL(request.url || '/', 'http://localhost').pathname
         if (await handleEvaluationApi(request, response, pathname)) return

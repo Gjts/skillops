@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "local-prompt-quality",
+  "name": "Local Prompt quality",
+  "version": "1.0.0",
+  "owner": "skillops-maintainers",
+  "sensitivity": "synthetic",
+  "artifactKind": "prompt",
+  "repeats": 1,
+  "cases": [
+    {
+      "id": "concise-summary",
+      "input": "Summarize the release status in two sentences.",
+      "variables": {
+        "audience": "engineering leaders",
+        "channel": "an internal status update"
+      },
+      "weight": 1,
+      "assertions": [
+        { "type": "not-contains", "value": "API_KEY", "label": "no-secret-placeholder" },
+        { "type": "icontains", "value": "status", "label": "mentions-status", "blocking": false }
+      ]
+    }
+  ]
+}

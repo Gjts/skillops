@@ -3,21 +3,14 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { appendEvent, appendUniqueDiscoveries } from '../app/backend/event-store.mjs'
 import { scanInstalledSkills } from '../app/backend/skill-scanner.mjs'
+import { flags } from './cli-flags.mjs'
+
+export { flags } from './cli-flags.mjs'
 
 const eventNames = new Set(['skill.discovered', 'skill.matched', 'skill.started', 'skill.completed', 'skill.failed', 'skill.skipped'])
 const runtimes = new Set(['codex', 'claude-code', 'cursor'])
 
 const cliPath = fileURLToPath(import.meta.url)
-
-export function flags(values) {
-  const result = {}
-  for (let index = 0; index < values.length; index += 1) {
-    if (!values[index].startsWith('--')) continue
-    const next = values[index + 1]
-    result[values[index].slice(2)] = next === undefined || next.startsWith('--') ? true : values[++index]
-  }
-  return result
-}
 
 async function scan() {
   const installed = await scanInstalledSkills()
@@ -52,11 +45,26 @@ export async function main(values = process.argv.slice(2)) {
   try {
     if (command === 'scan') await scan()
     else if (command === 'emit') await emit(args)
+    else if (command === 'eval:list') {
+      const { evaluationList } = await import('./evaluation-cli.mjs')
+      console.log(JSON.stringify(await evaluationList(), null, 2))
+    } else if (command === 'eval:run') {
+      const { evaluationRun } = await import('./evaluation-cli.mjs')
+      console.log(JSON.stringify(await evaluationRun(args), null, 2))
+    } else if (command === 'eval:verify') {
+      const { evaluationVerify } = await import('./evaluation-cli.mjs')
+      const result = await evaluationVerify(args)
+      console.log(JSON.stringify(result, null, 2))
+      if (!result.ok) process.exitCode = 1
+    }
     else {
       console.log(`SkillOps local event bridge
 
 Usage:
   npm run scan
+  npm run eval:list
+  npm run eval:run -- --suite deterministic-smoke --baseline baseline --candidate candidate --deterministic
+  npm run eval:verify -- --run <run-id>
   npm run emit -- skill.started --skill frontend-builder --runtime codex --version 2.1.0
   npm run emit -- skill.completed --skill frontend-builder --runtime codex --version 2.1.0 --duration 82000 --cost 0.12 --outcome success`)
     }

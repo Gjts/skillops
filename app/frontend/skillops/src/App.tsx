@@ -19,6 +19,7 @@ import { ActivityRail } from './components/ActivityRail'
 import { ConnectModal } from './components/ConnectModal'
 import { RuntimeDistribution, RunsChart } from './components/Charts'
 import { EvaluationWorkspace } from './components/EvaluationWorkspace'
+import { GovernancePage } from './components/GovernancePage'
 import { KpiStrip } from './components/KpiStrip'
 import { RegistryPage } from './components/RegistryPage'
 import { RunDetail } from './components/RunDetail'
@@ -39,6 +40,7 @@ const pathForPage: Record<PageId, string> = {
   runs: '/runs',
   evaluations: '/evaluations',
   registry: '/registry',
+  governance: '/governance',
   settings: '/settings',
 }
 const pageForPath = new Map<string, PageId>([
@@ -63,6 +65,7 @@ const pageTitle: Record<PageId, MessageKey> = {
   runs: 'nav.runs',
   evaluations: 'nav.evaluations',
   registry: 'nav.registry',
+  governance: 'nav.governance',
   settings: 'nav.settings',
 }
 
@@ -203,6 +206,7 @@ export default function App() {
   const showEventFilters = page === 'overview' || page === 'skills' || page === 'runs'
   const modeLabel = page === 'registry' ? t('mode.liveInventory')
     : page === 'evaluations' ? t('mode.liveEvaluation')
+      : page === 'governance' ? t('mode.liveGovernance')
       : mode === 'loading' ? t('mode.loadingEvents') : mode === 'demo' ? t('mode.demoDataset') : t('mode.localEvents')
 
   return (
@@ -233,6 +237,7 @@ export default function App() {
         {page === 'runs' && <RunsPage events={filtered} allEvents={events} requestedRunId={requestedRunId} onRequestedRunHandled={() => setRequestedRunId(null)} onConnect={() => openConnect(runtime === 'all' ? 'codex' : runtime)} onImport={importEvents} />}
         {page === 'evaluations' && <EvaluationWorkspace />}
         {page === 'registry' && <RegistryPage events={events} />}
+        {page === 'governance' && <GovernancePage />}
         {page === 'settings' && <SettingsPage connections={connections} events={events} localData={mode === 'local'} onConnect={openConnect} onRefresh={loadConnections} onClear={clearLocalEvents} />}
       </main>
       {connectOpen && <ConnectModal initialRuntime={connectRuntime} connections={connections} onRefresh={loadConnections} onClose={() => setConnectOpen(false)} />}

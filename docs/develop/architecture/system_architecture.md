@@ -21,6 +21,7 @@ flowchart LR
     FS[Skill folders and plugin registries] --> SCAN[Skill scanner]
     FS --> AGENT[Bounded read-only evaluation tools]
     GH[Public GitHub SKILL.md] --> EVAL[Candidate comparison]
+    GP[Committed local Prompt files] --> EVAL
     EVAL --> LLM[Selected LLM provider]
     AGENT --> EVAL
 
@@ -44,8 +45,8 @@ provider. Neither flow writes prompts, model output, or credentials to disk.
 | Module | Interface | Implementation responsibility |
 | --- | --- | --- |
 | `app/frontend/skillops` | Local HTTP responses, shared event types, provider catalog | Routing, rendering, filtering, analytics, import/export, Skill Lab and memory-only AI settings |
-| `app/backend` | Event, scan, connection, evaluation, and static-file behavior | JSONL persistence, scanning, desktop ingestion, config inspection, candidate comparison, bounded read-only agent tools, and provider calls |
-| `app/shared` | `normalizeEvent(s)` invariants and AI provider catalog | Event allowlist/types/enums/outcome normalization plus provider identity/default metadata shared by frontend and backend |
+| `app/backend` | Event, scan, connection, evaluation, and static-file behavior | JSONL persistence, scanning, desktop ingestion, config inspection, candidate comparison, bounded read-only agent tools, provider calls, and evaluation adapters |
+| `app/shared` | Event and Evaluation Schema invariants plus AI provider catalog | Event allowlist/types/enums/outcome normalization, narrow evaluation request/Artifact contracts, and provider identity/default metadata shared by frontend and backend |
 | `adapters/codex` | Codex hook payload to normalized events | Install merge, signal detection, non-blocking hook execution |
 | `adapters/claude` | Claude hook payload to normalized events | Config resolution, install merge, exact/heuristic detection |
 | `bin` | Root npm CLI commands | Scan plus manual lifecycle emission |
@@ -145,6 +146,17 @@ User submits public GitHub URL
 The frontend never requests arbitrary local files. The backend accepts a
 baseline only when the exact path is present in the current live scan.
 
+`app/backend/skill-evaluations.mjs` is the compatibility facade at the existing
+interface. Its implementation delegates to deep modules under
+`app/backend/evaluations/`: request guard, candidate-source adapter, Artifact
+definition/renderer, provider client, and session evaluator. GitHub is the
+Skill Candidate adapter; `app/backend/prompts/` is the Git-backed Prompt
+Artifact adapter rather than pretending Prompt content is a `SKILL.md`.
+
+Artifact content hashes use UTF-8 bytes after BOM removal and CRLF/CR to LF
+normalization. Metadata may cross the local HTTP seam, while the content body
+stays inside a controlled backend renderer.
+
 ## 6. Local HTTP interface
 
 | Method | Path | Purpose |
@@ -157,6 +169,14 @@ baseline only when the exact path is present in the current live scan.
 | `GET` | `/api/connections` | Return runtime config status and activity |
 | `POST` | `/api/evaluations/compare` | Discover a public GitHub candidate and rank local overlaps |
 | `POST` | `/api/evaluations/run` | Run a hash-pinned, memory-only baseline/candidate A/B evaluation |
+| `GET` | `/api/evaluation-suites` | List validated Suite Schema v1 metadata |
+| `POST` | `/api/evaluation-runs` | Queue a hash-pinned Managed Suite run |
+| `GET` | `/api/evaluation-runs/:id` | Read sanitized run evidence and cases |
+| `POST` | `/api/evaluation-runs/:id/cancel` | Request cooperative cancellation |
+| `GET/POST` | `/api/capabilities/*` | Registry, evidence, gate, approval, promotion, and rollback operations |
+| `GET` | `/api/project-skeleton-lock` | Read the current immutable promotion/rollback lock |
+| `GET` | `/api/prompt-registry/status` | Return local Git workspace, branch, commit, and persistence metadata |
+| `POST` | `/api/prompt-registry/{prompts,compare,nominate}` | Metadata-only committed Prompt browsing, component Diff, and explicit Candidate nomination |
 | `POST` | `/api/assistant/chat` | Ask the configured provider using inventory/evaluation metadata |
 
 The Vite development middleware and production Node server implement the same
@@ -186,6 +206,10 @@ interfaces without independent deployment needs.
 | Filter, page, modal state | Frontend | In-memory; page identity also in URL |
 | AI provider settings and API key | Frontend | React page memory only; cleared by reload/page close |
 | Evaluation task, outputs, and chat | Frontend | In-memory only |
+| Managed run/case summaries and identity hashes | Backend evidence store | `data/evidence/`; sanitized JSONL and indexes |
+| Capability, approval, promotion, and rollback metadata | Backend governance store | `data/governance/`; metadata and hashes only |
+| Stable installation locks and backups | Backend skeleton installer | Local target lock plus recoverable backup |
+| Prompt bodies | User Git repository/backend resolver | User-controlled source plus transient evaluation memory; never copied into SkillOps data |
 | Demo dataset | Frontend | In-memory only when local event API is unavailable |
 | Production frontend | Build | `dist/`, ignored by Git |
 
@@ -202,6 +226,15 @@ interfaces without independent deployment needs.
 - **Candidate network seam**: only public `github.com` and
   `raw.githubusercontent.com` HTTPS locations are accepted; downloaded Skill
   files and repository-tree responses are size/count bounded.
+- **Prompt Registry seam**: only committed files under the configured
+  repository-relative Prompt directory are eligible; revision and path syntax,
+  file count/size, Schema fields, variables, and model configuration are
+  bounded. The UI receives only metadata and component hashes, and immutable
+  identity is verified again before execution and promotion.
+- **Evaluation engine seam**: a restricted declarative Suite is compiled in
+  memory for an isolated Promptfoo Worker. Executable config, output paths,
+  caller environment, cache, telemetry, sharing, and remote generation are
+  prohibited.
 - **Provider network seam**: a user-selected HTTPS endpoint receives the
   in-memory key and requested prompt; keyless Ollama HTTP is loopback-only.
   Credentials and responses are never persisted by SkillOps.

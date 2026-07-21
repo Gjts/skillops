@@ -181,6 +181,12 @@ describe('EvaluationWorkspace', () => {
 
     resolveRun(runResponse)
     expect(await screen.findByText('Candidate wins')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: /OpenAI · gpt-5\.6-sol/ }))
+    const settingsDialog = screen.getByRole('dialog', { name: 'AI settings' })
+    fireEvent.change(within(settingsDialog).getByRole('textbox', { name: 'Model' }), { target: { value: 'gpt-5.6-terra' } })
+    fireEvent.click(within(settingsDialog).getByRole('button', { name: 'Save settings' }))
+    expect(screen.queryByText('Candidate wins')).toBeNull()
   })
 
   it('opens chat on demand and restores focus when Escape closes the drawer', () => {

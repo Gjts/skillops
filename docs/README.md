@@ -21,6 +21,8 @@ local-first runtime observability product.
 | Frontend contributor | [Frontend architecture](develop/architecture/frontend_architecture.md) |
 | Event producer or importer | [Event model](develop/data/event_model.md) |
 | Codex or Claude Code operator | [Runtime adapters](develop/integrations/runtime_adapters.md) |
+| Promptfoo evaluation contributor | [Promptfoo integration contract](develop/integrations/promptfoo.md) |
+| Local Prompt contributor | [Prompt Registry contract](develop/integrations/prompt-registry.md) |
 | Local operator | [Getting started](develop/operations/getting_started.md) |
 | Tester | [Testing and QA](develop/operations/testing.md) |
 | Someone diagnosing a failure | [Troubleshooting](develop/operations/troubleshooting.md) |
@@ -44,7 +46,9 @@ docs/
    ├─ data/
    │  └─ event_model.md
    ├─ integrations/
-   │  └─ runtime_adapters.md
+   │  ├─ runtime_adapters.md
+   │  ├─ promptfoo.md
+   │  └─ prompt-registry.md
    ├─ operations/
    │  ├─ getting_started.md
    │  ├─ testing.md

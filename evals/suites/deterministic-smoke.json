@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "deterministic-smoke",
+  "name": "Deterministic Promptfoo smoke",
+  "version": "1.0.0",
+  "owner": "skillops-maintainers",
+  "sensitivity": "synthetic",
+  "artifactKind": "skill",
+  "repeats": 1,
+  "cases": [
+    {
+      "id": "evidence-boundary",
+      "input": "Explain why a lifecycle completion does not by itself prove success.",
+      "weight": 1,
+      "assertions": [
+        { "type": "icontains", "value": "evidence", "label": "requires-evidence", "blocking": false },
+        { "type": "not-contains", "value": "API_KEY", "label": "does-not-leak-placeholder" }
+      ]
+    }
+  ]
+}

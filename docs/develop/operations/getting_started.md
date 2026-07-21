@@ -4,7 +4,7 @@
 
 ## 1. Prerequisites
 
-- Node.js 20 or newer.
+- Node.js 22.22 or newer (required by the pinned Promptfoo runtime).
 - npm with access to the dependencies in `package-lock.json`.
 - Windows, macOS, or Linux filesystem access to the runtime's user config.
 - Codex and/or Claude Code only if you want real runtime collection.
@@ -166,7 +166,29 @@ npm run claude:uninstall
 
 Restart the affected runtime and refresh Settings.
 
-## 12. Command reference
+## 12. Managed evaluation
+
+Suites and datasets under `evals/` are reviewed repository source. List and run
+them without opening the UI:
+
+```powershell
+npm run eval:list
+npm run eval:run -- --suite deterministic-smoke --baseline baseline-fixture --candidate candidate-fixture --deterministic
+npm run eval:verify -- --run <run-id>
+```
+
+`eval:run` emits a deterministic summary and can emit JUnit for CI. Provider
+credentials are accepted for that process only and are not written into the
+evidence store. The production UI provides the same Suite/History workflow and
+Governance route.
+
+The Local Prompt Registry reads committed `prompts/*.prompt.json` files from the
+current Git repository. Set `SKILLOPS_PROMPT_WORKSPACE` before `npm run dev` or
+`npm start` to use another local repository; optionally set the repository-
+relative `SKILLOPS_PROMPT_DIRECTORY`. It needs no hosted account or registry API
+key. See the [Prompt Registry contract](../integrations/prompt-registry.md).
+
+## 13. Command reference
 
 | Command | Purpose |
 | --- | --- |
@@ -177,7 +199,11 @@ Restart the affected runtime and refresh Settings.
 | `npm run smoke` | Spawn production server and verify core behavior |
 | `npm run scan` | Scan and record new discoveries |
 | `npm run emit -- ...` | Append one controlled Skill event |
+| `npm run eval:list` | List validated Managed Suites |
+| `npm run eval:run -- --suite <id> ...` | Run a Managed Suite through Promptfoo |
+| `npm run eval:verify -- --run <run-id>` | Verify stored evidence identity and gates |
 | `npm run codex:*` | Preview/install/remove Codex adapter |
+| `npm run claude:*` | Preview/install/remove Claude Code adapter |
 | `npm run claude:*` | Preview/install/remove Claude adapter |
 
 ## 13. Normal shutdown

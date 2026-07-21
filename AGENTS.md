@@ -86,6 +86,9 @@ runtime configuration. If an adapter path changes, reinstall it and verify
   analysis. It must not read user runtime files directly.
 - `app/shared/` is limited to behavior genuinely used on both sides. Do not turn
   it into a miscellaneous utilities directory.
+- `app/backend/skill-evaluations.mjs` is a compatibility facade. Evaluation
+  source, provider, session, request-guard, and Artifact behavior belongs under
+  `app/backend/evaluations/`; callers should not depend on those internals.
 - `adapters/` translate external runtime hook payloads into the normalized event
   interface. They must never block Codex or Claude Code because telemetry failed.
 - `bin/` and `scripts/` call the same backend modules as the application; do not
@@ -100,6 +103,18 @@ or provider configuration. Preserve the event allowlist in
 
 The HTTP server binds to loopback by default. Do not expose the unauthenticated
 event API to a LAN or public interface without an explicit access-control seam.
+
+Quick Compare remains memory-only. Managed Suites are explicit, reviewed
+product files under `evals/`, never telemetry-derived content. Evaluation
+evidence may persist only sanitized summaries and hashes, never provider keys,
+prompt/Skill bodies, task text, workspace excerpts, raw outputs, or raw errors.
+Promptfoo integrations must disable cache, telemetry, update checks, sharing,
+and remote generation and must use an isolated temporary config directory.
+The Local Prompt Registry reads only committed files from a configured Git
+workspace. SkillOps may persist their immutable references, semantic/component
+hashes, and sanitized evidence, but never Prompt bodies. Registry code must not
+edit Prompt files, mutate branches, create commits, or call a hosted Prompt
+management service.
 
 Installer updates must preserve unrelated runtime settings, redact secrets from
 previews, create recoverable backups when changing existing files, and be

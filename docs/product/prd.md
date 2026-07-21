@@ -71,6 +71,21 @@ loopback binding, export, retention, and removal behavior.
 - Empty local data must render as a real zero state.
 - Demo data must be visibly labeled and must never be persisted as local data.
 
+### 4.3 Implemented evaluation and governance goals
+
+- Preserve the existing memory-only Quick Compare as the exploratory path.
+- Let teams explicitly author versioned Managed Suites from synthetic or
+  deliberately sanitized cases; runtime telemetry never creates suite inputs.
+- Persist only sanitized evaluation summaries, gates, Artifact identities, and
+  hashes in a separate evidence store.
+- Use Promptfoo behind a restricted SkillOps Suite schema with cache,
+  telemetry, update checks, sharing, and remote generation disabled.
+- Treat a user-controlled Git repository as the Prompt source of truth. Read
+  exact committed versions for local execution, keep Prompt bodies out of
+  SkillOps persistence, and require no hosted Prompt-management service.
+- Require verified evidence and independent approval before Candidate, Canary,
+  or Stable transitions; a remote `head` never deploys itself.
+
 ## 5. Non-goals for v0.3.1
 
 - Cloud accounts, team workspaces, synchronization, or remote runtime/event ingestion.
@@ -96,6 +111,9 @@ loopback binding, export, retention, and removal behavior.
 | Connection | Inspection result for installed hook configuration plus observed activity. |
 | Candidate | One public GitHub `SKILL.md` selected for comparison; not installed locally. |
 | A/B evaluation | One task run against a local baseline and remote candidate, then blind-judged by the configured model. |
+| Artifact | A metadata identity for a Skill, Prompt, or Workflow; content remains behind a controlled backend renderer. |
+| Managed Suite | A versioned, user-authored set of synthetic or sanitized evaluation cases stored as product source, not telemetry. |
+| Evidence | A sanitized run/gate summary bound to Artifact, suite, dataset, and policy hashes. |
 
 ## 7. Primary user journeys
 
@@ -203,6 +221,12 @@ Implemented as Skill Lab:
 - nine page-memory providers with editable model/Base URL and compatible reasoning effort;
 - no promotion, rollout, installation, definition mutation, or result persistence.
 
+Separate Suites and History tabs retain this Quick Compare path. Managed Suite
+summaries survive reload, but API keys, suite case bodies, prompts, workspace
+excerpts, raw outputs, and provider error bodies are not copied into evidence
+storage. The Governance route binds exact evidence and independent approval to
+Candidate, Ready, Canary, Stable, supersede, and rollback transitions.
+
 ### 8.5 Registry — `/registry`
 
 Implemented:
@@ -287,6 +311,17 @@ allowed workspace text; it blocks hidden/common secret paths and credential-like
 lines, runtime data, dependency and
 build output, traversal, symlinks, process/network tools, and writes. The blind
 judge winner must agree with its normalized scores.
+
+### FR-10 Evaluation engine and connector privacy
+
+All external evaluation JSON crosses the shared Evaluation Schema before
+business logic. Promptfoo receives only an in-memory suite compiled from the
+restricted SkillOps schema; executable providers/assertions, arbitrary config
+paths, output paths, working directories, and request-controlled environment
+are rejected. Promptfoo cache, telemetry, update checks, sharing, and remote
+generation are disabled. Local Prompt files are resolved from a pinned Git
+commit and rechecked against their semantic SHA-256 before execution or
+promotion. Working-tree changes cannot move an already fixed reference.
 
 ## 10. Success measures
 

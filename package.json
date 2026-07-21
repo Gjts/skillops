@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.22.0"
   },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
@@ -14,6 +14,9 @@
     "smoke": "node scripts/smoke.mjs",
     "scan": "node bin/skillops.mjs scan",
     "emit": "node bin/skillops.mjs emit",
+    "eval:list": "node bin/skillops.mjs eval:list",
+    "eval:run": "node bin/skillops.mjs eval:run",
+    "eval:verify": "node bin/skillops.mjs eval:verify",
     "codex:install": "node adapters/codex/install.mjs",
     "codex:uninstall": "node adapters/codex/install.mjs --uninstall",
     "codex:dry-run": "node adapters/codex/install.mjs --dry-run",
@@ -23,16 +26,17 @@
   },
   "dependencies": {
     "lucide-react": "^1.25.0",
+    "promptfoo": "0.121.19",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^6.0.3",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^26.1.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
     "jsdom": "^29.1.1",
     "typescript": "^7.0.2",
     "vite": "^8.1.5",

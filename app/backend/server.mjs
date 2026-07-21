@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import path from 'node:path'
 import { appendEvent, appendEvents, clearEvents, eventVersion, readEvents, readJsonBody } from './event-store.mjs'
-import { handleEvaluationApi } from './skill-evaluations.mjs'
+import { handleEvaluationApi, initializeManagedEvaluationServices } from './skill-evaluations.mjs'
 import { syncCodexDesktopEvents } from './codex-desktop-ingest.mjs'
 import { enrichRuntimeConnections, readRuntimeConnections } from './runtime-connections.mjs'
 import { scanInstalledSkills } from './skill-scanner.mjs'
@@ -19,7 +19,9 @@ const mime = {
   '.svg': 'image/svg+xml',
 }
 
-createServer(async (request, response) => {
+const managedEvaluationServices = await initializeManagedEvaluationServices()
+
+const server = createServer(async (request, response) => {
   const pathname = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`).pathname
   if (await handleEvaluationApi(request, response, pathname)) return
 
@@ -113,3 +115,13 @@ createServer(async (request, response) => {
 }).listen(port, host, () => {
   console.log(`SkillOps is running at http://${host}:${port}`)
 })
+
+let shuttingDown = false
+async function shutdown() {
+  if (shuttingDown) return
+  shuttingDown = true
+  await managedEvaluationServices.manager.shutdown().catch(() => undefined)
+  server.close()
+}
+process.once('SIGINT', shutdown)
+process.once('SIGTERM', shutdown)

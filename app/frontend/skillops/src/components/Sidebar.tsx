@@ -7,6 +7,7 @@ import {
   CircleGauge,
   Languages,
   Menu,
+  ShieldCheck,
   Settings,
   X,
 } from 'lucide-react'
@@ -21,6 +22,7 @@ const navigation: Array<{ id: PageId; label: MessageKey; icon: typeof Activity }
   { id: 'runs', label: 'nav.runs', icon: Activity },
   { id: 'evaluations', label: 'nav.evaluations', icon: ChartNoAxesCombined },
   { id: 'registry', label: 'nav.registry', icon: Boxes },
+  { id: 'governance', label: 'nav.governance', icon: ShieldCheck },
   { id: 'settings', label: 'nav.settings', icon: Settings },
 ]
 

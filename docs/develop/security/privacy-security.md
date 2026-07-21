@@ -61,6 +61,22 @@ storage. When the user selects read-only agent mode, requested allowed
 workspace excerpts also exist in request memory and are transmitted to that
 provider; they are never appended to SkillOps storage.
 
+Quick Compare keeps this memory-only guarantee when its engine changes.
+Managed Suites are explicit, reviewable product files containing only synthetic
+or deliberately sanitized cases; they are never derived from runtime telemetry.
+The evaluation store persists sanitized run/case status, gates, and
+Artifact/suite/dataset/policy hashes, but not provider keys, content bodies,
+task text, workspace excerpts, raw outputs, judge responses, or raw errors.
+
+The Promptfoo adapter sets its privacy environment before importing the
+package, disables cache, telemetry, update checks, sharing, and both normal and
+Red Team remote generation, omits output paths, and uses a run-scoped temporary
+config directory outside the user's home. The Local Prompt Registry reads Prompt
+bodies only from exact commits in the configured user Git repository. The UI,
+evidence store, Capability registry, and channel lock receive metadata and
+hashes, never Prompt bodies. No hosted Prompt registry credential or API is
+used.
+
 The shared event allowlist is a persistence control, not merely a display filter.
 
 ## 5. Data flow and storage
@@ -228,7 +244,9 @@ permissions and disk-encryption policy.
 | DNS rebinding/cross-site page invokes evaluation API | Loopback Host, same-origin browser checks, JSON-only POST | Non-browser local processes under the same OS user remain trusted |
 | Custom endpoint steals API key | HTTPS requirement, no embedded credentials, UI warning, memory-only configuration | User must trust the endpoint they configure |
 | Agent exposes sensitive workspace data | Explicit mode, denied paths/types, credential-line redaction, bounded read-only tools, negative privacy tests | Allowed source can still embed sensitive data and excerpts are intentionally disclosed to the selected provider |
-| Evaluation content persists accidentally | No evaluation store; event allowlist unchanged; privacy tests | Browser/provider retention follows their own policies |
+| Evaluation content persists accidentally | Sanitized evidence allowlist, separate store, recovery tests; event allowlist unchanged | Browser/provider retention follows their own policies |
+| Promptfoo writes cache/history or sends telemetry | Adapter forces disabled flags, isolated temporary config, no output path, and disk sentinel tests | Package upgrades require contract revalidation; the pinned dependency currently inherits four high `npm audit` advisories through `adm-zip` |
+| A branch or working tree silently replaces a Prompt release | Commit-pinned source references plus semantic/component hashes and pre-run/pre-promotion recheck | Deleted or rewritten Git objects can make old content unavailable, but Stable metadata and lock rollback remain local |
 | LLM judge creates false confidence | Blind A/B labels and task-specific wording | One model judgment is evidence for one case, not universal quality |
 
 ## 12. Privacy review for new fields

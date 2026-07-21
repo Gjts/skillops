@@ -101,4 +101,25 @@ export interface SkillMetric {
   latestRunAt: string
 }
 
-export type PageId = 'overview' | 'skills' | 'runs' | 'evaluations' | 'registry' | 'settings'
+export type PageId = 'overview' | 'skills' | 'runs' | 'evaluations' | 'registry' | 'governance' | 'settings'
+
+export type {
+  ArtifactDefinition,
+  ArtifactKind,
+  ArtifactSource,
+  Capability,
+  CapabilityApproval,
+  CapabilityEvidence,
+  CapabilityStage,
+  CandidateAnalysis,
+  CandidateRef,
+  CandidateSummary,
+  EvaluationVariant,
+  EvaluationRunSummary,
+  EvaluationSuiteMetadata,
+  QuickEvaluationMode,
+  QuickEvaluationResult,
+  QuickEvaluationWinner,
+  SkillMatch,
+  SkeletonChangePreview,
+} from '../../../shared/evaluation-schema.mjs'

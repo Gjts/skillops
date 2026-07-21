@@ -23,7 +23,7 @@ collection failure isolated from the host coding runtime.
 
 | Area | Implementation |
 | --- | --- |
-| Runtime | Node.js 20+ ESM |
+| Runtime | Node.js 22.22+ ESM |
 | HTTP | Built-in `node:http` production server |
 | Development HTTP | Vite middleware with the same routes |
 | Persistence | Local JSONL plus small JSON discovery index |
@@ -62,13 +62,24 @@ validation, and activity enrichment.
 Owns incremental parsing of recent Codex Desktop session records and conservative
 Skill path detection from actual file-read commands.
 
-### `skill-evaluations.mjs`
+### `skill-evaluations.mjs` and `evaluations/`
 
-Owns bounded public GitHub `SKILL.md` discovery, local baseline allowlisting,
-deterministic similarity scoring, provider request normalization, blinded A/B
-judging, chat context minimization, and the three evaluation HTTP handlers.
-It validates optional reasoning effort, retries one transient GitHub read, and
-never writes credentials, tasks, prompts, or model responses to disk.
+`skill-evaluations.mjs` is a compatibility facade for the existing exports and
+three HTTP routes. The implementation is split behind that small interface:
+
+- `errors.mjs` owns stable evaluation errors and input primitives;
+- `request-guard.mjs` owns loopback/origin/content-type/body limits;
+- `candidate-source.mjs` owns the GitHub Candidate adapter, discovery, local
+  baseline definitions, and deterministic similarity;
+- `artifact-definition.mjs` owns UTF-8/LF canonicalization, SHA-256 identity,
+  Skill metadata adaptation, and kind-specific renderers;
+- `provider-client.mjs` owns provider normalization and calls;
+- `session-evaluator.mjs` owns sequential variants, blinded judging, and
+  minimized assistant context.
+
+All external JSON reaches the shared Evaluation Schema before these modules.
+The current GitHub interface and response fields remain compatible. Prompt
+Artifacts have a distinct renderer seam and are not represented as `SKILL.md`.
 
 ### `evaluation-agent.mjs`
 
@@ -292,6 +303,25 @@ Activity is calculated from non-discovery events only.
 CC Switch configuration participates in Claude home resolution as documented in
 [runtime adapters](../integrations/runtime_adapters.md).
 
+**Implemented evaluation runtime:** Managed Suites are explicit repository files
+under `evals/`. Promptfoo runs with cache, telemetry, update checks, sharing,
+and remote generation disabled in a run-scoped temporary config directory.
+Only sanitized evidence summaries are stored separately from events. The
+manager provides bounded FIFO concurrency, idempotency, cancellation, and
+interrupted-run recovery. Capability governance uses atomic lock-protected
+metadata registries, exact evidence hashes, independent approvals, and
+recoverable promotion/rollback. The exact package surface, privacy controls,
+Red Team seam, and upgrade gate are documented in the
+[Promptfoo integration contract](../integrations/promptfoo.md).
+
+`app/backend/prompts/` owns the Local Prompt Registry. It reads strict Prompt
+definitions from exact commits in a configured Git workspace, returns
+metadata-only lists, derives semantic and component hashes, resolves bodies only
+for backend evaluation, and creates Candidates only after an explicit request.
+It never edits files, changes branches, creates commits, or calls a hosted Prompt
+service. The full contract is documented in
+[Prompt Registry integration](../integrations/prompt-registry.md).
+
 ## 11. Error and privacy behavior
 
 - HTTP errors return JSON messages for local diagnosis.
@@ -307,6 +337,9 @@ CC Switch configuration participates in Claude home resolution as documented in
   requirement; the UI warns that the chosen endpoint receives the key.
 - Evaluation prompts, generated answers, judge rationales, and chat messages are
   returned in memory and are never appended to the event store or diagnostics.
+- Managed evidence contains statuses, scores, gates, and identity hashes only;
+  provider keys, Artifact bodies, case inputs, raw outputs, and raw errors are
+  excluded by schema and store tests.
 
 ## 12. Backend verification checklist
 

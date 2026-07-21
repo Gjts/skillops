@@ -7,6 +7,17 @@ This ledger mirrors the RoleGarden milestone style but records SkillOps reality.
 A checked item means the current repository contains the behavior; it does not
 mean every future refinement is complete.
 
+Implementation verification snapshot (2026-07-21):
+
+- the feature branch was created from
+  `main@8e7de18ba2f9efbc67ec1a1aabfc2989690d4537`;
+- Node `v24.18.0`, npm `11.5.2`;
+- the pre-change baseline passed 181 tests, build, and production smoke;
+- the current expanded suite passes 268 tests, build, deterministic production
+  Promptfoo smoke, and CLI evidence verification;
+- the Local Prompt Registry passes real temporary-Git branch/version tests and
+  the production governance/rollback smoke without an external account.
+
 ## 1. Priority definitions
 
 - **P0**: privacy, data integrity, evidence truth, or core runtime breakage.
@@ -180,44 +191,74 @@ Status: implemented baseline
 ## 10. Milestone 8: Real evaluation runner
 
 Priority: P2
-Status: in progress; one-off session evaluation is implemented
+Status: implemented; Quick Compare and Managed Suites coexist
 
 - [x] Define bounded one-task session evaluation input/result schema.
 - [x] Add evaluator service distinct from lifecycle hooks and event persistence.
 - [x] Discover public GitHub candidates and compare them with live local definitions.
 - [x] Run current/candidate variants sequentially for constrained providers and blind the judge order.
 - [x] Keep credentials, tasks, answers, and chat out of persistent storage.
-- [ ] Store acceptance-test evidence references without task content leakage.
+- [x] Store acceptance-test evidence references without task content leakage.
 - [x] Compare current/candidate versions using real task-specific scores.
 - [x] Offer explicit prompt-only and bounded read-only workspace agent modes.
 - [x] Pin analyzed candidate content by SHA-256 before execution.
-- [ ] Show sample size and outcome coverage.
-- [ ] Export a read-only comparison report.
+- [x] Show sample size and outcome coverage.
+- [x] Export deterministic summary and JUnit reports through the CLI.
 - [x] Replace the hard-coded sample with the live Skill Lab workspace.
+- [x] Split the evaluation implementation behind the legacy facade.
+- [x] Add the shared Evaluation Schema and reject invalid nested request data.
+- [x] Adapt Skill definitions to the shared Artifact contract.
+- [x] Normalize UTF-8 Artifact line endings before SHA-256 hashing.
+- [x] Route GitHub Candidate discovery through an adapter interface and reserve
+  a distinct Prompt renderer.
+- [x] Document Quick Compare, Managed Suite, Promptfoo, Evidence, and Prompt Registry
+  privacy boundaries.
+- [x] Integrate the pinned Promptfoo Node package behind the restricted Suite schema.
+- [x] Add asynchronous Managed Suite runs and sanitized evidence history.
 
 Acceptance:
 
 - [x] Every displayed score is traceable to the in-session judge response.
 - [x] Unknown lifecycle completions cannot enter Skill Lab scores.
-- [x] No install/promotion action is enabled in this milestone.
+- [x] Quick Compare itself has no install/promotion action; governance is a
+  separate explicit workflow.
+- [x] Existing Quick Compare HTTP/UI fields remain compatible after modularization.
 
 ## 11. Milestone 9: Safe Skill actions
 
 Priority: P2
-Status: planned after Milestone 8
+Status: implemented for governed Skill skeletons and Prompt reference locks
 
-- [ ] Preview exact source, target, version, and conflicts.
-- [ ] Create backup and rollback plan.
-- [ ] Require explicit confirmation.
-- [ ] Apply one exact local change.
-- [ ] Rescan and verify runtime configuration afterward.
-- [ ] Surface rollback result.
+- [x] Preview exact source, target, version, and conflicts.
+- [x] Create backup and rollback plan.
+- [x] Require explicit confirmation, including a second stable action.
+- [x] Apply one exact local change or reference-only Prompt lock.
+- [x] Rescan and verify the installed Skill skeleton afterward.
+- [x] Surface rollback result.
 
 Acceptance:
 
-- [ ] Unrelated definitions/configuration are unchanged.
-- [ ] Failed action is recoverable.
-- [ ] Comparison UI cannot mutate without explicit action workflow.
+- [x] Unrelated definitions/configuration are unchanged.
+- [x] Failed action is recoverable.
+- [x] Comparison UI cannot mutate without explicit action workflow.
+
+### Local Prompt Registry source
+
+Status: implemented without a hosted Prompt-management dependency
+
+- [x] Read strict `prompts/*.prompt.json` definitions from user-controlled Git.
+- [x] Keep Prompt bodies in Git/backend memory and out of list, evidence, and
+  governance persistence.
+- [x] Pin exact commits, repository paths, semantic SHA-256, and component hashes.
+- [x] Ignore uncommitted working-tree drift and recheck immutable references
+  before evaluation or promotion.
+- [x] Browse local branches, filter metadata, and compare component hashes.
+- [x] Run Prompt Candidates through Promptfoo, Gate, Approval, Canary, Stable,
+  local reference lock, supersede, and rollback.
+- [x] Require explicit Candidate nomination and never mutate Git branches,
+  commits, Prompt files, or Stable automatically.
+- [x] Verify real temporary-Git contracts, metadata privacy, production HTTP
+  behavior, and rollback while the source repository is unavailable.
 
 ## 12. Milestone 10: Cursor adapter
 

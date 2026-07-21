@@ -220,6 +220,36 @@ needed.
 Skill Lab session state is separate from `data/events.jsonl`: AI credentials,
 tasks, chat messages, and generated output are not written there.
 
+### Managed Suites, governance, and local Prompt privacy
+
+Managed Suites are explicit files authored under `evals/`, using synthetic
+or intentionally sanitized cases. They are not generated from hooks, prompts,
+transcripts, or other telemetry. Only sanitized result summaries and identity
+hashes are kept as evaluation evidence; raw prompts and outputs stay out of
+the evidence store.
+
+Use the **Suites** and **History** tabs on `/evaluations` to start, cancel, and
+inspect asynchronous Promptfoo runs. Credentials remain request-memory only.
+The runner disables cache, telemetry, update checks, sharing, and remote
+generation and uses a temporary isolated config directory. Governance binds a
+completed run to exact Artifact, suite, dataset, engine, and policy hashes;
+Ready additionally requires an independent approval before Canary or Stable.
+
+The Local Prompt Registry needs no account or Prompt-service API key. Configure
+`SKILLOPS_PROMPT_WORKSPACE` when Prompt files live in a repository other than
+the directory where SkillOps starts. Commit strict `prompts/*.prompt.json`
+definitions, open Managed Suites, choose **Local Git Prompt**, select a branch,
+then set immutable versions as the baseline and Candidate.
+
+The browser receives only names, paths, model hints, variables, commit IDs, and
+hashes. Prompt bodies are read from the pinned Git commit only while the backend
+renders the evaluation. **Compare versions** reports changed components without
+returning the text. **Create governed Candidate** starts the existing evidence,
+approval, Canary, Stable, and rollback workflow. Stable remains usable and
+rollback restores the previous lock even when the source repository is
+temporarily unavailable. See the
+[Prompt Registry contract](../develop/integrations/prompt-registry.md).
+
 ## 8. Disconnect a runtime
 
 ```powershell

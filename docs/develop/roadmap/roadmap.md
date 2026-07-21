@@ -19,7 +19,7 @@ Find definitions
 Inventory breadth is not useful if execution truth, privacy, and outcome
 semantics are weak.
 
-## 2. Current implemented baseline (v0.3.1)
+## 2. Current implemented scope
 
 - Single-package local React/Vite/Node application.
 - Loopback local HTTP interface and JSONL store.
@@ -31,6 +31,14 @@ semantics are weak.
 - Overview, Skills, Runs, Registry, Settings, and live Skill Lab surfaces.
 - Public GitHub candidate discovery, deterministic local overlap ranking,
   memory-only prompt/agent multi-provider A/B evaluation, and contextual assistant chat.
+- Restricted multi-case Promptfoo Suites, asynchronous runs, sanitized evidence,
+  Gate policies, local Red Team summaries, CLI/CI reports, and production smoke.
+- Metadata-only Capability governance with independent approval, Canary, Stable,
+  recoverable skeleton installation/reference locks, supersede, and rollback.
+- A local Git-backed Prompt Registry for metadata-only browsing, immutable
+  branch/commit versions, component Diff, explicit model-hint adoption,
+  direct-provider evaluation, and the common governance/rollback path without
+  a hosted Prompt-management dependency.
 - Outcome coverage and lifecycle-only semantics.
 - Atomic import, local export, backup-first clear, discovery deduplication.
 - Automated unit/integration/UI tests, build, and smoke verification.
@@ -58,14 +66,17 @@ Exit criteria:
 
 Goal: deepen the initial memory-only evaluator into repeatable evaluation evidence.
 
-Candidate outcomes:
+Status: implemented for reviewed local Managed Suites.
+
+Implemented outcomes:
 
 - multi-case evaluation-suite input and result schema;
 - optional metadata-only evidence persistence separate from lifecycle adapters;
 - repeatable version A/B comparison across representative cases;
 - outcome-coverage thresholds and confidence presentation;
 - read-only report export;
-- no promotion/mutation until comparison semantics are validated.
+- no promotion/mutation from Quick Compare; governance consumes only verified
+  Managed Suite evidence.
 
 Exit criteria:
 
@@ -77,7 +88,10 @@ Exit criteria:
 
 Goal: enable safe local action only after evaluation is trustworthy.
 
-Candidate outcomes:
+Status: implemented for allowlisted Skill skeleton targets and Prompt reference
+locks.
+
+Implemented outcomes:
 
 - preview-only installation/promotion plan;
 - exact source/target/version and conflict display;

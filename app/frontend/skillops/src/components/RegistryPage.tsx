@@ -1,4 +1,4 @@
-import { Bot, CheckCircle2, Code2, Layers3, MousePointer2, RefreshCw, Search, XCircle } from 'lucide-react'
+import { Bot, CheckCircle2, Code2, GitPullRequest, Layers3, MousePointer2, RefreshCw, Search, XCircle } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import type { MessageKey } from '../i18n/messages'
@@ -104,6 +104,23 @@ export function RegistryPage({ events }: { events: SkillEvent[] }) {
   const [providerFilter, setProviderFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState<'enabled' | 'disabled' | 'all'>('enabled')
   const [attentionFilter, setAttentionFilter] = useState<AttentionFilter>('all')
+  const [nominationStatus, setNominationStatus] = useState<Record<string, 'busy' | 'done' | 'failed'>>({})
+
+  const nominate = async (skill: InstalledSkill) => {
+    const sourceRef = `local-scan:${skill.runtime}:${skill.sourcePath}`
+    setNominationStatus((current) => ({ ...current, [sourceRef]: 'busy' }))
+    try {
+      const response = await fetch('/api/capabilities', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceRef, owner: 'local-owner' }),
+      })
+      if (!response.ok) throw new Error('Nomination failed')
+      setNominationStatus((current) => ({ ...current, [sourceRef]: 'done' }))
+    } catch {
+      setNominationStatus((current) => ({ ...current, [sourceRef]: 'failed' }))
+    }
+  }
 
   const scan = useCallback(async () => {
     setScanStatus('scanning')
@@ -309,13 +326,16 @@ export function RegistryPage({ events }: { events: SkillEvent[] }) {
         </header>
         <div className="registry-table-scroll">
           <table className="registry-table">
-            <thead><tr><th>Skill</th><th>{t('common.type')}</th><th>{t('common.version')}</th><th>{t('common.runtime')}</th><th>{t('common.category')}</th><th>{t('common.provider')}</th><th>{t('common.location')}</th><th>{t('common.status')}</th></tr></thead>
+            <thead><tr><th>Skill</th><th>{t('common.type')}</th><th>{t('common.version')}</th><th>{t('common.runtime')}</th><th>{t('common.category')}</th><th>{t('common.provider')}</th><th>{t('common.location')}</th><th>{t('common.status')}</th><th>{t('registry.governance')}</th></tr></thead>
             <tbody>
-              {filteredRows.map((skill, index) => <Fragment key={`${skill.runtime}:${skill.skillId}:${skill.sourcePath}`}>
-                {runtimeFilter === 'all' && filteredRows[index - 1]?.runtime !== skill.runtime ? <tr className={`registry-runtime-group runtime-${skill.runtime}`}><th scope="rowgroup" colSpan={8}><span className="registry-runtime-badge"><RuntimeIcon runtime={skill.runtime} />{runtimeLabel[skill.runtime]}</span><strong>{t('registry.runtimeGroup', { runtime: runtimeLabel[skill.runtime], count: formatNumber(visibleRuntimeCounts.get(skill.runtime) ?? 0) })}</strong></th></tr> : null}
-                <tr className={skill.enabled ? '' : 'is-disabled'}><td><span className="registry-skill-name"><strong>{skill.skillId}</strong>{runtimeFilter === 'all' && sharedSkillIds.has(skill.skillId.toLowerCase()) ? <span className="shared-skill">{t('registry.shared')}</span> : null}{[...issuesFor(skill)].map((issue) => <span className={`registry-issue ${issue}`} key={issue}>{t(issueLabel[issue])}</span>)}</span></td><td>{t(skill.kind === 'command' ? 'common.command' : 'common.skill')}</td><td><span className="version">{skill.skillVersion === 'unversioned' ? t('common.unversioned') : skill.skillVersion}</span></td><td><span className={`registry-runtime-badge runtime-${skill.runtime}`}><RuntimeIcon runtime={skill.runtime} />{runtimeLabel[skill.runtime]}</span></td><td>{t(sourceLabel[skill.source])}</td><td>{displayProvider(skill.provider)}</td><td className="mono source-path" title={skill.sourcePath}>{skill.sourcePath === 'Unknown location' ? t('common.unknownLocation') : skill.sourcePath}</td><td><span className={`registry-status ${skill.enabled ? '' : 'disabled'}`}>{skill.enabled ? <CheckCircle2 size={14} /> : <XCircle size={14} />}{t(skill.enabled ? 'common.enabled' : 'common.disabled')}</span></td></tr>
-              </Fragment>)}
-              {!filteredRows.length ? <tr><td className="registry-empty" colSpan={8}>{scanStatus === 'scanning' ? t('registry.scanningLocations') : t('registry.noMatches')}</td></tr> : null}
+              {filteredRows.map((skill, index) => {
+                const nomination = nominationStatus[`local-scan:${skill.runtime}:${skill.sourcePath}`]
+                return <Fragment key={`${skill.runtime}:${skill.skillId}:${skill.sourcePath}`}>
+                  {runtimeFilter === 'all' && filteredRows[index - 1]?.runtime !== skill.runtime ? <tr className={`registry-runtime-group runtime-${skill.runtime}`}><th scope="rowgroup" colSpan={9}><span className="registry-runtime-badge"><RuntimeIcon runtime={skill.runtime} />{runtimeLabel[skill.runtime]}</span><strong>{t('registry.runtimeGroup', { runtime: runtimeLabel[skill.runtime], count: formatNumber(visibleRuntimeCounts.get(skill.runtime) ?? 0) })}</strong></th></tr> : null}
+                  <tr className={skill.enabled ? '' : 'is-disabled'}><td><span className="registry-skill-name"><strong>{skill.skillId}</strong>{runtimeFilter === 'all' && sharedSkillIds.has(skill.skillId.toLowerCase()) ? <span className="shared-skill">{t('registry.shared')}</span> : null}{[...issuesFor(skill)].map((issue) => <span className={`registry-issue ${issue}`} key={issue}>{t(issueLabel[issue])}</span>)}</span></td><td>{t(skill.kind === 'command' ? 'common.command' : 'common.skill')}</td><td><span className="version">{skill.skillVersion === 'unversioned' ? t('common.unversioned') : skill.skillVersion}</span></td><td><span className={`registry-runtime-badge runtime-${skill.runtime}`}><RuntimeIcon runtime={skill.runtime} />{runtimeLabel[skill.runtime]}</span></td><td>{t(sourceLabel[skill.source])}</td><td>{displayProvider(skill.provider)}</td><td className="mono source-path" title={skill.sourcePath}>{skill.sourcePath === 'Unknown location' ? t('common.unknownLocation') : skill.sourcePath}</td><td><span className={`registry-status ${skill.enabled ? '' : 'disabled'}`}>{skill.enabled ? <CheckCircle2 size={14} /> : <XCircle size={14} />}{t(skill.enabled ? 'common.enabled' : 'common.disabled')}</span></td><td><button className="button secondary registry-nominate" type="button" disabled={!skill.enabled || skill.kind !== 'skill' || skill.sourcePath === 'Unknown location' || nomination === 'busy' || nomination === 'done'} onClick={() => void nominate(skill)}><GitPullRequest size={13} />{t(nomination === 'done' ? 'registry.nominated' : nomination === 'busy' ? 'registry.nominating' : nomination === 'failed' ? 'registry.retryNomination' : 'registry.nominate')}</button></td></tr>
+                </Fragment>
+              })}
+              {!filteredRows.length ? <tr><td className="registry-empty" colSpan={9}>{scanStatus === 'scanning' ? t('registry.scanningLocations') : t('registry.noMatches')}</td></tr> : null}
             </tbody>
           </table>
         </div>

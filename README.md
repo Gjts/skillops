@@ -45,6 +45,12 @@ The MVP includes:
 - A CLI that scans common Skill locations and emits lifecycle events from hooks.
 - Runtime connection guidance plus a live candidate comparison, A/B evaluation,
   and AI-assisted interpretation surface.
+- Managed Promptfoo Suites with sanitized evidence, gates, cancellation, and CI
+  verification.
+- A metadata-only governance registry with approval, Canary, Stable, rollback,
+  and recoverable local installation.
+- A local Git-backed Prompt Registry for immutable versions, component Diff,
+  explicit Candidate creation, evaluation, promotion, and rollback.
 
 ## Project structure
 
@@ -55,6 +61,7 @@ app/
   shared/              Event schema and AI provider catalog shared across layers
 adapters/               Codex and Claude Code runtime adapters
 bin/                    SkillOps CLI
+evals/                  Reviewed Suite Schema v1 files and sanitized datasets
 docs/
   product/              Product requirements and user workflows
   develop/              Architecture, data, integrations, operations and roadmap
@@ -112,7 +119,11 @@ user makes a choice, then stores that choice locally and restores it before the
 next page is painted. Existing `skillops.theme.v1` light/dark preferences are
 migrated once to DevTools/Synapse so upgrades preserve the user's appearance.
 
-The main surfaces have reload-safe URLs: `/skills`, `/runs`, `/evaluations`, `/registry`, and `/settings`. Events refresh from the local store every three seconds, while runtime connection health refreshes every five seconds. Unchanged event polls use ETags and return an empty `304` response instead of transferring and parsing the full history again.
+The main surfaces have reload-safe URLs: `/skills`, `/runs`, `/evaluations`,
+`/registry`, `/governance`, and `/settings`. Events refresh from the local store
+every three seconds, while runtime connection health refreshes every five
+seconds. Unchanged event polls use ETags and return an empty `304` response
+instead of transferring and parsing the full history again.
 
 For a production-style local build:
 
@@ -171,6 +182,44 @@ OpenAI-compatible transports also expose an explicit reasoning-effort control.
 GPT-5.6 Chat Completions agent runs require reasoning effort **None**; prompt-only
 runs may use the other supported efforts. Baseline, candidate, and judge provider
 work runs sequentially so concurrency-limited endpoints can complete reliably.
+
+### Evaluation privacy modes
+
+The current **Quick Compare** workflow remains memory-only: its task, criteria,
+Skill contents, workspace excerpts, provider credentials, model outputs, and
+judge response are not written by SkillOps. The evaluation code uses a shared
+request/Artifact contract and a compatibility facade so additional engines do
+not expand that persistence surface.
+
+**Implemented — Managed Suites and local Prompt Registry:** team-authored suites
+and synthetic or deliberately sanitized datasets live under `evals/` as
+reviewable product source. The separate evidence store retains sanitized
+summaries, gates, statuses, and identity hashes only. Promptfoo `0.121.19` runs
+in an isolated Worker with cache, telemetry, update checks, sharing, and
+local/remote generation disabled. The Prompt Registry reads only committed
+`prompts/*.prompt.json` versions from a user-controlled Git repository. It
+returns metadata and hashes to the UI while resolving Prompt bodies only in
+backend memory. SkillOps calls the explicitly selected model provider directly;
+no hosted Prompt-management service is required. A new Git version can only
+create a Candidate explicitly and can never replace Stable automatically.
+
+Managed Suite commands run from the repository root:
+
+```bash
+npm run eval:list
+npm run eval:run -- --suite <suite-id> --baseline <ref> --candidate <ref> --provider <id>
+npm run eval:verify -- --run <run-id>
+```
+
+The Prompt Schema, workspace variables, immutable reference format, API, and
+privacy boundary are documented in
+[`docs/develop/integrations/prompt-registry.md`](docs/develop/integrations/prompt-registry.md).
+
+The pinned Promptfoo dependency currently inherits four high-severity
+`npm audit` advisories through
+`@huggingface/transformers -> onnxruntime-node -> adm-zip`. The adapter's
+no-write, no-telemetry contract and restricted Suite schema reduce exposure but
+do not remove the dependency risk; upgrades require contract revalidation.
 
 ## Emit lifecycle events
 

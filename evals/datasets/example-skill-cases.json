@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "example-skill-cases",
+  "cases": [
+    {
+      "id": "concise-answer",
+      "input": "Explain why a lifecycle completion is not automatically a successful outcome.",
+      "weight": 1,
+      "assertions": [
+        { "type": "icontains", "value": "evidence", "label": "mentions-evidence" },
+        { "type": "not-contains", "value": "API_KEY", "label": "no-secret-placeholder" }
+      ]
+    }
+  ]
+}

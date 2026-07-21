@@ -17,6 +17,9 @@ Tests prioritize the failures most harmful to SkillOps users:
 - clearing local history without a recoverable backup.
 - leaking API keys, local Skill contents/paths, evaluation tasks, or model output;
 - presenting one A/B judge result as a universal Skill-quality claim.
+- persisting Managed Suite inputs, Prompt bodies, provider responses, or keys;
+- promoting stale/unapproved evidence or silently following a moved remote head;
+- leaving a partial installation when verification fails.
 
 ## 2. Automated test layers
 
@@ -32,7 +35,10 @@ locking/indexing, scanner sources, plugin enablement, runtime connection status,
 Codex Desktop ingestion/deduplication, candidate bounds/similarity, baseline
 allowlisting, hash pinning, provider HTTPS/loopback normalization, HTTP
 origin/content-type guards, score-consistent blind judging, bounded workspace
-agent tools, and chat-context minimization.
+agent tools, chat-context minimization, strict Suite parsing, Promptfoo isolation
+and no-write behavior, sanitized evidence recovery, run scheduling/cancellation,
+governance transitions, recoverable skeleton installation, and Git-backed Prompt
+Registry validation/version handling.
 
 ### Adapter tests
 
@@ -48,6 +54,10 @@ Skill Lab tests exercise candidate discovery rendering, session provider setup,
 reasoning-effort validation and compatibility, A/B result display, and
 contextual chat. Drawer tests verify default non-rendering, contextual prompt
 seeding, Escape dismissal, and focus restoration.
+Managed evaluation, Governance, and Prompt Registry tests cover
+polling/cancellation, metrics/cases, stale provenance, double confirmation,
+six-language copy, HTML escaping, metadata-only browsing, branch selection,
+component Diff, and explicit Candidate creation.
 
 ### Smoke test
 
@@ -56,6 +66,13 @@ Spawns the production server on an isolated loopback port and validates:
 - built frontend and SPA fallback;
 - local event HTTP operations;
 - candidate-comparison HTTP behavior without an external model call;
+- a deterministic Managed Suite through the production HTTP server;
+- a temporary Git Prompt repository with three committed immutable versions;
+- two local Prompt Candidates evaluated through the Promptfoo worker;
+- evidence binding, independent approval, Canary, Stable, supersede, and
+  offline rollback through the production governance API;
+- persisted evidence and immutable Stable/rollback behavior after the temporary
+  Prompt source repository is moved out of reach;
 - privacy validation;
 - loopback host behavior;
 - clean process shutdown.
@@ -198,6 +215,26 @@ missing `.mjs` file. Confirm status is Broken, not Installed or Not installed.
 11. Confirm the result says no Skill was installed or promoted.
 12. Reload and confirm the API key is cleared.
 
+### Scenario J: Managed Suite governance
+
+1. Run a deterministic local Suite and inspect sample/coverage metrics.
+2. Confirm persisted evidence contains hashes and sanitized status/score fields,
+   not inputs, Prompt/Skill bodies, raw outputs/errors, or credentials.
+3. Nominate a Candidate, bind the exact completed run, and evaluate the Gate.
+4. Confirm the owner cannot self-approve as reviewer.
+5. Approve with a second local identity, preview Canary/Stable, confirm twice,
+   and inspect the lock/backup/verification result.
+6. Roll back and confirm unrelated files are unchanged.
+
+### Scenario K: Local Prompt Registry contract
+
+Create a temporary Git repository with two branches and two committed versions
+of the same `prompts/*.prompt.json` file. Verify metadata-only listing, provider
+and model filters, immutable commit references, component Diff, and evaluation
+resolution after an unrelated working-tree edit. The automated Registry and
+production smoke tests cover this scenario; the exact contract is in
+[Prompt Registry contract](../integrations/prompt-registry.md).
+
 ## 7. Browser route matrix
 
 Every route must load directly and after refresh:
@@ -208,6 +245,7 @@ Every route must load directly and after refresh:
 /runs
 /evaluations
 /registry
+/governance
 /settings
 ```
 

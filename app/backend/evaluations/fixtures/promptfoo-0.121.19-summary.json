@@ -1,0 +1,56 @@
+{
+  "version": 3,
+  "prompt": {
+    "raw": "hello {{name}}",
+    "label": "hello {{name}}",
+    "provider": "skillops:fake",
+    "score": 1,
+    "testPassCount": 1,
+    "testFailCount": 0,
+    "assertPassCount": 1,
+    "assertFailCount": 0
+  },
+  "result": {
+    "success": true,
+    "score": 1,
+    "latencyType": "number",
+    "prompt": {
+      "raw": "hello world",
+      "label": "hello {{name}}"
+    },
+    "provider": "skillops:fake",
+    "output": "fixture:hello world",
+    "tokenUsage": {
+      "total": 3,
+      "prompt": 2,
+      "completion": 1
+    },
+    "grading": {
+      "pass": true,
+      "score": 1,
+      "reason": "All assertions passed",
+      "component": {
+        "pass": true,
+        "score": 1,
+        "reason": "Assertion passed",
+        "assertion": {
+          "type": "contains",
+          "value": "fixture:hello world"
+        }
+      }
+    },
+    "vars": {
+      "name": "world"
+    }
+  },
+  "stats": {
+    "successes": 1,
+    "failures": 0,
+    "errors": 0,
+    "tokenUsage": {
+      "total": 3,
+      "prompt": 2,
+      "completion": 1
+    }
+  }
+}

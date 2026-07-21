@@ -67,6 +67,10 @@ production server falls back to `index.html` for extensionless SPA paths.
 - candidate URL/selection, local baseline, A/B inputs/results, and chat messages;
 - active AI provider settings initialized in page memory from the shared catalog.
 
+Evaluation request/result and Artifact types come from the shared Evaluation
+Schema declaration. The frontend does not define parallel Candidate/result
+interfaces or import backend implementations.
+
 `src/lib/themeCatalog.ts` is the authoritative source for theme IDs, color
 schemes, browser theme colors, storage keys, legacy mappings, and system
 defaults. A Vite HTML transform serializes its bootstrap subset into the inline
@@ -274,11 +278,26 @@ Tests should use visible outcomes through each module's interface:
 
 Avoid tests that assert private React state or implementation-only markup order.
 
-## 13. Planned frontend work
+## 13. Evaluation and governance surfaces
 
-- Multi-case evaluation suites, confidence/sample-size presentation, and
-  read-only report export.
-- Promotion workflow only after recoverable mutation semantics are designed.
+Implemented frontend boundaries:
+
+- Quick Compare, Managed Suites, and History are separate views; Quick Compare
+  remains memory-only.
+- Managed runs expose polling, cancellation, multi-case metrics, gates, and
+  sanitized evidence details.
+- Governance shows Candidate-to-Stable provenance, exact hash bindings,
+  independent approvals, stale evidence, preview/confirm installation, and
+  rollback results.
+- The Local Prompt Registry browses Git branch/commit metadata without
+  displaying Prompt bodies, lets the user set immutable baseline/Candidate
+  references, compares component hashes, applies model hints explicitly, and
+  requires a separate action to create a governed Candidate.
+- All new user-visible evaluation, governance, and connector copy is available
+  in Chinese, English, French, Russian, Spanish, and Japanese.
+
+Remaining planned frontend work:
+
 - Saved views/filters if user evidence justifies persistence.
 - Event-store retention controls.
 - Large-history virtualization or server-side aggregation after JSONL scale limits are measured.
