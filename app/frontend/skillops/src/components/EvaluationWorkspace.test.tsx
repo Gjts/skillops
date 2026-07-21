@@ -216,6 +216,28 @@ describe('EvaluationWorkspace', () => {
     expect(document.activeElement).toBe(trigger)
   })
 
+  it('lets the user resize the assistant drawer without dimming the workspace', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1600 })
+    render(<EvaluationWorkspace />)
+    fireEvent.click(screen.getByRole('button', { name: 'Ask SkillOps' }))
+
+    const dialog = screen.getByRole('dialog', { name: 'SkillOps assistant, Waiting for a candidate' })
+    const backdrop = dialog.parentElement
+    expect(backdrop?.className).toContain('assistant-drawer-backdrop')
+    const backdropBackground = getComputedStyle(backdrop!).backgroundColor
+    expect(backdropBackground === 'rgba(0, 0, 0, 0)' || backdropBackground === 'transparent').toBe(true)
+
+    const before = Number.parseInt(dialog.style.getPropertyValue('--assistant-drawer-width') || '420', 10)
+    const handle = screen.getByRole('button', { name: 'Resize SkillOps assistant' })
+    fireEvent.pointerDown(handle, { button: 0, clientX: 1000, pointerId: 1 })
+    fireEvent(window, new PointerEvent('pointermove', { clientX: 700, bubbles: true }))
+    fireEvent(window, new PointerEvent('pointerup', { clientX: 700, bubbles: true }))
+
+    const after = Number.parseInt(dialog.style.getPropertyValue('--assistant-drawer-width') || '0', 10)
+    expect(after).toBeGreaterThan(before)
+    expect(window.localStorage.getItem('skillops.assistant-drawer.width.v1')).toBe(String(after))
+  })
+
   it('analyzes a candidate, configures a session provider, runs A/B, and chats about the result', async () => {
     render(<EvaluationWorkspace />)
     fireEvent.change(screen.getByRole('textbox', { name: 'Candidate GitHub URL' }), { target: { value: analysis.candidate.sourceUrl } })

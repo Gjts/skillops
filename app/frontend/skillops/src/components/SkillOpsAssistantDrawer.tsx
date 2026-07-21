@@ -1,5 +1,5 @@
 import { Bot, BrainCircuit, LoaderCircle, LockKeyhole, Send, Settings2, Sparkles, User, X } from 'lucide-react'
-import { useEffect, useRef, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 
 export interface AssistantMessage {
   id: string
@@ -25,6 +25,25 @@ interface SkillOpsAssistantDrawerProps {
 }
 
 const focusableSelector = 'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+const WIDTH_STORAGE_KEY = 'skillops.assistant-drawer.width.v1'
+const DEFAULT_DRAWER_WIDTH = 420
+const MIN_DRAWER_WIDTH = 320
+const MAX_DRAWER_WIDTH = 720
+
+function clampDrawerWidth(value: number) {
+  const viewportCap = typeof window === 'undefined' ? MAX_DRAWER_WIDTH : Math.min(MAX_DRAWER_WIDTH, Math.max(MIN_DRAWER_WIDTH, window.innerWidth - 48))
+  return Math.min(viewportCap, Math.max(MIN_DRAWER_WIDTH, Math.round(value)))
+}
+
+function readStoredDrawerWidth() {
+  try {
+    const stored = Number(window.localStorage.getItem(WIDTH_STORAGE_KEY))
+    if (Number.isFinite(stored)) return clampDrawerWidth(stored)
+  } catch {
+    // Storage can be disabled by browser policy.
+  }
+  return DEFAULT_DRAWER_WIDTH
+}
 
 export function SkillOpsAssistantDrawer({
   open,
@@ -44,6 +63,16 @@ export function SkillOpsAssistantDrawer({
   const drawer = useRef<HTMLElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
   const previousFocus = useRef<HTMLElement | null>(null)
+  const widthRef = useRef(DEFAULT_DRAWER_WIDTH)
+  const [width, setWidth] = useState(DEFAULT_DRAWER_WIDTH)
+  const [resizing, setResizing] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    const next = readStoredDrawerWidth()
+    widthRef.current = next
+    setWidth(next)
+  }, [open])
 
   useEffect(() => {
     if (!open) return
@@ -90,16 +119,54 @@ export function SkillOpsAssistantDrawer({
     }
   }
 
+  const startResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (typeof event.button === 'number' && event.button !== 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    const startX = event.clientX
+    const startWidth = widthRef.current
+    setResizing(true)
+
+    const onMove = (moveEvent: PointerEvent) => {
+      const next = clampDrawerWidth(startWidth + (startX - moveEvent.clientX))
+      widthRef.current = next
+      setWidth(next)
+    }
+    const finish = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+      setResizing(false)
+      try {
+        window.localStorage.setItem(WIDTH_STORAGE_KEY, String(widthRef.current))
+      } catch {
+        // Keep the in-memory width when storage is unavailable.
+      }
+    }
+
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+  }
+
   return (
-    <div className="modal-backdrop assistant-drawer-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className={`modal-backdrop assistant-drawer-backdrop${resizing ? ' resizing' : ''}`} role="presentation" onMouseDown={onClose}>
       <aside
         ref={drawer}
         className="assistant-drawer"
         role="dialog"
         aria-modal="true"
         aria-label={`SkillOps assistant, ${contextLabel}`}
+        style={{ ['--assistant-drawer-width' as string]: `${width}px` }}
         onMouseDown={(event) => event.stopPropagation()}
       >
+        <button
+          type="button"
+          className="assistant-drawer-resize"
+          aria-label="Resize SkillOps assistant"
+          title="Drag to resize"
+          onPointerDown={startResize}
+        />
         <header>
           <span className="assistant-avatar"><BrainCircuit size={18} /></span>
           <div><h2>SkillOps assistant</h2><span>{configuredProvider || 'AI provider not configured'}</span></div>
