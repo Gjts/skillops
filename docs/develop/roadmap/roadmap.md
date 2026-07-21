@@ -30,7 +30,8 @@ semantics are weak.
 - Runtime-first inventory, source/provider categories, duplicate/conflict health.
 - Overview, Skills, Runs, Registry, Settings, and live Skill Lab surfaces.
 - Public GitHub candidate discovery, deterministic local overlap ranking,
-  memory-only prompt/agent multi-provider A/B evaluation, and contextual assistant chat.
+  content-memory-only prompt/agent multi-provider A/B evaluation, explicit
+  local AI settings, and contextual assistant chat.
 - Restricted multi-case Promptfoo Suites, asynchronous runs, sanitized evidence,
   Gate policies, local Red Team summaries, CLI/CI reports, and production smoke.
 - Metadata-only Capability governance with independent approval, Canary, Stable,

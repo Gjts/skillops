@@ -142,7 +142,7 @@ export async function runPromptfooQuickCompare(input, options = {}) {
       model: provider.model,
     },
     engine: { name: 'promptfoo', version: PROMPTFOO_VERSION },
-    privacy: 'Task text, acceptance criteria, generated answers, and API credentials were not written to disk by SkillOps.',
+    privacy: 'Task text, acceptance criteria, generated answers, and chat were not written to disk by SkillOps. Saved AI provider settings may exist in local data/ai-settings.json.',
   }
 }
 

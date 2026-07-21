@@ -48,20 +48,24 @@ Built-in adapters must not persist:
 - transcripts or raw model output;
 - tool inputs, tool outputs, or command payloads;
 - source-code contents;
-- credentials, tokens, cookies, or environment values;
-- complete provider/runtime configuration;
+- credentials, tokens, cookies, or environment values outside the explicit Skill Lab AI settings file;
+- complete provider/runtime configuration outside `data/ai-settings.json`;
 - raw payment or personal account data;
 - raw error payloads that may embed task content.
 
-Skill Lab additionally keeps API keys, evaluation tasks/criteria, generated
-answers, judge rationales, and chat messages out of persistent SkillOps storage.
-Those values exist in browser/request memory and are transmitted to the selected
-provider only when the user initiates a call. They are not written to browser
-storage. When the user selects read-only agent mode, requested allowed
-workspace excerpts also exist in request memory and are transmitted to that
-provider; they are never appended to SkillOps storage.
+Skill Lab may persist AI provider settings, including API keys, in local
+`data/ai-settings.json` after an explicit Save. Evaluation tasks/criteria,
+generated answers, judge rationales, chat messages, and workspace excerpts stay
+out of persistent SkillOps storage and exist only in browser/request memory for
+the current interaction. Credentials are never written to the event store,
+exports, diagnostics, or logs. Browser storage is not used for credentials.
+When the user selects read-only agent mode, requested allowed workspace excerpts
+also exist in request memory and are transmitted to that provider; they are
+never appended to SkillOps storage.
 
-Quick Compare keeps this memory-only guarantee when its engine changes.
+Quick Compare keeps this evaluation-content memory-only guarantee when its
+engine changes; the explicit AI settings file remains the sole credential
+persistence exception.
 Managed Suites are explicit, reviewable product files containing only synthetic
 or deliberately sanitized cases; they are never derived from runtime telemetry.
 The evaluation store persists sanitized run/case status, gates, and
@@ -242,7 +246,7 @@ permissions and disk-encryption policy.
 | Backup retains deleted history | Explicit local backup | Operator must manage backup lifecycle |
 | Malicious candidate causes oversized/network work | GitHub-only URL allowlist, tree/file bounds, timeout | Public GitHub content can still contain adversarial instructions evaluated by the selected model |
 | DNS rebinding/cross-site page invokes evaluation API | Loopback Host, same-origin browser checks, JSON-only POST | Non-browser local processes under the same OS user remain trusted |
-| Custom endpoint steals API key | HTTPS requirement, no embedded credentials, UI warning, memory-only configuration | User must trust the endpoint they configure |
+| Custom endpoint steals API key | HTTPS requirement, no embedded credentials, UI warning, local-only settings file | User must trust the endpoint they configure and protect the local data directory |
 | Agent exposes sensitive workspace data | Explicit mode, denied paths/types, credential-line redaction, bounded read-only tools, negative privacy tests | Allowed source can still embed sensitive data and excerpts are intentionally disclosed to the selected provider |
 | Evaluation content persists accidentally | Sanitized evidence allowlist, separate store, recovery tests; event allowlist unchanged | Browser/provider retention follows their own policies |
 | Promptfoo writes cache/history or sends telemetry | Adapter forces disabled flags, isolated temporary config, no output path, and disk sentinel tests | Package upgrades require contract revalidation; the pinned dependency currently inherits four high `npm audit` advisories through `adm-zip` |

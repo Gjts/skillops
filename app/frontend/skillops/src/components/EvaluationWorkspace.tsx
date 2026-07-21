@@ -1,5 +1,5 @@
 import { BrainCircuit, MessageSquareText } from 'lucide-react'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { activeProviderRequest, AI_PROVIDERS, createDefaultAiSettings, providerIsConfigured, type AiSettings } from '../lib/ai-settings'
 import { evaluationApi } from '../lib/evaluation-api'
@@ -8,6 +8,13 @@ import { AiSettingsModal } from './AiSettingsModal'
 import { ManagedEvaluations } from './ManagedEvaluations'
 import { QuickBaselineStage, QuickCandidateSource, QuickEvaluationOnboarding, QuickResultStage, QuickRunStage } from './QuickEvaluationStages'
 import { SkillOpsAssistantDrawer, type AssistantMessage } from './SkillOpsAssistantDrawer'
+
+async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, init)
+  const result = await response.json() as T & { error?: string }
+  if (!response.ok) throw new Error(result.error || `Local API returned ${response.status}.`)
+  return result
+}
 
 function QuickEvaluationWorkspace() {
   const [sourceUrl, setSourceUrl] = useState('')
@@ -29,6 +36,19 @@ function QuickEvaluationWorkspace() {
   const [messages, setMessages] = useState<AssistantMessage[]>([
     { id: 'welcome', role: 'assistant', localOnly: true, content: 'Paste a public GitHub Skill URL. I can help you interpret its nearest local match and the A/B result without changing any installed Skill.' },
   ])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const loaded = await readJson<AiSettings>('/api/ai-settings')
+        if (!cancelled) setSettings(loaded)
+      } catch {
+        // Keep in-memory defaults when local settings are unavailable.
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
 
   const providerDefinition = AI_PROVIDERS.find((provider) => provider.id === settings.activeProvider)!
   const activeProvider = settings.providers[settings.activeProvider]
@@ -142,14 +162,26 @@ function QuickEvaluationWorkspace() {
     setAssistantOpen(false)
     setSettingsOpen(true)
   }, [])
-  const saveSettings = useCallback((next: AiSettings) => {
-    setSettings(next)
+  const saveSettings = useCallback(async (next: AiSettings) => {
     setEvaluation(null)
-    setSettingsOpen(false)
+    try {
+      const saved = await readJson<AiSettings>('/api/ai-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(next),
+      })
+      setSettings(saved)
+      setError(null)
+      setSettingsOpen(false)
+    } catch (problem) {
+      setError(problem instanceof Error ? problem.message : 'Failed to save AI settings.')
+      setSettingsOpen(true)
+    }
   }, [])
 
   return (
-    <div className="single-page evaluation-workspace">
+    <div className={`evaluation-workspace-shell${assistantOpen ? ' assistant-open' : ''}`}>
+      <div className="single-page evaluation-workspace">
       <div className="evaluation-intro">
         <div><h2>Compare a new open-source Skill</h2><p>Discover overlap with enabled local Skills, then run both definitions against the same task and blind judge.</p></div>
         <div className="evaluation-intro-actions">
@@ -200,7 +232,9 @@ function QuickEvaluationWorkspace() {
 
           {evaluation && <QuickResultStage evaluation={evaluation} onDiscuss={() => openAssistant('Why did this version win?')} />}
         </div>
+      </div>
 
+      <AiSettingsModal open={settingsOpen} settings={settings} onClose={closeSettings} onSave={saveSettings} />
       </div>
 
       <SkillOpsAssistantDrawer
@@ -218,8 +252,6 @@ function QuickEvaluationWorkspace() {
         onOpenSettings={openSettingsFromAssistant}
         onClose={closeAssistant}
       />
-
-      <AiSettingsModal open={settingsOpen} settings={settings} onClose={closeSettings} onSave={saveSettings} />
     </div>
   )
 }

@@ -56,8 +56,9 @@ The remote-generation switches are defense in depth, not a network firewall.
 Promptfoo's own documentation warns that the general switch does not disable
 providers, telemetry, sharing, or account checks. SkillOps therefore controls
 those features independently. The only intended model egress is through the
-user-selected SkillOps provider bridge; credentials stay in request and worker
-memory and are excluded from normalized evidence.
+user-selected SkillOps provider bridge. Credentials may originate from the
+explicit local AI settings file, stay in request and Worker memory during a run,
+and are excluded from normalized evidence.
 
 ## Red Team experimental seam
 

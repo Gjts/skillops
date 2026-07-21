@@ -87,8 +87,8 @@ and governance responses never include Prompt bodies.
 
 The user selects two immutable Prompt references as baseline and Candidate.
 SkillOps resolves their bodies only in backend memory, renders scalar variables,
-and calls the selected model provider directly through the existing memory-only
-AI settings seam. Provider/model values in the Prompt file are hints and never
+and calls the selected model provider directly through the existing local AI
+settings seam. Provider/model values in the Prompt file are hints and never
 silently replace the current page settings.
 
 A Candidate can then follow the existing evidence gate, independent approval,
@@ -102,7 +102,7 @@ the Prompt source repository to be available.
   backend memory.
 - SkillOps persists only hashes, source references, sanitized evaluation
   summaries, identities, approvals, and channel locks.
-- Provider credentials remain in page/request memory and are not written to the
-  Prompt repository or SkillOps data.
+- Provider credentials may be stored only in local `data/ai-settings.json` after
+  explicit Save; they are never written to the Prompt repository or evidence.
 - No remote Prompt-management API, account, key, synchronization, telemetry, or
   pipeline is used.

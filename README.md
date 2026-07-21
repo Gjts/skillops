@@ -167,16 +167,16 @@ request scores the outputs. The analyzed candidate's SHA-256 content hash is
 rechecked before either run. Results and generated outputs stay in browser
 memory; the workflow does not install, promote, deploy, or edit a Skill.
 
-OpenAI, Gemini, Anthropic, Azure OpenAI, Ollama, OpenRouter, MiniMax, GLM, and
-DeepSeek are supported. AI settings and API keys exist only in React page
-memory, are sent through the loopback server for the requested provider call,
-and are cleared by a reload or page close. Credentialed endpoints require
-HTTPS; keyless Ollama HTTP is limited to loopback. SkillOps never writes the
-key, evaluation task, acceptance criteria, chat messages, workspace excerpts,
-or model output to disk. User-initiated provider requests do send their stated
-content, and read-only agent mode may send requested allowed workspace excerpts,
-to the selected provider. Review allowed source for embedded sensitive data;
-the selected provider's own data policy still applies.
+OpenAI, Gemini, Anthropic, Azure OpenAI, Ollama, OpenRouter, MiniMax, GLM, and DeepSeek are supported. After **Save settings**, AI provider configuration
+including API keys is stored in the local SkillOps data directory as
+`ai-settings.json` and restored through loopback `GET`/`PUT /api/ai-settings`.
+Evaluation tasks, acceptance criteria, chat messages, workspace excerpts, and
+model output stay in memory and are not written to disk. Credentialed endpoints
+require HTTPS; keyless Ollama HTTP is limited to loopback. User-initiated
+provider requests do send their stated content, and read-only agent mode may
+send requested allowed workspace excerpts, to the selected provider. Review
+allowed source for embedded sensitive data; the selected provider's own data
+policy still applies.
 
 OpenAI-compatible transports also expose an explicit reasoning-effort control.
 GPT-5.6 Chat Completions agent runs require reasoning effort **None**; prompt-only
@@ -185,11 +185,13 @@ work runs sequentially so concurrency-limited endpoints can complete reliably.
 
 ### Evaluation privacy modes
 
-The current **Quick Compare** workflow remains memory-only: its task, criteria,
-Skill contents, workspace excerpts, provider credentials, model outputs, and
-judge response are not written by SkillOps. The evaluation code uses a shared
-request/Artifact contract and a compatibility facade so additional engines do
-not expand that persistence surface.
+The current **Quick Compare** workflow keeps its task, criteria, Skill contents,
+workspace excerpts, model outputs, and judge response in memory. Provider
+credentials are persisted only when the user explicitly saves AI settings, and
+then only in local `data/ai-settings.json`; they are never copied into events or
+evaluation evidence. The evaluation code uses a shared request/Artifact
+contract and a compatibility facade so additional engines do not expand that
+persistence surface.
 
 **Implemented — Managed Suites and local Prompt Registry:** team-authored suites
 and synthetic or deliberately sanitized datasets live under `evals/` as

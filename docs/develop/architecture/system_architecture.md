@@ -38,14 +38,15 @@ flowchart LR
 Telemetry, inventory, and event-store arrows remain on the user's machine.
 Skill Lab adds two explicit user-initiated network boundaries: reading a public
 GitHub candidate and sending an evaluation/chat request to the configured LLM
-provider. Neither flow writes prompts, model output, or credentials to disk.
+provider. Prompts and model output are not written to disk. AI provider
+settings may be saved to local `data/ai-settings.json` after an explicit Save.
 
 ## 3. Repository modules
 
 | Module | Interface | Implementation responsibility |
 | --- | --- | --- |
-| `app/frontend/skillops` | Local HTTP responses, shared event types, provider catalog | Routing, rendering, filtering, analytics, import/export, Skill Lab and memory-only AI settings |
-| `app/backend` | Event, scan, connection, evaluation, and static-file behavior | JSONL persistence, scanning, desktop ingestion, config inspection, candidate comparison, bounded read-only agent tools, provider calls, and evaluation adapters |
+| `app/frontend/skillops` | Local HTTP responses, shared event types, provider catalog | Routing, rendering, filtering, analytics, import/export, Skill Lab and API-backed AI settings |
+| `app/backend` | Event, scan, connection, evaluation, and static-file behavior | JSONL persistence, AI settings file IO, scanning, desktop ingestion, config inspection, candidate comparison, bounded read-only agent tools, provider calls, and evaluation adapters |
 | `app/shared` | Event and Evaluation Schema invariants plus AI provider catalog | Event allowlist/types/enums/outcome normalization, narrow evaluation request/Artifact contracts, and provider identity/default metadata shared by frontend and backend |
 | `adapters/codex` | Codex hook payload to normalized events | Install merge, signal detection, non-blocking hook execution |
 | `adapters/claude` | Claude hook payload to normalized events | Config resolution, install merge, exact/heuristic detection |
@@ -178,6 +179,8 @@ stays inside a controlled backend renderer.
 | `GET` | `/api/prompt-registry/status` | Return local Git workspace, branch, commit, and persistence metadata |
 | `POST` | `/api/prompt-registry/{prompts,compare,nominate}` | Metadata-only committed Prompt browsing, component Diff, and explicit Candidate nomination |
 | `POST` | `/api/assistant/chat` | Ask the configured provider using inventory/evaluation metadata |
+| `GET` | `/api/ai-settings` | Load saved Skill Lab AI provider settings |
+| `PUT` | `/api/ai-settings` | Persist Skill Lab AI provider settings locally |
 
 The Vite development middleware and production Node server implement the same
 application interface. Changes must be kept behaviorally aligned.
@@ -204,7 +207,7 @@ interfaces without independent deployment needs.
 | Discovery keys | Backend event store | `data/discovery-index.json` |
 | Runtime hook configuration | Host runtime | Codex/Claude config files |
 | Filter, page, modal state | Frontend | In-memory; page identity also in URL |
-| AI provider settings and API key | Frontend | React page memory only; cleared by reload/page close |
+| AI provider settings and API key | Backend AI settings store | `data/ai-settings.json` after explicit Save; loaded by Evaluations on mount |
 | Evaluation task, outputs, and chat | Frontend | In-memory only |
 | Managed run/case summaries and identity hashes | Backend evidence store | `data/evidence/`; sanitized JSONL and indexes |
 | Capability, approval, promotion, and rollback metadata | Backend governance store | `data/governance/`; metadata and hashes only |
@@ -237,7 +240,8 @@ interfaces without independent deployment needs.
   prohibited.
 - **Provider network seam**: a user-selected HTTPS endpoint receives the
   in-memory key and requested prompt; keyless Ollama HTTP is loopback-only.
-  Credentials and responses are never persisted by SkillOps.
+  Provider responses are never persisted by SkillOps. Credentials are persisted
+  only after explicit Save and only in local `data/ai-settings.json`.
 - **Evaluation-agent seam**: prompt-only runs have no workspace access. Agent
   runs can list/search/read bounded allowed text, deny hidden/common secret,
   runtime, dependency/build paths and symlinks, redact credential-like lines,

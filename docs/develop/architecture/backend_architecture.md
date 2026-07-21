@@ -11,7 +11,7 @@ The backend provides a small local interface for:
 - atomic import and recoverable clearing;
 - live installed-Skill inventory;
 - public GitHub candidate discovery and deterministic local comparison;
-- memory-only multi-provider A/B evaluation and assistant requests;
+- multi-provider A/B evaluation and assistant requests with optional local AI settings persistence;
 - Codex Desktop incremental ingestion;
 - runtime configuration health;
 - production SPA serving.
@@ -62,10 +62,19 @@ validation, and activity enrichment.
 Owns incremental parsing of recent Codex Desktop session records and conservative
 Skill path detection from actual file-read commands.
 
+### `ai-settings-store.mjs`
+
+Owns atomic read/write of Skill Lab AI provider settings under
+`SKILLOPS_DATA_DIR/ai-settings.json`. Missing or corrupt files fall back to
+catalog defaults. Writes validate known providers, field lengths, and reasoning
+effort values. Credentials are never written to the event store.
+
 ### `skill-evaluations.mjs` and `evaluations/`
 
-`skill-evaluations.mjs` is a compatibility facade for the existing exports and
-three HTTP routes. The implementation is split behind that small interface:
+`skill-evaluations.mjs` is a compatibility facade for the existing exports,
+legacy evaluation routes, `GET`/`PUT /api/ai-settings`, and the managed
+evaluation, Prompt Registry, and governance API delegates. The implementation
+is split behind that small interface:
 
 - `errors.mjs` owns stable evaluation errors and input primitives;
 - `request-guard.mjs` owns loopback/origin/content-type/body limits;
@@ -77,9 +86,12 @@ three HTTP routes. The implementation is split behind that small interface:
 - `session-evaluator.mjs` owns sequential variants, blinded judging, and
   minimized assistant context.
 
-All external JSON reaches the shared Evaluation Schema before these modules.
-The current GitHub interface and response fields remain compatible. Prompt
-Artifacts have a distinct renderer seam and are not represented as `SKILL.md`.
+All external evaluation JSON reaches the shared Evaluation Schema before these
+modules. The current GitHub interface and response fields remain compatible.
+Prompt Artifacts have a distinct renderer seam and are not represented as
+`SKILL.md`. Tasks, prompts, and model responses are not written to disk;
+provider credentials may exist in the current request or the explicit local AI
+settings file after Save.
 
 ### `evaluation-agent.mjs`
 
@@ -167,6 +179,19 @@ Performs Codex Desktop sync, reads effective runtime configuration, and returns:
 ]
 ```
 
+### `GET /api/ai-settings`
+
+Returns the normalized Skill Lab AI provider settings document, including API
+keys when previously saved. Missing files yield catalog defaults. Responses use
+`Cache-Control: no-store` and the same loopback browser guards as other Skill
+Lab routes, without requiring a JSON body.
+
+### `PUT /api/ai-settings`
+
+Accepts a full settings object, validates and merges it with catalog defaults,
+and atomically writes `ai-settings.json` under `SKILLOPS_DATA_DIR`. Body size is
+capped at 64 KB. Invalid fields return `400` without echoing secrets.
+
 ### `POST /api/evaluations/compare`
 
 Accepts a public GitHub URL and optional candidate path. The server discovers at
@@ -178,7 +203,7 @@ matches. Local Skill contents are not returned.
 
 Accepts a previously discovered candidate reference and SHA-256 content hash,
 an exact baseline path from the current live scan, one task, acceptance
-criteria, execution mode, and in-memory provider configuration. The backend
+criteria, execution mode, and request-scoped provider configuration. The backend
 re-downloads the candidate and rejects a changed hash. Baseline and candidate
 run sequentially in prompt-only mode or through bounded read-only workspace
 tools so concurrency-limited providers are supported; a final request judges
@@ -332,9 +357,12 @@ service. The full contract is documented in
 - Raw source/transcript/tool data is not part of the backend event interface.
 - Candidate discovery accepts only HTTPS `github.com` and
   `raw.githubusercontent.com` locations and rejects truncated/oversized inputs.
-- Provider credentials exist only in the current request. Custom HTTP(S) Base
-  URLs are allowed because local Ollama and compatible endpoints are a product
-  requirement; the UI warns that the chosen endpoint receives the key.
+- Provider credentials for Skill Lab may be stored in local
+  `data/ai-settings.json` after an explicit Save. They are still never written
+  to the event store, diagnostics, backups created for event clear, or exported
+  event JSON. Custom HTTP(S) Base URLs are allowed because local Ollama and
+  compatible endpoints are a product requirement; the UI warns that the chosen
+  endpoint receives the key.
 - Evaluation prompts, generated answers, judge rationales, and chat messages are
   returned in memory and are never appended to the event store or diagnostics.
 - Managed evidence contains statuses, scores, gates, and identity hashes only;

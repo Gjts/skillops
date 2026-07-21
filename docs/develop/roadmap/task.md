@@ -197,7 +197,7 @@ Status: implemented; Quick Compare and Managed Suites coexist
 - [x] Add evaluator service distinct from lifecycle hooks and event persistence.
 - [x] Discover public GitHub candidates and compare them with live local definitions.
 - [x] Run current/candidate variants sequentially for constrained providers and blind the judge order.
-- [x] Keep credentials, tasks, answers, and chat out of persistent storage.
+- [x] Keep tasks, answers, and chat out of persistent storage; allow only explicit AI settings file persistence for provider credentials.
 - [x] Store acceptance-test evidence references without task content leakage.
 - [x] Compare current/candidate versions using real task-specific scores.
 - [x] Offer explicit prompt-only and bounded read-only workspace agent modes.

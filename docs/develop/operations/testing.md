@@ -213,7 +213,7 @@ missing `.mjs` file. Confirm status is Broken, not Installed or Not installed.
 10. Close the drawer with Escape and confirm focus returns to its invoking
     control; on a narrow viewport confirm it renders as a bottom sheet.
 11. Confirm the result says no Skill was installed or promoted.
-12. Reload and confirm the API key is cleared.
+12. Reload and confirm saved AI settings (including the API key) restore from local data.
 
 ### Scenario J: Managed Suite governance
 
@@ -262,11 +262,11 @@ For every new hook payload field, test that events do not persist:
 - transcript/model output;
 - source code;
 - environment values/tokens;
-- full provider configuration;
-- raw error payloads.
+- full provider configuration outside the explicit AI settings file;
+- raw error payloads;
 - evaluation tasks/criteria and generated/judge output;
 - assistant chat messages;
-- AI provider API keys.
+- AI provider API keys outside `data/ai-settings.json`.
 
 For read-only evaluation tools, also assert that `.env`, credential/key files,
 `data/`, `.opc`, dependencies, build output, traversal, and symlinks cannot be

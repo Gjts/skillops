@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createDefaultAiSettings } from '../lib/ai-settings'
 import { EvaluationWorkspace } from './EvaluationWorkspace'
 
 const analysis = {
@@ -45,15 +46,38 @@ const evaluation = {
   privacy: 'Task text and generated answers were not written to disk by SkillOps.',
 }
 
+function mockApi(handlers: Record<string, (init?: RequestInit) => Promise<unknown> | unknown> = {}) {
+  return vi.fn().mockImplementation((input: string, init?: RequestInit) => {
+    if (input === '/api/ai-settings') {
+      if (handlers['PUT /api/ai-settings'] && init?.method === 'PUT') {
+        return Promise.resolve(handlers['PUT /api/ai-settings'](init))
+      }
+      if (handlers['GET /api/ai-settings']) return Promise.resolve(handlers['GET /api/ai-settings'](init))
+      if (init?.method === 'PUT') {
+        return Promise.resolve({ ok: true, status: 200, json: async () => JSON.parse(String(init.body)) })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => createDefaultAiSettings() })
+    }
+    if (input === '/api/evaluations/compare') {
+      if (handlers['/api/evaluations/compare']) return Promise.resolve(handlers['/api/evaluations/compare'](init))
+      return Promise.resolve({ ok: true, status: 200, json: async () => analysis })
+    }
+    if (input === '/api/evaluations/run') {
+      if (handlers['/api/evaluations/run']) return Promise.resolve(handlers['/api/evaluations/run'](init))
+      return Promise.resolve({ ok: true, status: 200, json: async () => evaluation })
+    }
+    if (input === '/api/assistant/chat') {
+      if (handlers['/api/assistant/chat']) return Promise.resolve(handlers['/api/assistant/chat'](init))
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ message: 'Add a second task that stresses false-positive handling.' }) })
+    }
+    return Promise.resolve({ ok: false, status: 404, json: async () => ({ error: 'Not found' }) })
+  })
+}
+
 beforeEach(() => {
   window.sessionStorage.clear()
   window.localStorage.clear()
-  vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => {
-    if (input === '/api/evaluations/compare') return Promise.resolve({ ok: true, status: 200, json: async () => analysis })
-    if (input === '/api/evaluations/run') return Promise.resolve({ ok: true, status: 200, json: async () => evaluation })
-    if (input === '/api/assistant/chat') return Promise.resolve({ ok: true, status: 200, json: async () => ({ message: 'Add a second task that stresses false-positive handling.' }) })
-    return Promise.resolve({ ok: false, status: 404, json: async () => ({ error: 'Not found' }) })
-  }))
+  vi.stubGlobal('fetch', mockApi())
 })
 
 afterEach(() => {
@@ -77,10 +101,10 @@ describe('EvaluationWorkspace', () => {
     expect(screen.queryByRole('region', { name: 'Run a controlled A/B task' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Explain overlap' }))
 
-    const assistant = screen.getByRole('dialog', { name: /SkillOps assistant, Context: security-review/ })
+    const assistant = screen.getByRole('complementary', { name: /SkillOps assistant, Context: security-review/ })
     expect((within(assistant).getByRole('textbox', { name: 'Ask SkillOps' }) as HTMLTextAreaElement).value).toBe('Explain the overlap')
     fireEvent.click(within(assistant).getByRole('button', { name: 'Close SkillOps assistant' }))
-    expect(screen.queryByRole('dialog', { name: /SkillOps assistant/ })).toBeNull()
+    expect(screen.queryByRole('complementary', { name: /SkillOps assistant/ })).toBeNull()
   })
 
   it('keeps the baseline unselected until the user chooses it and labels its source path', async () => {
@@ -107,14 +131,11 @@ describe('EvaluationWorkspace', () => {
     let compareCalls = 0
     let resolveCompare: (value: typeof response) => void = () => undefined
     const pendingCompare = new Promise<typeof response>((resolve) => { resolveCompare = resolve })
-    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => {
-      if (input === '/api/evaluations/compare') {
+    vi.stubGlobal('fetch', mockApi({
+      '/api/evaluations/compare': () => {
         compareCalls += 1
-        return compareCalls === 1 ? Promise.resolve(response) : pendingCompare
-      }
-      if (input === '/api/evaluations/run') return Promise.resolve({ ok: true, status: 200, json: async () => evaluation })
-      if (input === '/api/assistant/chat') return Promise.resolve({ ok: true, status: 200, json: async () => ({ message: 'Add a second task that stresses false-positive handling.' }) })
-      return Promise.resolve({ ok: false, status: 404, json: async () => ({ error: 'Not found' }) })
+        return compareCalls === 1 ? response : pendingCompare
+      },
     }))
     render(<EvaluationWorkspace />)
     fireEvent.change(screen.getByRole('textbox', { name: 'Candidate GitHub URL' }), { target: { value: analysis.candidate.sourceUrl } })
@@ -140,14 +161,11 @@ describe('EvaluationWorkspace', () => {
     let runCalls = 0
     let resolveRun: (value: typeof runResponse) => void = () => undefined
     const pendingRun = new Promise<typeof runResponse>((resolve) => { resolveRun = resolve })
-    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => {
-      if (input === '/api/evaluations/compare') return Promise.resolve({ ok: true, status: 200, json: async () => analysis })
-      if (input === '/api/evaluations/run') {
+    vi.stubGlobal('fetch', mockApi({
+      '/api/evaluations/run': () => {
         runCalls += 1
-        return runCalls === 1 ? Promise.resolve(runResponse) : pendingRun
-      }
-      if (input === '/api/assistant/chat') return Promise.resolve({ ok: true, status: 200, json: async () => ({ message: 'Add a second task that stresses false-positive handling.' }) })
-      return Promise.resolve({ ok: false, status: 404, json: async () => ({ error: 'Not found' }) })
+        return runCalls === 1 ? runResponse : pendingRun
+      },
     }))
     render(<EvaluationWorkspace />)
     fireEvent.change(screen.getByRole('textbox', { name: 'Candidate GitHub URL' }), { target: { value: analysis.candidate.sourceUrl } })
@@ -163,6 +181,7 @@ describe('EvaluationWorkspace', () => {
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Model' }), { target: { value: 'gpt-5.6-sol' } })
     fireEvent.change(within(dialog).getByRole('combobox', { name: 'Reasoning effort' }), { target: { value: 'none' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }))
+    expect(await screen.findByRole('button', { name: /OpenAI · gpt-5\.6-sol/ })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Run A/B test' }))
     expect(await screen.findByText('Candidate wins')).toBeTruthy()
 
@@ -195,12 +214,33 @@ describe('EvaluationWorkspace', () => {
 
     trigger.focus()
     fireEvent.click(trigger)
-    expect(screen.getByRole('dialog', { name: 'SkillOps assistant, Waiting for a candidate' })).toBeTruthy()
+    expect(screen.getByRole('complementary', { name: 'SkillOps assistant, Waiting for a candidate' })).toBeTruthy()
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close SkillOps assistant' }))
 
     fireEvent.keyDown(window, { key: 'Escape' })
-    expect(screen.queryByRole('dialog', { name: /SkillOps assistant/ })).toBeNull()
+    expect(screen.queryByRole('complementary', { name: /SkillOps assistant/ })).toBeNull()
     expect(document.activeElement).toBe(trigger)
+  })
+
+  it('docks the assistant beside the workspace and resizes both panes together', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1600 })
+    const { container } = render(<EvaluationWorkspace />)
+    fireEvent.click(screen.getByRole('button', { name: 'Ask SkillOps' }))
+
+    const shell = container.querySelector('.evaluation-workspace-shell')
+    const panel = screen.getByRole('complementary', { name: 'SkillOps assistant, Waiting for a candidate' })
+    expect(shell?.className).toContain('assistant-open')
+    expect(panel.parentElement).toBe(shell)
+
+    const before = Number.parseInt(panel.style.getPropertyValue('--assistant-drawer-width') || '420', 10)
+    const handle = screen.getByRole('button', { name: 'Resize SkillOps assistant' })
+    fireEvent.pointerDown(handle, { button: 0, clientX: 1000, pointerId: 1 })
+    fireEvent(window, new PointerEvent('pointermove', { clientX: 700, bubbles: true }))
+    fireEvent(window, new PointerEvent('pointerup', { clientX: 700, bubbles: true }))
+
+    const after = Number.parseInt(panel.style.getPropertyValue('--assistant-drawer-width') || '0', 10)
+    expect(after).toBeGreaterThan(before)
+    expect(window.localStorage.getItem('skillops.assistant-drawer.width.v1')).toBe(String(after))
   })
 
   it('analyzes a candidate, configures a session provider, runs A/B, and chats about the result', async () => {
@@ -226,8 +266,17 @@ describe('EvaluationWorkspace', () => {
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Model' }), { target: { value: 'gpt-5.6-sol' } })
     fireEvent.change(within(dialog).getByRole('combobox', { name: 'Reasoning effort' }), { target: { value: 'none' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }))
-    expect(window.sessionStorage.getItem('skillops-ai-settings')).toBeNull()
-    expect(window.localStorage.length).toBe(0)
+    expect(await screen.findByRole('button', { name: /OpenAI · gpt-5\.6-sol/ })).toBeTruthy()
+
+    const fetchMock = vi.mocked(fetch)
+    expect(fetchMock).toHaveBeenCalledWith('/api/ai-settings', expect.objectContaining({ method: 'PUT' }))
+    const putRequest = fetchMock.mock.calls.find(([url, init]) => url === '/api/ai-settings' && init?.method === 'PUT')?.[1]
+    expect(JSON.parse(String(putRequest?.body))).toEqual(expect.objectContaining({
+      activeProvider: 'openai',
+      providers: expect.objectContaining({
+        openai: expect.objectContaining({ apiKey: 'session-secret', model: 'gpt-5.6-sol', reasoningEffort: 'none' }),
+      }),
+    }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Run A/B test' }))
     expect(await screen.findByText('Candidate wins')).toBeTruthy()
@@ -235,12 +284,11 @@ describe('EvaluationWorkspace', () => {
     expect(screen.getByText(/higher-risk path/)).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Discuss result' }))
-    const assistant = screen.getByRole('dialog', { name: /SkillOps assistant, Context: security-review/ })
+    const assistant = screen.getByRole('complementary', { name: /SkillOps assistant, Context: security-review/ })
     fireEvent.click(within(assistant).getByRole('button', { name: 'What should I test next?' }))
     fireEvent.click(within(assistant).getByRole('button', { name: 'Send message' }))
     expect(await screen.findByText(/false-positive handling/)).toBeTruthy()
 
-    const fetchMock = vi.mocked(fetch)
     expect(fetchMock).toHaveBeenCalledWith('/api/evaluations/run', expect.objectContaining({ method: 'POST' }))
     const runRequest = fetchMock.mock.calls.find(([input]) => input === '/api/evaluations/run')?.[1]
     expect(JSON.parse(String(runRequest?.body))).toEqual(expect.objectContaining({
@@ -268,9 +316,46 @@ describe('EvaluationWorkspace', () => {
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Model' }), { target: { value: 'gpt-5.6-sol' } })
     fireEvent.change(within(dialog).getByRole('combobox', { name: 'Reasoning effort' }), { target: { value: 'medium' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }))
+    expect(await screen.findByRole('button', { name: /OpenAI · gpt-5\.6-sol/ })).toBeTruthy()
     fireEvent.click(screen.getByRole('radio', { name: /Read-only workspace agent/ }))
 
     expect(screen.getByRole('alert').textContent).toContain('reasoning effort None')
     expect(screen.getByRole('button', { name: 'Run A/B test' }).hasAttribute('disabled')).toBe(true)
+  })
+
+  it('restores saved AI settings from the local API on mount', async () => {
+    const restored = createDefaultAiSettings()
+    restored.activeProvider = 'openai'
+    restored.providers.openai = {
+      apiKey: 'restored-secret',
+      model: 'gpt-restored',
+      baseUrl: 'https://api.openai.com/v1',
+      reasoningEffort: 'none',
+    }
+    vi.stubGlobal('fetch', mockApi({
+      'GET /api/ai-settings': () => ({ ok: true, status: 200, json: async () => restored }),
+    }))
+
+    render(<EvaluationWorkspace />)
+    expect(await screen.findByRole('button', { name: /OpenAI · gpt-restored/ })).toBeTruthy()
+  })
+
+  it('keeps the settings dialog open when persistence fails', async () => {
+    vi.stubGlobal('fetch', mockApi({
+      'PUT /api/ai-settings': () => ({ ok: false, status: 500, json: async () => ({ error: 'Disk unavailable' }) }),
+    }))
+
+    render(<EvaluationWorkspace />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Configure AI' }))
+    const dialog = screen.getByRole('dialog', { name: 'AI settings' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'OpenAI' }))
+    fireEvent.change(within(dialog).getByPlaceholderText('Enter OpenAI API key'), { target: { value: 'new-secret' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }))
+
+    expect(await screen.findByText(/Disk unavailable/)).toBeTruthy()
+    expect(screen.getByRole('dialog', { name: 'AI settings' })).toBeTruthy()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Configure AI' }).textContent).not.toContain('OpenAI')
+    })
   })
 })

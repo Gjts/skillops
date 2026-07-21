@@ -30,9 +30,9 @@ Its primary responsibilities are:
 | Tests | Vitest + Testing Library + jsdom |
 
 There is no remote client SDK, account authentication state, router package, or
-global state library in v0.3.1. AI provider credentials exist only in React
-page memory and are submitted to the loopback API for an explicit call. Reload
-or page close clears them; browser storage is not used.
+global state library in v0.3.1. AI provider credentials are loaded from and
+saved through loopback `GET`/`PUT /api/ai-settings` into local
+`data/ai-settings.json`. Browser storage is not used for credentials.
 
 ## 3. Routes and page intent
 
@@ -65,7 +65,7 @@ production server falls back to `index.html` for extensionless SPA paths.
   pre-paint bootstrap and React hook both migrate the legacy
   `skillops.theme.v1` light/dark preference to those two themes;
 - candidate URL/selection, local baseline, A/B inputs/results, and chat messages;
-- active AI provider settings initialized in page memory from the shared catalog.
+- active AI provider settings loaded from `/api/ai-settings` and kept in page state while the workspace is open.
 
 Evaluation request/result and Artifact types come from the shared Evaluation
 Schema declaration. The frontend does not define parallel Candidate/result
@@ -195,7 +195,7 @@ collapses to a bottom sheet on narrow screens without shrinking the main flow.
 
 `AiSettingsModal` follows the supplied provider-grid reference. It supports
 nine providers, traps focus, restores focus on close, hides keys by default,
-retains settings only in current page memory, and exposes reasoning effort for
+loads/saves settings through the local AI settings API, and exposes reasoning effort for
 OpenAI-compatible transports. `EvaluationWorkspace` surfaces the GPT-5.6
 Chat Completions tool-call constraint and disables incompatible agent runs.
 
@@ -213,7 +213,7 @@ Chat Completions tool-call constraint and disables incompatible agent runs.
 | `RegistryPage` | Live inventory and health analysis |
 | `ConnectModal` | Install command, config check, and live-activity check |
 | `EvaluationWorkspace` | Candidate discovery, local match selection, A/B run, result, and contextual chat |
-| `AiSettingsModal` | Memory-only multi-provider/model/endpoint configuration |
+| `AiSettingsModal` | Multi-provider/model/endpoint configuration saved via local API |
 
 ## 9. Import/export behavior
 
@@ -283,7 +283,8 @@ Avoid tests that assert private React state or implementation-only markup order.
 Implemented frontend boundaries:
 
 - Quick Compare, Managed Suites, and History are separate views; Quick Compare
-  remains memory-only.
+  keeps tasks and model content memory-only while loading explicitly saved AI
+  settings from the local backend.
 - Managed runs expose polling, cancellation, multi-case metrics, gates, and
   sanitized evidence details.
 - Governance shows Candidate-to-Stable provenance, exact hash bindings,

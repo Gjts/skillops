@@ -73,7 +73,8 @@ loopback binding, export, retention, and removal behavior.
 
 ### 4.3 Implemented evaluation and governance goals
 
-- Preserve the existing memory-only Quick Compare as the exploratory path.
+- Preserve Quick Compare as the exploratory path while keeping evaluation
+  content memory-only and AI settings in the explicit local settings file.
 - Let teams explicitly author versioned Managed Suites from synthetic or
   deliberately sanitized cases; runtime telemetry never creates suite inputs.
 - Persist only sanitized evaluation summaries, gates, Artifact identities, and
@@ -90,7 +91,8 @@ loopback binding, export, retention, and removal behavior.
 
 - Cloud accounts, team workspaces, synchronization, or remote runtime/event ingestion.
 - Persisting raw prompt text, transcripts, tool payloads, source code, model
-  output, evaluation tasks, chat messages, or credentials.
+  output, evaluation tasks, chat messages, or credentials outside the explicit
+  Skill Lab AI settings file.
 - Proving implicit Skill selection when the runtime exposes no observable signal.
 - Declaring task success from a normal lifecycle completion.
 - Installing, promoting, or deploying a Skill from Skill Lab.
@@ -292,15 +294,16 @@ local baseline is accepted only when its exact path appears in the current
 enabled live scan; the frontend cannot use the evaluation interface to read an
 arbitrary local path.
 
-### FR-8 Memory-only AI evaluation
+### FR-8 Local AI evaluation settings
 
-AI credentials and settings use React page memory and are never written to
-browser storage. The local server may hold a key, task, Skill contents,
-requested workspace excerpts, generated output, or chat message only for the
-current request and must not append them to events, logs, backups, or another
-store. Credentialed endpoints require HTTPS; keyless Ollama HTTP is restricted
-to loopback. Evaluation results are task-specific evidence and never mutate
-lifecycle-event outcomes automatically.
+AI credentials and settings are saved only after an explicit Skill Lab Save into
+local `data/ai-settings.json` via loopback `GET`/`PUT /api/ai-settings`. They
+are never written to browser storage, events, logs, backups, or exports. The
+local server may hold a key, task, Skill contents, requested workspace excerpts,
+generated output, or chat message for the current request, but must not append
+evaluation content to another store. Credentialed endpoints require HTTPS;
+keyless Ollama HTTP is restricted to loopback. Evaluation results are
+task-specific evidence and never mutate lifecycle-event outcomes automatically.
 
 ### FR-9 Evaluation integrity and agent boundary
 
@@ -388,7 +391,7 @@ control.
 - [x] Event polling supports ETag/304 responses.
 - [x] Local API and SPA routes pass smoke verification.
 - [x] Skill Lab compares public candidates with live local definitions.
-- [x] Memory-only AI settings, hash-pinned blinded A/B results, bounded read-only agent mode, and contextual chat exist.
+- [x] Explicitly persisted local AI settings, hash-pinned blinded A/B results, bounded read-only agent mode, and contextual chat exist.
 - [ ] Cursor native adapter is implemented.
 - [ ] Multi-case evaluation confidence, report export, and real version promotion exist.
 - [ ] Automatic retention and event-store compaction policy exist.

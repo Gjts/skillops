@@ -135,7 +135,7 @@ export function AiSettingsModal({ open, settings, onClose, onSave }: AiSettingsM
               {provider.id === 'azure-openai' && <label className="ai-field"><span>API version</span><input className="mono" value={config.apiVersion || 'v1'} onChange={(event) => updateConfig({ apiVersion: event.target.value })} /></label>}
             </section>
 
-            <div className="ai-privacy-note"><LockKeyhole size={17} /><p><strong>Privacy</strong> SkillOps never writes credentials, evaluation prompts, chat messages, or model output to disk. Read-only agent mode can send requested allowed workspace excerpts to the provider; review source for embedded sensitive data. Provider requests follow that provider's data policy.</p></div>
+            <div className="ai-privacy-note"><LockKeyhole size={17} /><p><strong>Privacy</strong> Saving stores provider settings, including API keys, in the local SkillOps data directory (`data/ai-settings.json`). Evaluation prompts, chat messages, and model output are still not written to disk. Read-only agent mode can send requested allowed workspace excerpts to the provider; review source for embedded sensitive data. Provider requests follow that provider's data policy.</p></div>
           </div>
         </div>
 

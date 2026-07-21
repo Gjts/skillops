@@ -51,14 +51,32 @@ function rawCandidateFetch() {
   }))
 }
 
-function fakeJsonRequest(body, headers = {}, remoteAddress = '127.0.0.1') {
-  const bytes = Buffer.from(JSON.stringify(body))
+function fakeRequest({ method = 'POST', body, headers = {}, remoteAddress = '127.0.0.1' } = {}) {
+  const bytes = body === undefined
+    ? null
+    : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body))
   return {
-    method: 'POST',
-    headers: { host: '127.0.0.1:4173', origin: 'http://127.0.0.1:4173', 'content-type': 'application/json', ...headers },
+    method,
+    headers: {
+      host: '127.0.0.1:4173',
+      origin: 'http://127.0.0.1:4173',
+      ...(bytes
+        ? {
+            'content-type': 'application/json',
+            'content-length': String(bytes.byteLength),
+          }
+        : {}),
+      ...headers,
+    },
     socket: { remoteAddress },
-    async *[Symbol.asyncIterator]() { yield bytes },
+    async *[Symbol.asyncIterator]() {
+      if (bytes) yield bytes
+    },
   }
+}
+
+function fakeJsonRequest(body, headers = {}, remoteAddress = '127.0.0.1') {
+  return fakeRequest({ method: 'POST', body, headers, remoteAddress })
 }
 
 function fakeResponse() {
@@ -597,6 +615,25 @@ describe('AI provider and assistant boundaries', () => {
     expect(result.message).toContain('closest')
   })
 
+  it('tells the assistant which configured provider and model is serving the chat', async () => {
+    let systemPrompt = ''
+    await chatWithSkillOps({
+      provider: { provider: 'openai', apiKey: 'secret', model: 'gpt-test-identity' },
+      messages: [{ role: 'user', content: '你是什么模型' }],
+    }, {
+      scanInstalledSkills: async () => [],
+      callProvider: async (_provider, messages) => {
+        systemPrompt = messages[0].content
+        return { content: 'OpenAI · gpt-test-identity', usage: { totalTokens: 4 }, provider: 'openai', model: 'gpt-test-identity' }
+      },
+    })
+
+    expect(systemPrompt).toContain('OpenAI')
+    expect(systemPrompt).toContain('gpt-test-identity')
+    expect(systemPrompt).toMatch(/configured provider and model|model identity/i)
+    expect(systemPrompt).toMatch(/Do not invent|do not invent/i)
+  })
+
   it('rejects oversized nested assistant context', async () => {
     await expect(chatWithSkillOps({
       provider: { provider: 'openai', apiKey: 'secret', model: 'test-model' },
@@ -667,5 +704,102 @@ describe('Evaluation HTTP boundary', () => {
 
     expect(response.statusCode).toBe(413)
     expect(response.body).toContain('512 KB')
+  })
+})
+
+describe('AI settings HTTP API', () => {
+  it('loads default AI settings over GET without a JSON body', async () => {
+    const response = fakeResponse()
+    const readAiSettings = vi.fn().mockResolvedValue({
+      version: 1,
+      activeProvider: 'gemini',
+      providers: {
+        gemini: { apiKey: '', model: 'gemini-3.5-flash', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', reasoningEffort: '' },
+      },
+    })
+
+    await handleEvaluationApi(fakeRequest({ method: 'GET' }), response, '/api/ai-settings', { readAiSettings })
+
+    expect(response.statusCode).toBe(200)
+    expect(JSON.parse(response.body).activeProvider).toBe('gemini')
+    expect(response.headers['cache-control']).toBe('no-store')
+    expect(readAiSettings).toHaveBeenCalledOnce()
+  })
+
+  it('persists AI settings over PUT and returns them on GET', async () => {
+    let saved = null
+    const writeAiSettings = vi.fn(async (input) => {
+      saved = {
+        version: 1,
+        activeProvider: input.activeProvider,
+        providers: {
+          openai: input.providers.openai,
+          gemini: { apiKey: '', model: 'gemini-3.5-flash', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', reasoningEffort: '' },
+        },
+      }
+      return saved
+    })
+    const readAiSettings = vi.fn(async () => saved)
+
+    const put = fakeResponse()
+    await handleEvaluationApi(fakeRequest({
+      method: 'PUT',
+      body: {
+        activeProvider: 'openai',
+        providers: {
+          openai: { apiKey: 'persist-secret', model: 'gpt-test', baseUrl: 'https://api.openai.com/v1', reasoningEffort: 'none' },
+        },
+      },
+    }), put, '/api/ai-settings', { writeAiSettings, readAiSettings })
+
+    expect(put.statusCode).toBe(200)
+    expect(JSON.parse(put.body).providers.openai.apiKey).toBe('persist-secret')
+    expect(writeAiSettings).toHaveBeenCalledOnce()
+
+    const get = fakeResponse()
+    await handleEvaluationApi(fakeRequest({ method: 'GET' }), get, '/api/ai-settings', { writeAiSettings, readAiSettings })
+    expect(JSON.parse(get.body).providers.openai.apiKey).toBe('persist-secret')
+  })
+
+  it('rejects non-loopback AI settings access and oversized PUT bodies', async () => {
+    const blocked = fakeResponse()
+    await handleEvaluationApi(fakeRequest({
+      method: 'GET',
+      headers: { host: 'evil.example:4173', origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' },
+    }), blocked, '/api/ai-settings')
+    expect(blocked.statusCode).toBe(403)
+
+    const oversized = fakeResponse()
+    await handleEvaluationApi(fakeRequest({
+      method: 'PUT',
+      headers: { 'content-length': '70000' },
+      body: { activeProvider: 'openai', providers: {} },
+    }), oversized, '/api/ai-settings')
+    expect(oversized.statusCode).toBe(413)
+  })
+
+  it('maps invalid AI settings writes to 400 without echoing secrets', async () => {
+    const response = fakeResponse()
+    const secret = 'super-secret-key-value'
+    const writeAiSettings = vi.fn(async () => {
+      const error = new Error('openai reasoning effort is invalid.')
+      error.status = 400
+      error.name = 'AiSettingsError'
+      throw error
+    })
+
+    await handleEvaluationApi(fakeRequest({
+      method: 'PUT',
+      body: {
+        activeProvider: 'openai',
+        providers: {
+          openai: { apiKey: secret, model: 'm', baseUrl: 'https://example.test', reasoningEffort: 'extreme' },
+        },
+      },
+    }), response, '/api/ai-settings', { writeAiSettings })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.body).not.toContain(secret)
+    expect(response.body).toContain('reasoning')
   })
 })
