@@ -79,12 +79,25 @@ One Skill name may have multiple valid definitions:
 
 - Codex and Claude Code each have their own runtime definition;
 - global and project locations may both define the name;
-- plugins can ship additional versions;
+- an active plugin can overlap a direct global or project definition;
 - Claude legacy commands count as definitions but not unique Skills.
 
 Use Registry's runtime workspace first, then source/provider filters. A
-**duplicate** label means same runtime + same Skill name has multiple paths. A
-**conflict** additionally means different versions.
+**duplicate** means enabled definitions in one runtime share the same normalized
+name and content hash. A **conflict** means those enabled definitions have
+different normalized contents, even if their version strings are equal. The
+two labels are mutually exclusive. Disabled definitions remain visible but do
+not create either label.
+
+For Codex plugins, Registry scans only Codex's active cache version (`local`
+first, otherwise the highest version), so an obsolete cache directory is not a
+second enabled definition. If a direct Codex Skill should remain installed but
+inactive, add its exact `SKILL.md` path under `[[skills.config]]` with
+`enabled = false` and rescan. For Claude plugin disagreement, compare
+`~/.claude/settings.json`, project `.claude/settings.json`,
+`.claude/settings.local.json`, and file-managed policy in that order. Use
+Claude `/status` for server-managed or MDM policy that the filesystem scanner
+cannot inspect.
 
 ## 6. Adapter says Not installed
 

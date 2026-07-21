@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
@@ -101,23 +102,131 @@ async function pluginSettings(configFile) {
   }
 }
 
+async function jsonFiles(directory) {
+  try {
+    return (await readdir(directory, { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && !entry.name.startsWith('.') && entry.name.endsWith('.json'))
+      .map((entry) => path.join(directory, entry.name))
+      .sort()
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'EACCES') return []
+    throw error
+  }
+}
+
+function parseSemver(value) {
+  const match = value.match(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/)
+  if (!match) return undefined
+  return {
+    core: match.slice(1, 4).map(Number),
+    prerelease: match[4]?.split('.'),
+  }
+}
+
+function comparePrerelease(left, right) {
+  if (!left && !right) return 0
+  if (!left) return 1
+  if (!right) return -1
+  const length = Math.max(left.length, right.length)
+  for (let index = 0; index < length; index += 1) {
+    if (left[index] === undefined) return -1
+    if (right[index] === undefined) return 1
+    if (left[index] === right[index]) continue
+    const leftNumber = /^\d+$/.test(left[index]) ? Number(left[index]) : undefined
+    const rightNumber = /^\d+$/.test(right[index]) ? Number(right[index]) : undefined
+    if (leftNumber !== undefined && rightNumber !== undefined) return leftNumber - rightNumber
+    if (leftNumber !== undefined) return -1
+    if (rightNumber !== undefined) return 1
+    return left[index] < right[index] ? -1 : 1
+  }
+  return 0
+}
+
+function comparePluginVersions(left, right) {
+  const leftSemver = parseSemver(left)
+  const rightSemver = parseSemver(right)
+  if (!leftSemver || !rightSemver) return left < right ? -1 : left > right ? 1 : 0
+  for (let index = 0; index < leftSemver.core.length; index += 1) {
+    if (leftSemver.core[index] !== rightSemver.core[index]) return leftSemver.core[index] - rightSemver.core[index]
+  }
+  return comparePrerelease(leftSemver.prerelease, rightSemver.prerelease)
+}
+
+function activePluginVersion(versionDirectories) {
+  const local = versionDirectories.find((directory) => directory.name === 'local')
+  if (local) return local
+  return versionDirectories.sort((left, right) => comparePluginVersions(left.name, right.name)).at(-1)
+}
+
+function contentHash(text) {
+  const normalized = text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
+  return createHash('sha256').update(Buffer.from(normalized, 'utf8')).digest('hex')
+}
+
+function tomlString(value) {
+  try {
+    if (value.startsWith('"')) return JSON.parse(value)
+    if (value.startsWith("'") && value.endsWith("'")) return value.slice(1, -1)
+  } catch {
+    return undefined
+  }
+  return undefined
+}
+
+async function codexSkillSettings(configFile) {
+  try {
+    const contents = await readFile(configFile, 'utf8')
+    const settings = new Map()
+    let current
+    const commit = () => {
+      if (!current?.path) return
+      const configuredPath = path.isAbsolute(current.path)
+        ? current.path
+        : path.resolve(path.dirname(configFile), current.path)
+      settings.set(pathKey(configuredPath), current.enabled ?? true)
+    }
+    for (const line of contents.split(/\r?\n/)) {
+      if (/^\s*\[\[\s*skills\.config\s*\]\]\s*(?:#.*)?$/.test(line)) {
+        commit()
+        current = {}
+        continue
+      }
+      if (/^\s*\[/.test(line)) {
+        commit()
+        current = undefined
+        continue
+      }
+      if (!current) continue
+      const configuredPath = line.match(/^\s*path\s*=\s*("(?:\\.|[^"\\])*"|'[^']*')\s*(?:#.*)?$/)
+      if (configuredPath) current.path = tomlString(configuredPath[1])
+      const enabled = line.match(/^\s*enabled\s*=\s*(true|false)\s*(?:#.*)?$/)
+      if (enabled) current.enabled = enabled[1] === 'true'
+    }
+    commit()
+    return settings
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'EACCES') return new Map()
+    throw error
+  }
+}
+
 async function codexPluginLocations(pluginCache, settings) {
   const locations = []
   for (const marketplaceDirectory of await directories(pluginCache)) {
     const marketplace = marketplaceDirectory.name.replace(/-remote$/, '')
     for (const providerDirectory of await directories(marketplaceDirectory.path)) {
-      for (const versionDirectory of await directories(providerDirectory.path)) {
-        locations.push({
-          directory: path.join(versionDirectory.path, 'skills'),
-          runtime: 'codex',
-          source: 'plugin',
-          kind: 'skill',
-          maxDepth: 4,
-          provider: providerDirectory.name,
-          enabled: settings.get(`${providerDirectory.name}@${marketplace}`) ?? true,
-          version: versionDirectory.name,
-        })
-      }
+      const versionDirectory = activePluginVersion(await directories(providerDirectory.path))
+      if (!versionDirectory) continue
+      locations.push({
+        directory: path.join(versionDirectory.path, 'skills'),
+        runtime: 'codex',
+        source: 'plugin',
+        kind: 'skill',
+        maxDepth: 4,
+        provider: providerDirectory.name,
+        enabled: settings.get(`${providerDirectory.name}@${marketplace}`) ?? true,
+        version: versionDirectory.name,
+      })
     }
   }
   return locations
@@ -133,9 +242,27 @@ function appliesToProject(installation, project) {
     (installation?.scope === 'project' && typeof installation.projectPath === 'string' && pathKey(installation.projectPath) === pathKey(project))
 }
 
-async function claudePluginSettings(claudeHome, project) {
+function claudeManagedSettingsDirectory(options = {}) {
+  if (options.claudeManagedSettingsDirectory) return options.claudeManagedSettingsDirectory
+  if (process.platform === 'darwin') return '/Library/Application Support/ClaudeCode'
+  if (process.platform === 'win32') {
+    const environment = options.environment || process.env
+    return path.join(environment.ProgramFiles || 'C:\\Program Files', 'ClaudeCode')
+  }
+  return '/etc/claude-code'
+}
+
+async function claudePluginSettings(claudeHome, project, options = {}) {
   const settings = new Map()
-  for (const file of [path.join(claudeHome, 'settings.json'), path.join(project, '.claude/settings.json')]) {
+  const managedDirectory = claudeManagedSettingsDirectory(options)
+  const files = [
+    path.join(claudeHome, 'settings.json'),
+    path.join(project, '.claude/settings.json'),
+    path.join(project, '.claude/settings.local.json'),
+    path.join(managedDirectory, 'managed-settings.json'),
+    ...await jsonFiles(path.join(managedDirectory, 'managed-settings.d')),
+  ]
+  for (const file of files) {
     const contents = await readJson(file)
     if (!contents.enabledPlugins || typeof contents.enabledPlugins !== 'object') continue
     for (const [plugin, enabled] of Object.entries(contents.enabledPlugins)) {
@@ -145,9 +272,9 @@ async function claudePluginSettings(claudeHome, project) {
   return settings
 }
 
-async function claudePluginLocations(claudeHome, project) {
+async function claudePluginLocations(claudeHome, project, options = {}) {
   const registry = await readJson(path.join(claudeHome, 'plugins/installed_plugins.json'), { plugins: {} })
-  const settings = await claudePluginSettings(claudeHome, project)
+  const settings = await claudePluginSettings(claudeHome, project, options)
   const locations = []
   for (const [pluginId, installations] of Object.entries(registry.plugins || {})) {
     if (!Array.isArray(installations)) continue
@@ -175,14 +302,18 @@ export async function scanInstalledSkills(options = {}) {
   const codexHome = options.codexHome || process.env.CODEX_HOME || path.join(home, '.codex')
   const claudeHome = await resolveClaudeHome({ ...options, home })
   const pluginCache = path.join(codexHome, 'plugins/cache')
-  const installedPlugins = await pluginSettings(path.join(codexHome, 'config.toml'))
+  const codexConfig = path.join(codexHome, 'config.toml')
+  const [installedPlugins, configuredSkills] = await Promise.all([
+    pluginSettings(codexConfig),
+    codexSkillSettings(codexConfig),
+  ])
   const locations = [
     { directory: path.join(home, '.agents/skills'), runtime: 'codex', source: 'global', kind: 'skill', provider: 'Agents', enabled: true },
     { directory: path.join(codexHome, 'skills'), runtime: 'codex', source: 'global', kind: 'skill', provider: 'Codex', enabled: true },
     ...await codexPluginLocations(pluginCache, installedPlugins),
     { directory: path.join(claudeHome, 'skills'), runtime: 'claude-code', source: 'global', kind: 'skill', provider: 'Claude Code', enabled: true },
     { directory: path.join(claudeHome, 'commands'), runtime: 'claude-code', source: 'global', kind: 'command', provider: 'Claude Code', enabled: true },
-    ...await claudePluginLocations(claudeHome, project),
+    ...await claudePluginLocations(claudeHome, project, options),
     { directory: path.join(home, '.cursor/skills'), runtime: 'cursor', source: 'global', kind: 'skill', provider: 'Cursor', enabled: true },
     { directory: path.join(project, '.agents/skills'), runtime: 'codex', source: 'project', kind: 'skill', provider: 'Project', enabled: true },
     { directory: path.join(project, '.codex/skills'), runtime: 'codex', source: 'project', kind: 'skill', provider: 'Project', enabled: true },
@@ -208,6 +339,15 @@ export async function scanInstalledSkills(options = {}) {
         if (error?.code === 'ENOENT' || error?.code === 'EACCES') continue
         throw error
       }
+      const skillSetting = location.runtime === 'codex' && location.kind === 'skill'
+        ? configuredSkills.get(pathKey(file))
+        : undefined
+      const enabled = location.enabled && skillSetting !== false
+      const disabledReason = !enabled
+        ? (!location.enabled && skillSetting === false
+            ? 'plugin-and-skill-config'
+            : !location.enabled ? 'plugin' : 'skill-config')
+        : undefined
       discovered.push({
         skillId: frontmatter(contents, 'name') || (location.kind === 'command'
           ? path.basename(file, '.md')
@@ -218,7 +358,9 @@ export async function scanInstalledSkills(options = {}) {
         sourcePath: file,
         kind: location.kind,
         provider: location.provider,
-        enabled: location.enabled,
+        enabled,
+        disabledReason,
+        contentHash: contentHash(contents),
         description: frontmatter(contents, 'description'),
         tags: frontmatterList(contents, 'tags'),
       })

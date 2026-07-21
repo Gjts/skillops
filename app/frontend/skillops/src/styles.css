@@ -2611,6 +2611,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .registry-issue.missing { color: var(--red); border-color: var(--red-border); background: var(--red-soft); }
 .registry-status { display: inline-flex; align-items: center; gap: 5px; color: var(--green); font-size: 9px; }
 .registry-status.disabled { color: var(--muted); }
+.registry-status small { font: inherit; opacity: .78; white-space: nowrap; }
 .registry-nominate { min-width: 88px; height: 27px; padding: 0 8px; font-size: 8px; }
 .registry-empty { height: 90px !important; color: var(--muted); text-align: center !important; }
 .spin-once { animation: spin .55s ease; }

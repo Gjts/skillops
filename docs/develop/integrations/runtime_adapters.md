@@ -134,6 +134,11 @@ live settings file. If Settings changes to **Not installed**, rerun the Claude
 installer; its merge is idempotent. CC Switch Common Config can keep hooks
 shared across providers.
 
+Inventory plugin state follows user, project, local, and file-managed settings
+precedence, including ordered `managed-settings.d` drop-ins. Server-managed,
+MDM, registry, and dynamic policy sources are not readable through the ordinary
+filesystem scanner; use Claude Code `/status` to resolve a disagreement.
+
 ### Managed policy limitation
 
 An organization using `allowManagedHooksOnly` can block user/project hooks. An

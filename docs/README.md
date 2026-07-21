@@ -26,6 +26,7 @@ local-first runtime observability product.
 | Local operator | [Getting started](develop/operations/getting_started.md) |
 | Tester | [Testing and QA](develop/operations/testing.md) |
 | Someone diagnosing a failure | [Troubleshooting](develop/operations/troubleshooting.md) |
+| Team governing duplicate/conflicting Skills | [Registry health and collision handling](develop/operations/registry-health.md) |
 | Security or privacy reviewer | [Privacy and security](develop/security/privacy-security.md) |
 | Planner | [Roadmap](develop/roadmap/roadmap.md) and [task ledger](develop/roadmap/task.md) |
 
@@ -52,6 +53,7 @@ docs/
    ├─ operations/
    │  ├─ getting_started.md
    │  ├─ testing.md
+   │  ├─ registry-health.md
    │  └─ troubleshooting.md
    ├─ security/
    │  └─ privacy-security.md

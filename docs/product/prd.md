@@ -53,7 +53,8 @@ loopback binding, export, retention, and removal behavior.
 
 - Scan conventional Codex, Claude Code, Cursor, project, and plugin locations.
 - Separate runtime, installation source, provider, definition type, and enabled state.
-- Detect duplicates, version conflicts, disabled definitions, and missing metadata.
+- Detect content-identical duplicates, divergent definition conflicts,
+  disabled definitions, and missing metadata.
 - Record normalized lifecycle metadata from installed Codex and Claude Code hooks.
 - Keep all product telemetry in a local JSONL store by default.
 - Show honest outcome coverage: lifecycle-only completions are not successes.
@@ -149,7 +150,11 @@ Acceptance:
 - runtime totals update with the selected workspace;
 - unique Skill totals exclude commands and disabled definitions;
 - definition totals include Skill and command files where applicable;
-- duplicate/conflict calculations stay within the same runtime and Skill name.
+- duplicate/conflict calculations use enabled definitions only, stay within the
+  same runtime and normalized Skill name, and use normalized content hashes
+  when a live scan supplies them;
+- conflicts and duplicates are mutually exclusive, and disabled definitions do
+  not create either issue.
 
 ### 7.3 Prove real Skill execution
 

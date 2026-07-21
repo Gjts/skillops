@@ -160,10 +160,20 @@ Choose a runtime workspace before interpreting counts:
 
 Health labels mean:
 
-- **duplicate**: multiple definition paths share a name in one runtime;
-- **conflict**: those definitions report different versions;
-- **disabled**: installed but explicitly disabled;
+- **duplicate**: multiple enabled definition paths share a name and normalized
+  contents in one runtime;
+- **conflict**: multiple enabled definitions share a runtime and name but their
+  normalized contents differ, even when they claim the same version;
+- **disabled**: installed but explicitly disabled; it is excluded from
+  duplicate and conflict calculations;
 - **missing**: name or location metadata could not be established.
+
+These labels do not select a winner. For a duplicate, keep one canonical team
+path and disable or uninstall the redundant definition. For a conflict,
+evaluate the candidates, choose the approved content hash, then disable the
+other direct Skill or its containing plugin. Do not edit or delete files inside
+a runtime plugin cache by hand. A cross-runtime shared name is informational,
+not a conflict.
 
 ### Settings
 

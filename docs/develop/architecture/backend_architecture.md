@@ -50,7 +50,9 @@ removal, discovery deduplication, and lock coordination.
 
 Owns runtime home resolution, conventional scan locations, plugin registry
 interpretation, bounded recursive traversal, frontmatter extraction, and
-definition metadata.
+definition metadata. It resolves the active Codex plugin cache version, applies
+Codex per-Skill disable entries, applies Claude file-setting precedence, and
+computes a normalized local content hash without returning definition bodies.
 
 ### `runtime-connections.mjs`
 
@@ -266,13 +268,17 @@ concurrent processes coordinate with an exclusive lock file. A lock older than
 
 - global Agents, Codex, Claude Code, legacy Claude commands, and Cursor folders;
 - project-local `.agents`, `.codex`, `.claude`, and `.cursor` folders;
-- Codex plugin caches registered under the Codex home;
+- active Codex plugin caches registered under the Codex home (`local` first,
+  otherwise the highest installed version);
 - Claude installed plugin Skill and command folders that apply to the current project.
 
 ### Metadata
 
 Each result contains Skill ID, version, runtime, source, path, kind, provider,
-enabled state, optional description, and optional tags.
+enabled state, optional disabled reason, normalized SHA-256 content hash,
+optional description, and optional tags. The hash removes a UTF-8 BOM and
+normalizes line endings before hashing; Skill contents do not cross the scan
+API.
 
 ### Traversal safety
 
@@ -283,9 +289,12 @@ enabled state, optional description, and optional tags.
 
 ### Plugin enablement
 
-Codex plugin state is read from `config.toml`. Claude plugin installations are
-read from `installed_plugins.json`, while effective user/project settings
-determine enabled state.
+Codex plugin and `[[skills.config]]` state are read from `config.toml`. A
+disabled plugin cannot be re-enabled by a per-Skill entry. Claude plugin
+installations are read from `installed_plugins.json`; user, project, local, and
+file-managed settings are applied in increasing precedence. Non-file managed
+Claude policy is outside scanner visibility and must be verified with the
+runtime.
 
 ## 8. Codex Desktop ingestion
 

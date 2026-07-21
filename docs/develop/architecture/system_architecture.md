@@ -110,7 +110,7 @@ Registry opens or user clicks Scan again
   → POST /api/scan
   → scanner resolves runtime homes and plugin registries
   → recursively finds SKILL.md and legacy command Markdown
-  → reads frontmatter metadata
+  → reads frontmatter metadata, effective file-based enablement and normalized content hashes
   → returns definitions without writing execution evidence
 ```
 

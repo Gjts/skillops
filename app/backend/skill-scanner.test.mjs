@@ -43,6 +43,70 @@ describe('installed Skill scanner', () => {
     }))
   })
 
+  it('respects Codex per-Skill configuration and reports why a definition is disabled', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'skillops-codex-skill-config-'))
+    temporaryDirectories.push(home)
+    const codexHome = path.join(home, '.codex')
+    const claudeHome = path.join(home, '.claude')
+    const project = path.join(home, 'project')
+    const disabledSkill = path.join(home, '.agents/skills/disabled-review/SKILL.md')
+    const enabledSkill = path.join(home, '.agents/skills/enabled-review/SKILL.md')
+    await mkdir(path.dirname(disabledSkill), { recursive: true })
+    await mkdir(path.dirname(enabledSkill), { recursive: true })
+    await mkdir(codexHome, { recursive: true })
+    await writeFile(disabledSkill, '---\nname: disabled-review\n---\n', 'utf8')
+    await writeFile(enabledSkill, '---\nname: enabled-review\n---\n', 'utf8')
+    await writeFile(path.join(codexHome, 'config.toml'), [
+      '[[skills.config]]',
+      `path = ${JSON.stringify(disabledSkill)}`,
+      'enabled = false',
+      '',
+      '[[skills.config]]',
+      `path = ${JSON.stringify(enabledSkill)}`,
+      'enabled = false',
+      '',
+      '[[skills.config]]',
+      `path = ${JSON.stringify(enabledSkill)}`,
+      'enabled = true',
+      '',
+    ].join('\n'), 'utf8')
+
+    const skills = await scanInstalledSkills({ home, codexHome, claudeHome, project, runtime: 'codex' })
+    expect(skills).toContainEqual(expect.objectContaining({
+      skillId: 'disabled-review',
+      enabled: false,
+      disabledReason: 'skill-config',
+    }))
+    expect(skills).toContainEqual(expect.objectContaining({
+      skillId: 'enabled-review',
+      enabled: true,
+      disabledReason: undefined,
+    }))
+  })
+
+  it('combines plugin and per-Skill disabled reasons without allowing Skill config to enable a disabled plugin', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'skillops-codex-plugin-skill-config-'))
+    temporaryDirectories.push(home)
+    const codexHome = path.join(home, '.codex')
+    const claudeHome = path.join(home, '.claude')
+    const project = path.join(home, 'project')
+    const pluginSkill = path.join(codexHome, 'plugins/cache/openai-curated-remote/example/1.0.0/skills/review/SKILL.md')
+    await mkdir(path.dirname(pluginSkill), { recursive: true })
+    await writeFile(pluginSkill, '---\nname: review\n---\n', 'utf8')
+    await writeFile(path.join(codexHome, 'config.toml'), [
+      '[plugins."example@openai-curated"]',
+      'enabled = false',
+      '',
+      '[[skills.config]]',
+      `path = ${JSON.stringify(pluginSkill)}`,
+      'enabled = false',
+      '',
+    ].join('\n'), 'utf8')
+
+    const [skill] = await scanInstalledSkills({ home, codexHome, claudeHome, project, runtime: 'codex' })
+    expect(skill).toEqual(expect.objectContaining({ enabled: false, disabledReason: 'plugin-and-skill-config' }))
+  })
+
   it('scans active Claude Code plugin Skills from the installation registry', async () => {
     const home = await mkdtemp(path.join(tmpdir(), 'skillops-claude-plugin-scanner-'))
     temporaryDirectories.push(home)
@@ -81,6 +145,56 @@ describe('installed Skill scanner', () => {
     expect(skills.some((skill) => skill.skillId === 'project-only')).toBe(false)
   })
 
+  it('lets Claude project-local settings override shared and user plugin enablement', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'skillops-claude-local-settings-'))
+    temporaryDirectories.push(home)
+    const codexHome = path.join(home, '.codex')
+    const claudeHome = path.join(home, '.claude')
+    const project = path.join(home, 'project')
+    const pluginRoot = path.join(claudeHome, 'plugins/cache/official/review-tools/1.0.0')
+    const pluginSkill = path.join(pluginRoot, 'skills/review/SKILL.md')
+    await mkdir(path.dirname(pluginSkill), { recursive: true })
+    await mkdir(path.join(project, '.claude'), { recursive: true })
+    await mkdir(path.join(claudeHome, 'plugins'), { recursive: true })
+    await writeFile(pluginSkill, '---\nname: review\n---\n', 'utf8')
+    await writeFile(path.join(claudeHome, 'plugins/installed_plugins.json'), JSON.stringify({
+      plugins: { 'review-tools@official': [{ scope: 'user', installPath: pluginRoot, version: '1.0.0' }] },
+    }), 'utf8')
+    await writeFile(path.join(claudeHome, 'settings.json'), JSON.stringify({ enabledPlugins: { 'review-tools@official': true } }), 'utf8')
+    await writeFile(path.join(project, '.claude/settings.json'), JSON.stringify({ enabledPlugins: { 'review-tools@official': true } }), 'utf8')
+    await writeFile(path.join(project, '.claude/settings.local.json'), JSON.stringify({ enabledPlugins: { 'review-tools@official': false } }), 'utf8')
+
+    const [skill] = await scanInstalledSkills({ home, codexHome, claudeHome, project, runtime: 'claude-code' })
+    expect(skill).toEqual(expect.objectContaining({ enabled: false, disabledReason: 'plugin' }))
+  })
+
+  it('applies Claude file-managed plugin policy after local settings and ordered drop-ins', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'skillops-claude-managed-settings-'))
+    temporaryDirectories.push(home)
+    const codexHome = path.join(home, '.codex')
+    const claudeHome = path.join(home, '.claude')
+    const project = path.join(home, 'project')
+    const managed = path.join(home, 'managed-claude')
+    const pluginRoot = path.join(claudeHome, 'plugins/cache/official/review-tools/1.0.0')
+    const pluginSkill = path.join(pluginRoot, 'skills/review/SKILL.md')
+    await mkdir(path.dirname(pluginSkill), { recursive: true })
+    await mkdir(path.join(project, '.claude'), { recursive: true })
+    await mkdir(path.join(claudeHome, 'plugins'), { recursive: true })
+    await mkdir(path.join(managed, 'managed-settings.d'), { recursive: true })
+    await writeFile(pluginSkill, '---\nname: review\n---\n', 'utf8')
+    await writeFile(path.join(claudeHome, 'plugins/installed_plugins.json'), JSON.stringify({
+      plugins: { 'review-tools@official': [{ scope: 'user', installPath: pluginRoot, version: '1.0.0' }] },
+    }), 'utf8')
+    await writeFile(path.join(project, '.claude/settings.local.json'), JSON.stringify({ enabledPlugins: { 'review-tools@official': false } }), 'utf8')
+    await writeFile(path.join(managed, 'managed-settings.json'), JSON.stringify({ enabledPlugins: { 'review-tools@official': false } }), 'utf8')
+    await writeFile(path.join(managed, 'managed-settings.d/20-plugin-policy.json'), JSON.stringify({ enabledPlugins: { 'review-tools@official': true } }), 'utf8')
+
+    const [skill] = await scanInstalledSkills({
+      home, codexHome, claudeHome, project, runtime: 'claude-code', claudeManagedSettingsDirectory: managed,
+    })
+    expect(skill).toEqual(expect.objectContaining({ enabled: true }))
+  })
+
   it('only scans canonical Codex plugin skill directories', async () => {
     const home = await mkdtemp(path.join(tmpdir(), 'skillops-canonical-plugin-scanner-'))
     temporaryDirectories.push(home)
@@ -98,6 +212,35 @@ describe('installed Skill scanner', () => {
     const skills = await scanInstalledSkills({ home, codexHome, claudeHome, project, runtime: 'codex' })
     expect(skills.filter((skill) => skill.skillId === 'ponytail-review')).toHaveLength(1)
     expect(skills.find((skill) => skill.skillId === 'ponytail-review')?.sourcePath).toBe(canonical)
+  })
+
+  it('scans only the active Codex plugin version, preferring local over the highest version', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'skillops-active-plugin-version-'))
+    temporaryDirectories.push(home)
+    const codexHome = path.join(home, '.codex')
+    const claudeHome = path.join(home, '.claude')
+    const project = path.join(home, 'project')
+    const pluginBase = path.join(codexHome, 'plugins/cache/openai-curated-remote/review-tools')
+    const oldSkill = path.join(pluginBase, '1.9.0/skills/old-review/SKILL.md')
+    const prereleaseSkill = path.join(pluginBase, '1.10.0-beta.1/skills/prerelease-review/SKILL.md')
+    const currentSkill = path.join(pluginBase, '1.10.0/skills/current-review/SKILL.md')
+    await mkdir(path.dirname(oldSkill), { recursive: true })
+    await mkdir(path.dirname(prereleaseSkill), { recursive: true })
+    await mkdir(path.dirname(currentSkill), { recursive: true })
+    await writeFile(oldSkill, '---\nname: old-review\n---\n', 'utf8')
+    await writeFile(prereleaseSkill, '---\nname: prerelease-review\n---\n', 'utf8')
+    await writeFile(currentSkill, '---\nname: current-review\n---\n', 'utf8')
+
+    const versioned = await scanInstalledSkills({ home, codexHome, claudeHome, project, runtime: 'codex' })
+    expect(versioned.map((skill) => skill.skillId)).toEqual(['current-review'])
+    expect(versioned[0].skillVersion).toBe('1.10.0')
+
+    const localSkill = path.join(pluginBase, 'local/skills/local-review/SKILL.md')
+    await mkdir(path.dirname(localSkill), { recursive: true })
+    await writeFile(localSkill, '---\nname: local-review\n---\n', 'utf8')
+    const local = await scanInstalledSkills({ home, codexHome, claudeHome, project, runtime: 'codex' })
+    expect(local.map((skill) => skill.skillId)).toEqual(['local-review'])
+    expect(local[0].skillVersion).toBe('local')
   })
 
   it('discovers CC Switch symlinked Skills from its custom Claude directory', async () => {

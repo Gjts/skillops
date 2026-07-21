@@ -80,6 +80,8 @@ export interface InstalledSkill {
   provider: string
   kind: 'skill' | 'command'
   enabled: boolean
+  disabledReason?: 'plugin' | 'skill-config' | 'plugin-and-skill-config'
+  contentHash?: string
   description?: string
   tags?: string[]
 }

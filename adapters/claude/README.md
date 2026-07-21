@@ -56,6 +56,14 @@ The scanner covers both current Skill directories and legacy custom commands:
 
 When `CLAUDE_CONFIG_DIR` or CC Switch's `claude_config_dir` is set, global Skills, legacy commands, and `settings.json` are resolved beneath that directory. CC Switch-managed Skills are scanned from Claude Code's effective `skills` directory, including the links produced by CC Switch's `auto` and `symlink` synchronization modes. This avoids reporting an SSOT Skill as Claude-enabled before CC Switch has actually synchronized it.
 
+Plugin enablement follows Claude Code's file precedence: user
+`settings.json`, shared project `settings.json`, project
+`settings.local.json`, then system `managed-settings.json` and ordered
+`managed-settings.d/*.json` drop-ins. Server-managed settings, macOS/Windows
+MDM policy, and Windows registry policy are not exposed through the filesystem
+scanner; verify those sources with Claude Code `/status` when Dashboard and the
+runtime disagree.
+
 ## Privacy and performance
 
 SkillOps does not store prompt text, command arguments, tool inputs, tool outputs, transcripts, last assistant messages, or raw error details. It stores identifiers, timestamps, runtime metadata, lengths, lifecycle outcomes, and discovered Skill paths.

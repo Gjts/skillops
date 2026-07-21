@@ -3,6 +3,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import type { MessageKey } from '../i18n/messages'
 import { runtimeLabel } from '../lib/analytics'
+import { buildInventoryIssues, countInventoryIssues, definitionKey, issuesForDefinition, normalizedSkillId } from '../lib/skill-inventory'
 import type { InstalledSkill, Runtime, SkillEvent } from '../types'
 
 type AttentionFilter = 'all' | 'attention' | 'conflict' | 'duplicate' | 'disabled' | 'missing'
@@ -18,6 +19,12 @@ const issueLabel: Record<Exclude<AttentionFilter, 'all' | 'attention'>, MessageK
   duplicate: 'registry.duplicateDefinitions',
   disabled: 'common.disabled',
   missing: 'registry.missingMetadata',
+}
+
+const disabledReasonLabel: Record<NonNullable<InstalledSkill['disabledReason']>, MessageKey> = {
+  plugin: 'registry.disabledByPlugin',
+  'skill-config': 'registry.disabledBySkillConfig',
+  'plugin-and-skill-config': 'registry.disabledByPluginAndSkillConfig',
 }
 
 const runtimeOrder: Runtime[] = ['codex', 'claude-code', 'cursor']
@@ -58,6 +65,8 @@ function normalizeInstalledSkill(skill: Partial<InstalledSkill>): InstalledSkill
     provider: skill.provider ?? (source === 'project' ? 'Project' : runtimeLabel[runtime]),
     kind: skill.kind ?? 'skill',
     enabled: skill.enabled ?? true,
+    disabledReason: skill.disabledReason,
+    contentHash: skill.contentHash,
     description: skill.description,
     tags: skill.tags,
   }
@@ -138,9 +147,12 @@ export function RegistryPage({ events }: { events: SkillEvent[] }) {
 
   useEffect(() => { void scan() }, [scan])
 
-  const discovered = useMemo(() => [...new Map(events
-    .filter((event) => event.event === 'skill.discovered' && Boolean(event.skillId))
-    .map((event) => [`${event.runtime}:${event.skillId}:${event.sourcePath}`, fromEvent(event)])).values()], [events])
+  const discovered = useMemo(() => {
+    const definitions = events
+      .filter((event) => event.event === 'skill.discovered' && Boolean(event.skillId))
+      .map(fromEvent)
+    return [...new Map(definitions.map((definition) => [definitionKey(definition), definition])).values()]
+  }, [events])
 
   const rows = useMemo(() => [...(scannedSkills ?? discovered)], [discovered, scannedSkills])
   const allEnabledDefinitions = useMemo(() => rows.filter((row) => row.enabled), [rows])
@@ -150,59 +162,32 @@ export function RegistryPage({ events }: { events: SkillEvent[] }) {
     return {
       runtime,
       count: definitions.length,
-      unique: new Set(definitions.filter((row) => row.kind === 'skill').map((row) => row.skillId.toLowerCase())).size,
+      unique: new Set(definitions.filter((row) => row.kind === 'skill').map((row) => normalizedSkillId(row.skillId))).size,
       sources: countBy(definitions, sourceOrder, (row) => row.source),
     }
   }), [allEnabledDefinitions])
   const sharedSkillIds = useMemo(() => {
     const runtimeBySkill = new Map<string, Set<Runtime>>()
     allEnabledSkills.forEach((row) => {
-      const skillId = row.skillId.toLowerCase()
+      const skillId = normalizedSkillId(row.skillId)
       const runtimes = runtimeBySkill.get(skillId) ?? new Set<Runtime>()
       runtimes.add(row.runtime)
       runtimeBySkill.set(skillId, runtimes)
     })
     return new Set([...runtimeBySkill].filter(([, runtimes]) => runtimes.size > 1).map(([skillId]) => skillId))
   }, [allEnabledSkills])
-  const issueByDefinition = useMemo(() => {
-    const issues = new Map<string, Set<Exclude<AttentionFilter, 'all' | 'attention'>>>()
-    const definitionKey = (row: InstalledSkill) => `${row.runtime}:${row.skillId}:${row.sourcePath}`
-    const add = (row: InstalledSkill, issue: Exclude<AttentionFilter, 'all' | 'attention'>) => {
-      const key = definitionKey(row)
-      const current = issues.get(key) ?? new Set()
-      current.add(issue)
-      issues.set(key, current)
-    }
-    const byRuntimeSkill = new Map<string, InstalledSkill[]>()
-    rows.forEach((row) => {
-      const key = `${row.runtime}:${row.skillId.toLowerCase()}`
-      byRuntimeSkill.set(key, [...(byRuntimeSkill.get(key) ?? []), row])
-      if (!row.enabled) add(row, 'disabled')
-      if (row.sourcePath === 'Unknown location' || row.skillId === 'unknown-skill') add(row, 'missing')
-    })
-    byRuntimeSkill.forEach((definitions) => {
-      if (definitions.length > 1) definitions.forEach((row) => add(row, 'duplicate'))
-      if (new Set(definitions.map((row) => row.skillVersion)).size > 1) definitions.forEach((row) => add(row, 'conflict'))
-    })
-    return issues
-  }, [rows])
-  const issuesFor = (row: InstalledSkill) => issueByDefinition.get(`${row.runtime}:${row.skillId}:${row.sourcePath}`) ?? new Set()
-  const attentionCounts = useMemo(() => {
-    const definitions = rows.filter((row) => issueByDefinition.has(`${row.runtime}:${row.skillId}:${row.sourcePath}`))
-    return {
-      attention: definitions.length,
-      conflict: definitions.filter((row) => issuesFor(row).has('conflict')).length,
-      duplicate: definitions.filter((row) => issuesFor(row).has('duplicate')).length,
-      disabled: definitions.filter((row) => issuesFor(row).has('disabled')).length,
-      missing: definitions.filter((row) => issuesFor(row).has('missing')).length,
-    }
-  }, [issueByDefinition, rows])
+  const issueByDefinition = useMemo(() => buildInventoryIssues(rows), [rows])
+  const issuesFor = useCallback((row: InstalledSkill) => issuesForDefinition(issueByDefinition, row), [issueByDefinition])
+  const attentionCounts = useMemo(
+    () => countInventoryIssues(rows, issueByDefinition, runtimeFilter),
+    [issueByDefinition, rows, runtimeFilter],
+  )
   const scopeRows = useMemo(() => rows.filter((row) => runtimeFilter === 'all' || row.runtime === runtimeFilter), [rows, runtimeFilter])
   const enabledSkills = useMemo(() => scopeRows.filter((row) => row.kind === 'skill' && row.enabled), [scopeRows])
   const enabledDefinitions = useMemo(() => scopeRows.filter((row) => row.enabled), [scopeRows])
   const categoryDefinitions = useMemo(() => scopeRows.filter((row) =>
     (statusFilter === 'all' || (statusFilter === 'enabled' ? row.enabled : !row.enabled))), [scopeRows, statusFilter])
-  const uniqueSkills = useMemo(() => new Set(enabledSkills.map((row) => row.skillId.toLowerCase())).size, [enabledSkills])
+  const uniqueSkills = useMemo(() => new Set(enabledSkills.map((row) => normalizedSkillId(row.skillId))).size, [enabledSkills])
   const pluginSkills = useMemo(() => enabledSkills.filter((row) => row.source === 'plugin').length, [enabledSkills])
   const disabledSkills = useMemo(() => scopeRows.filter((row) => row.kind === 'skill' && !row.enabled).length, [scopeRows])
   const sourceCounts = useMemo(() => countBy(categoryDefinitions, sourceOrder, (row) => row.source), [categoryDefinitions])
@@ -224,7 +209,7 @@ export function RegistryPage({ events }: { events: SkillEvent[] }) {
       (!needle || `${row.skillId} ${row.provider} ${displayProvider(row.provider)} ${row.sourcePath}`.toLowerCase().includes(needle)))
       .sort((left, right) => runtimeOrder.indexOf(left.runtime) - runtimeOrder.indexOf(right.runtime) ||
         Number(right.enabled) - Number(left.enabled) || left.skillId.localeCompare(right.skillId) || left.sourcePath.localeCompare(right.sourcePath))
-  }, [attentionFilter, displayProvider, issueByDefinition, providerFilter, query, rows, runtimeFilter, sourceFilter, statusFilter])
+  }, [attentionFilter, displayProvider, issuesFor, providerFilter, query, rows, runtimeFilter, sourceFilter, statusFilter])
 
   const visibleRuntimeCounts = useMemo(() => new Map(runtimeOrder.map((runtime) => [runtime, filteredRows.filter((row) => row.runtime === runtime).length])), [filteredRows])
   const scopeLabel = runtimeFilter === 'all' ? t('registry.combined') : runtimeLabel[runtimeFilter]
@@ -332,7 +317,7 @@ export function RegistryPage({ events }: { events: SkillEvent[] }) {
                 const nomination = nominationStatus[`local-scan:${skill.runtime}:${skill.sourcePath}`]
                 return <Fragment key={`${skill.runtime}:${skill.skillId}:${skill.sourcePath}`}>
                   {runtimeFilter === 'all' && filteredRows[index - 1]?.runtime !== skill.runtime ? <tr className={`registry-runtime-group runtime-${skill.runtime}`}><th scope="rowgroup" colSpan={9}><span className="registry-runtime-badge"><RuntimeIcon runtime={skill.runtime} />{runtimeLabel[skill.runtime]}</span><strong>{t('registry.runtimeGroup', { runtime: runtimeLabel[skill.runtime], count: formatNumber(visibleRuntimeCounts.get(skill.runtime) ?? 0) })}</strong></th></tr> : null}
-                  <tr className={skill.enabled ? '' : 'is-disabled'}><td><span className="registry-skill-name"><strong>{skill.skillId}</strong>{runtimeFilter === 'all' && sharedSkillIds.has(skill.skillId.toLowerCase()) ? <span className="shared-skill">{t('registry.shared')}</span> : null}{[...issuesFor(skill)].map((issue) => <span className={`registry-issue ${issue}`} key={issue}>{t(issueLabel[issue])}</span>)}</span></td><td>{t(skill.kind === 'command' ? 'common.command' : 'common.skill')}</td><td><span className="version">{skill.skillVersion === 'unversioned' ? t('common.unversioned') : skill.skillVersion}</span></td><td><span className={`registry-runtime-badge runtime-${skill.runtime}`}><RuntimeIcon runtime={skill.runtime} />{runtimeLabel[skill.runtime]}</span></td><td>{t(sourceLabel[skill.source])}</td><td>{displayProvider(skill.provider)}</td><td className="mono source-path" title={skill.sourcePath}>{skill.sourcePath === 'Unknown location' ? t('common.unknownLocation') : skill.sourcePath}</td><td><span className={`registry-status ${skill.enabled ? '' : 'disabled'}`}>{skill.enabled ? <CheckCircle2 size={14} /> : <XCircle size={14} />}{t(skill.enabled ? 'common.enabled' : 'common.disabled')}</span></td><td><button className="button secondary registry-nominate" type="button" disabled={!skill.enabled || skill.kind !== 'skill' || skill.sourcePath === 'Unknown location' || nomination === 'busy' || nomination === 'done'} onClick={() => void nominate(skill)}><GitPullRequest size={13} />{t(nomination === 'done' ? 'registry.nominated' : nomination === 'busy' ? 'registry.nominating' : nomination === 'failed' ? 'registry.retryNomination' : 'registry.nominate')}</button></td></tr>
+                  <tr className={skill.enabled ? '' : 'is-disabled'}><td><span className="registry-skill-name"><strong>{skill.skillId}</strong>{runtimeFilter === 'all' && sharedSkillIds.has(normalizedSkillId(skill.skillId)) ? <span className="shared-skill">{t('registry.shared')}</span> : null}{[...issuesFor(skill)].map((issue) => <span className={`registry-issue ${issue}`} key={issue}>{t(issueLabel[issue])}</span>)}</span></td><td>{t(skill.kind === 'command' ? 'common.command' : 'common.skill')}</td><td><span className="version">{skill.skillVersion === 'unversioned' ? t('common.unversioned') : skill.skillVersion}</span></td><td><span className={`registry-runtime-badge runtime-${skill.runtime}`}><RuntimeIcon runtime={skill.runtime} />{runtimeLabel[skill.runtime]}</span></td><td>{t(sourceLabel[skill.source])}</td><td>{displayProvider(skill.provider)}</td><td className="mono source-path" title={skill.sourcePath}>{skill.sourcePath === 'Unknown location' ? t('common.unknownLocation') : skill.sourcePath}</td><td><span className={`registry-status ${skill.enabled ? '' : 'disabled'}`} title={!skill.enabled && skill.disabledReason ? t(disabledReasonLabel[skill.disabledReason]) : undefined}>{skill.enabled ? <CheckCircle2 size={14} /> : <XCircle size={14} />}{t(skill.enabled ? 'common.enabled' : 'common.disabled')}{!skill.enabled && skill.disabledReason ? <small>{t(disabledReasonLabel[skill.disabledReason])}</small> : null}</span></td><td><button className="button secondary registry-nominate" type="button" disabled={!skill.enabled || skill.kind !== 'skill' || skill.sourcePath === 'Unknown location' || nomination === 'busy' || nomination === 'done'} onClick={() => void nominate(skill)}><GitPullRequest size={13} />{t(nomination === 'done' ? 'registry.nominated' : nomination === 'busy' ? 'registry.nominating' : nomination === 'failed' ? 'registry.retryNomination' : 'registry.nominate')}</button></td></tr>
                 </Fragment>
               })}
               {!filteredRows.length ? <tr><td className="registry-empty" colSpan={9}>{scanStatus === 'scanning' ? t('registry.scanningLocations') : t('registry.noMatches')}</td></tr> : null}
