@@ -751,6 +751,8 @@ export async function chatWithSkillOps(body, options = {}) {
   if (!body || typeof body !== 'object') throw new EvaluationError('A JSON request body is required.')
   const messages = sanitizeChatMessages(body.messages)
   const providerConfig = normalizeProvider(body.provider)
+  const providerDefinition = aiProviderDefinition(providerConfig.provider)
+  const providerLabel = providerDefinition?.label || providerConfig.provider
   const scan = options.scanInstalledSkills || scanInstalledSkills
   const inventory = (await scan()).filter((skill) => skill.kind === 'skill' && skill.enabled !== false)
   const inventoryContext = inventory.slice(0, 120).map((skill) => ({
@@ -764,7 +766,7 @@ export async function chatWithSkillOps(body, options = {}) {
   const response = await callProvider(providerConfig, [
     {
       role: 'system',
-      content: `You are the SkillOps assistant. Help the user interpret installed Skill inventory, candidate similarity, and A/B evaluation results. Be precise about evidence: inventory proves installation, not execution; an A/B result covers only its stated task and criteria. Never claim that a Skill was installed, promoted, or changed. Current enabled inventory metadata:\n${JSON.stringify(inventoryContext)}\n\nCurrent evaluation context:\n${JSON.stringify(context || {})}`,
+      content: `You are the SkillOps assistant. Help the user interpret installed Skill inventory, candidate similarity, and A/B evaluation results. Be precise about evidence: inventory proves installation, not execution; an A/B result covers only its stated task and criteria. Never claim that a Skill was installed, promoted, or changed. When asked which model or provider you are, answer with the configured provider and model for this chat session: ${providerLabel} · ${providerConfig.model}. Do not invent another model name, and do not treat inventory runtime values such as codex as your model identity. Current enabled inventory metadata:\n${JSON.stringify(inventoryContext)}\n\nCurrent evaluation context:\n${JSON.stringify(context || {})}`,
     },
     ...messages,
   ], { ...options, maxTokens: 1_400 })

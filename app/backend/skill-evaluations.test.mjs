@@ -615,6 +615,25 @@ describe('AI provider and assistant boundaries', () => {
     expect(result.message).toContain('closest')
   })
 
+  it('tells the assistant which configured provider and model is serving the chat', async () => {
+    let systemPrompt = ''
+    await chatWithSkillOps({
+      provider: { provider: 'openai', apiKey: 'secret', model: 'gpt-test-identity' },
+      messages: [{ role: 'user', content: '你是什么模型' }],
+    }, {
+      scanInstalledSkills: async () => [],
+      callProvider: async (_provider, messages) => {
+        systemPrompt = messages[0].content
+        return { content: 'OpenAI · gpt-test-identity', usage: { totalTokens: 4 }, provider: 'openai', model: 'gpt-test-identity' }
+      },
+    })
+
+    expect(systemPrompt).toContain('OpenAI')
+    expect(systemPrompt).toContain('gpt-test-identity')
+    expect(systemPrompt).toMatch(/configured provider and model|model identity/i)
+    expect(systemPrompt).toMatch(/Do not invent|do not invent/i)
+  })
+
   it('rejects oversized nested assistant context', async () => {
     await expect(chatWithSkillOps({
       provider: { provider: 'openai', apiKey: 'secret', model: 'test-model' },
