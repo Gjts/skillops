@@ -156,16 +156,16 @@ request scores the outputs. The analyzed candidate's SHA-256 content hash is
 rechecked before either run. Results and generated outputs stay in browser
 memory; the workflow does not install, promote, deploy, or edit a Skill.
 
-OpenAI, Gemini, Anthropic, Azure OpenAI, Ollama, OpenRouter, MiniMax, GLM, and
-DeepSeek are supported. AI settings and API keys exist only in React page
-memory, are sent through the loopback server for the requested provider call,
-and are cleared by a reload or page close. Credentialed endpoints require
-HTTPS; keyless Ollama HTTP is limited to loopback. SkillOps never writes the
-key, evaluation task, acceptance criteria, chat messages, workspace excerpts,
-or model output to disk. User-initiated provider requests do send their stated
-content, and read-only agent mode may send requested allowed workspace excerpts,
-to the selected provider. Review allowed source for embedded sensitive data;
-the selected provider's own data policy still applies.
+OpenAI, Gemini, Anthropic, Azure OpenAI, Ollama, OpenRouter, MiniMax, GLM, and DeepSeek are supported. After **Save settings**, AI provider configuration
+including API keys is stored in the local SkillOps data directory as
+`ai-settings.json` and restored through loopback `GET`/`PUT /api/ai-settings`.
+Evaluation tasks, acceptance criteria, chat messages, workspace excerpts, and
+model output stay in memory and are not written to disk. Credentialed endpoints
+require HTTPS; keyless Ollama HTTP is limited to loopback. User-initiated
+provider requests do send their stated content, and read-only agent mode may
+send requested allowed workspace excerpts, to the selected provider. Review
+allowed source for embedded sensitive data; the selected provider's own data
+policy still applies.
 
 OpenAI-compatible transports also expose an explicit reasoning-effort control.
 GPT-5.6 Chat Completions agent runs require reasoning effort **None**; prompt-only

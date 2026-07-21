@@ -268,15 +268,16 @@ local baseline is accepted only when its exact path appears in the current
 enabled live scan; the frontend cannot use the evaluation interface to read an
 arbitrary local path.
 
-### FR-8 Memory-only AI evaluation
+### FR-8 Local AI evaluation settings
 
-AI credentials and settings use React page memory and are never written to
-browser storage. The local server may hold a key, task, Skill contents,
-requested workspace excerpts, generated output, or chat message only for the
-current request and must not append them to events, logs, backups, or another
-store. Credentialed endpoints require HTTPS; keyless Ollama HTTP is restricted
-to loopback. Evaluation results are task-specific evidence and never mutate
-lifecycle-event outcomes automatically.
+AI credentials and settings are saved only after an explicit Skill Lab Save into
+local `data/ai-settings.json` via loopback `GET`/`PUT /api/ai-settings`. They
+are never written to browser storage, events, logs, backups, or exports. The
+local server may hold a key, task, Skill contents, requested workspace excerpts,
+generated output, or chat message for the current request, but must not append
+evaluation content to another store. Credentialed endpoints require HTTPS;
+keyless Ollama HTTP is restricted to loopback. Evaluation results are
+task-specific evidence and never mutate lifecycle-event outcomes automatically.
 
 ### FR-9 Evaluation integrity and agent boundary
 

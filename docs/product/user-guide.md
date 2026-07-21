@@ -131,10 +131,10 @@ the in-memory conversation for the current page session.
 ### AI settings
 
 AI settings support OpenAI, Gemini, Anthropic, Azure OpenAI, Ollama,
-OpenRouter, MiniMax, GLM, and DeepSeek. Keys and settings exist only in React
-page memory, are sent through the loopback SkillOps server only for a requested
-call, and are removed by a reload or page close. They are not written to browser
-storage. Credentialed provider endpoints require HTTPS; keyless Ollama HTTP is
+OpenRouter, MiniMax, GLM, and DeepSeek. After you click **Save settings**,
+provider configuration including API keys is stored in the local SkillOps data
+directory as `ai-settings.json` and restored when Skill Lab reloads. Settings
+are not written to browser storage. Credentialed provider endpoints require HTTPS; keyless Ollama HTTP is
 accepted only on a loopback address. A custom Base URL receives the configured
 key, so use only an endpoint you trust. OpenAI-compatible transports expose
 `none`, `low`, `medium`, `high`, `xhigh`, and `max` reasoning efforts when the
@@ -217,8 +217,9 @@ SkillOps does not automatically upload the store. Backups created by clear are
 kept beside the active event file and must be removed manually if no longer
 needed.
 
-Skill Lab session state is separate from `data/events.jsonl`: AI credentials,
-tasks, chat messages, and generated output are not written there.
+Skill Lab evaluation content is separate from `data/events.jsonl`: tasks, chat
+messages, and generated output are not written there. Saved AI provider settings
+may exist beside that store in `data/ai-settings.json`.
 
 ## 8. Disconnect a runtime
 

@@ -11,7 +11,7 @@ The backend provides a small local interface for:
 - atomic import and recoverable clearing;
 - live installed-Skill inventory;
 - public GitHub candidate discovery and deterministic local comparison;
-- memory-only multi-provider A/B evaluation and assistant requests;
+- multi-provider A/B evaluation and assistant requests with optional local AI settings persistence;
 - Codex Desktop incremental ingestion;
 - runtime configuration health;
 - production SPA serving.
@@ -62,13 +62,22 @@ validation, and activity enrichment.
 Owns incremental parsing of recent Codex Desktop session records and conservative
 Skill path detection from actual file-read commands.
 
+### `ai-settings-store.mjs`
+
+Owns atomic read/write of Skill Lab AI provider settings under
+`SKILLOPS_DATA_DIR/ai-settings.json`. Missing or corrupt files fall back to
+catalog defaults. Writes validate known providers, field lengths, and reasoning
+effort values. Credentials are never written to the event store.
+
 ### `skill-evaluations.mjs`
 
 Owns bounded public GitHub `SKILL.md` discovery, local baseline allowlisting,
 deterministic similarity scoring, provider request normalization, blinded A/B
-judging, chat context minimization, and the three evaluation HTTP handlers.
-It validates optional reasoning effort, retries one transient GitHub read, and
-never writes credentials, tasks, prompts, or model responses to disk.
+judging, chat context minimization, evaluation HTTP handlers, and the
+`GET`/`PUT /api/ai-settings` routes. It validates optional reasoning effort,
+retries one transient GitHub read, and never writes tasks, prompts, or model
+responses to disk. Provider credentials may exist only in the current request
+or the explicit local AI settings file after Save.
 
 ### `evaluation-agent.mjs`
 
@@ -156,6 +165,19 @@ Performs Codex Desktop sync, reads effective runtime configuration, and returns:
 ]
 ```
 
+### `GET /api/ai-settings`
+
+Returns the normalized Skill Lab AI provider settings document, including API
+keys when previously saved. Missing files yield catalog defaults. Responses use
+`Cache-Control: no-store` and the same loopback browser guards as other Skill
+Lab routes, without requiring a JSON body.
+
+### `PUT /api/ai-settings`
+
+Accepts a full settings object, validates and merges it with catalog defaults,
+and atomically writes `ai-settings.json` under `SKILLOPS_DATA_DIR`. Body size is
+capped at 64 KB. Invalid fields return `400` without echoing secrets.
+
 ### `POST /api/evaluations/compare`
 
 Accepts a public GitHub URL and optional candidate path. The server discovers at
@@ -167,7 +189,7 @@ matches. Local Skill contents are not returned.
 
 Accepts a previously discovered candidate reference and SHA-256 content hash,
 an exact baseline path from the current live scan, one task, acceptance
-criteria, execution mode, and in-memory provider configuration. The backend
+criteria, execution mode, and request-scoped provider configuration. The backend
 re-downloads the candidate and rejects a changed hash. Baseline and candidate
 run sequentially in prompt-only mode or through bounded read-only workspace
 tools so concurrency-limited providers are supported; a final request judges
@@ -302,9 +324,12 @@ CC Switch configuration participates in Claude home resolution as documented in
 - Raw source/transcript/tool data is not part of the backend event interface.
 - Candidate discovery accepts only HTTPS `github.com` and
   `raw.githubusercontent.com` locations and rejects truncated/oversized inputs.
-- Provider credentials exist only in the current request. Custom HTTP(S) Base
-  URLs are allowed because local Ollama and compatible endpoints are a product
-  requirement; the UI warns that the chosen endpoint receives the key.
+- Provider credentials for Skill Lab may be stored in local
+  `data/ai-settings.json` after an explicit Save. They are still never written
+  to the event store, diagnostics, backups created for event clear, or exported
+  event JSON. Custom HTTP(S) Base URLs are allowed because local Ollama and
+  compatible endpoints are a product requirement; the UI warns that the chosen
+  endpoint receives the key.
 - Evaluation prompts, generated answers, judge rationales, and chat messages are
   returned in memory and are never appended to the event store or diagnostics.
 

@@ -37,14 +37,15 @@ flowchart LR
 Telemetry, inventory, and event-store arrows remain on the user's machine.
 Skill Lab adds two explicit user-initiated network boundaries: reading a public
 GitHub candidate and sending an evaluation/chat request to the configured LLM
-provider. Neither flow writes prompts, model output, or credentials to disk.
+provider. Prompts and model output are not written to disk. AI provider
+settings may be saved to local `data/ai-settings.json` after an explicit Save.
 
 ## 3. Repository modules
 
 | Module | Interface | Implementation responsibility |
 | --- | --- | --- |
-| `app/frontend/skillops` | Local HTTP responses, shared event types, provider catalog | Routing, rendering, filtering, analytics, import/export, Skill Lab and memory-only AI settings |
-| `app/backend` | Event, scan, connection, evaluation, and static-file behavior | JSONL persistence, scanning, desktop ingestion, config inspection, candidate comparison, bounded read-only agent tools, and provider calls |
+| `app/frontend/skillops` | Local HTTP responses, shared event types, provider catalog | Routing, rendering, filtering, analytics, import/export, Skill Lab and API-backed AI settings |
+| `app/backend` | Event, scan, connection, evaluation, and static-file behavior | JSONL persistence, AI settings file IO, scanning, desktop ingestion, config inspection, candidate comparison, bounded read-only agent tools, and provider calls |
 | `app/shared` | `normalizeEvent(s)` invariants and AI provider catalog | Event allowlist/types/enums/outcome normalization plus provider identity/default metadata shared by frontend and backend |
 | `adapters/codex` | Codex hook payload to normalized events | Install merge, signal detection, non-blocking hook execution |
 | `adapters/claude` | Claude hook payload to normalized events | Config resolution, install merge, exact/heuristic detection |
@@ -158,6 +159,8 @@ baseline only when the exact path is present in the current live scan.
 | `POST` | `/api/evaluations/compare` | Discover a public GitHub candidate and rank local overlaps |
 | `POST` | `/api/evaluations/run` | Run a hash-pinned, memory-only baseline/candidate A/B evaluation |
 | `POST` | `/api/assistant/chat` | Ask the configured provider using inventory/evaluation metadata |
+| `GET` | `/api/ai-settings` | Load saved Skill Lab AI provider settings |
+| `PUT` | `/api/ai-settings` | Persist Skill Lab AI provider settings locally |
 
 The Vite development middleware and production Node server implement the same
 application interface. Changes must be kept behaviorally aligned.
@@ -184,7 +187,7 @@ interfaces without independent deployment needs.
 | Discovery keys | Backend event store | `data/discovery-index.json` |
 | Runtime hook configuration | Host runtime | Codex/Claude config files |
 | Filter, page, modal state | Frontend | In-memory; page identity also in URL |
-| AI provider settings and API key | Frontend | React page memory only; cleared by reload/page close |
+| AI provider settings and API key | Backend AI settings store | `data/ai-settings.json` after explicit Save; loaded by Evaluations on mount |
 | Evaluation task, outputs, and chat | Frontend | In-memory only |
 | Demo dataset | Frontend | In-memory only when local event API is unavailable |
 | Production frontend | Build | `dist/`, ignored by Git |
