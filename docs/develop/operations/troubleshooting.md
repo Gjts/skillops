@@ -90,14 +90,16 @@ two labels are mutually exclusive. Disabled definitions remain visible but do
 not create either label.
 
 For Codex plugins, Registry scans only Codex's active cache version (`local`
-first, otherwise the highest version), so an obsolete cache directory is not a
+first, otherwise the highest valid semantic version; lexical maximum only when
+no valid semantic version exists), so an obsolete cache directory is not a
 second enabled definition. If a direct Codex Skill should remain installed but
-inactive, add its exact `SKILL.md` path under `[[skills.config]]` with
-`enabled = false` and rescan. For Claude plugin disagreement, compare
-`~/.claude/settings.json`, project `.claude/settings.json`,
-`.claude/settings.local.json`, and file-managed policy in that order. Use
-Claude `/status` for server-managed or MDM policy that the filesystem scanner
-cannot inspect.
+inactive, add its containing Skill directory under `[[skills.config]]` with
+`enabled = false` and rescan. The current trusted project's
+`.codex/config.toml` overrides matching user entries. For Claude plugin
+disagreement, compare `~/.claude/settings.json`, project
+`.claude/settings.json`, `.claude/settings.local.json`, and file-managed policy
+in that order. Use Claude `/status` for server-managed or MDM policy that the
+filesystem scanner cannot inspect.
 
 ## 6. Adapter says Not installed
 

@@ -158,7 +158,7 @@ follow that scope. Definitions are then categorized by:
 - provider;
 - enabled/disabled state;
 - kind: Skill or command;
-- attention issue: duplicate, version conflict, disabled, or missing metadata.
+- attention issue: duplicate definition, definition conflict, disabled, or missing metadata.
 
 Combined view inserts runtime group rows and marks Skill names present in more
 than one runtime as shared.

@@ -48,8 +48,10 @@ This removes handlers containing the `skillops-codex-hook` marker and leaves eve
 
 Adapter failures are swallowed so telemetry never blocks Codex. Diagnostics, if any, go to `data/codex-adapter-errors.log`.
 
-The inventory scanner also reads `[[skills.config]]` entries from the effective
-Codex home's `config.toml`. A definition whose exact `SKILL.md` path is set to
-`enabled = false` remains visible in Registry as disabled and does not create a
-duplicate or conflict. For plugin Skills, a disabled plugin always wins over a
-per-Skill `enabled = true` entry.
+The inventory scanner merges plugin and `[[skills.config]]` entries from the
+effective Codex home's `config.toml`, then the current trusted project's
+`.codex/config.toml`; project entries win. A definition whose normalized Skill
+directory (the folder containing `SKILL.md`) is set to `enabled = false`
+remains visible in Registry as disabled and does not create a duplicate or
+conflict. A disabled plugin always wins over a per-Skill `enabled = true`
+entry.

@@ -46,6 +46,11 @@ describe('SkillOps internationalization', () => {
     }
   })
 
+  it('keeps the English registry duplicate and conflict explanatory copy stable', () => {
+    expect(messages['registry.conflictNote'].en).toBe('enabled definitions with the same runtime and name but different content hashes; historical rows without hashes use different exact versions')
+    expect(messages['registry.duplicateNote'].en).toBe('enabled definitions with the same runtime, name, and content hash; historical rows without hashes use the same exact version')
+  })
+
   it('restores the saved language and persists later changes', () => {
     window.localStorage.setItem('skillops.locale.v1', 'zh')
     render(<I18nProvider><LanguageProbe /></I18nProvider>)

@@ -2593,7 +2593,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .registry-table td { height: 39px; }
 .registry-table td strong { font-weight: 550; }
 .registry-table .source-path { max-width: 360px; color: var(--muted); font-size: 8.5px; }
-.registry-table tr.is-disabled { opacity: .56; }
+.registry-table tr.is-disabled { background: var(--surface-sunken); }
 .registry-runtime-group th { height: 34px; padding: 0 10px; color: var(--text); border-top: 1px solid var(--border); border-bottom-color: var(--border); background: var(--surface-2); }
 .registry-runtime-group th, .registry-runtime-group th > span { display: flex; align-items: center; }
 .registry-runtime-group th { gap: 10px; }
@@ -2611,7 +2611,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .registry-issue.missing { color: var(--red); border-color: var(--red-border); background: var(--red-soft); }
 .registry-status { display: inline-flex; align-items: center; gap: 5px; color: var(--green); font-size: 9px; }
 .registry-status.disabled { color: var(--muted); }
-.registry-status small { font: inherit; opacity: .78; white-space: nowrap; }
+.registry-status small { font: inherit; white-space: nowrap; }
 .registry-nominate { min-width: 88px; height: 27px; padding: 0 8px; font-size: 8px; }
 .registry-empty { height: 90px !important; color: var(--muted); text-align: center !important; }
 .spin-once { animation: spin .55s ease; }

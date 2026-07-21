@@ -269,7 +269,8 @@ concurrent processes coordinate with an exclusive lock file. A lock older than
 - global Agents, Codex, Claude Code, legacy Claude commands, and Cursor folders;
 - project-local `.agents`, `.codex`, `.claude`, and `.cursor` folders;
 - active Codex plugin caches registered under the Codex home (`local` first,
-  otherwise the highest installed version);
+  otherwise the highest valid semantic version; lexical maximum only when no
+  valid semantic version exists);
 - Claude installed plugin Skill and command folders that apply to the current project.
 
 ### Metadata
@@ -289,12 +290,15 @@ API.
 
 ### Plugin enablement
 
-Codex plugin and `[[skills.config]]` state are read from `config.toml`. A
-disabled plugin cannot be re-enabled by a per-Skill entry. Claude plugin
-installations are read from `installed_plugins.json`; user, project, local, and
-file-managed settings are applied in increasing precedence. Non-file managed
-Claude policy is outside scanner visibility and must be verified with the
-runtime.
+Codex plugin and `[[skills.config]]` state are merged from the user
+`config.toml`, then the current trusted project's `.codex/config.toml`.
+Per-Skill paths identify the directory containing `SKILL.md`; project entries
+override user entries, but a disabled plugin cannot be re-enabled by a
+per-Skill entry. Claude plugin installations are read from
+`installed_plugins.json`; settings apply in increasing precedence from user,
+project, and local files to system `managed-settings.json`, then alphabetically
+ordered `managed-settings.d/*.json` drop-ins. Non-file managed Claude policy is
+outside scanner visibility and must be verified with the runtime.
 
 ## 8. Codex Desktop ingestion
 

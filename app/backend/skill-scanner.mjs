@@ -86,13 +86,13 @@ async function pluginSettings(configFile) {
     const settings = new Map()
     let plugin
     for (const line of contents.split(/\r?\n/)) {
-      const section = line.match(/^\s*\[plugins\."([^"]+)"\]\s*$/)
+      const section = line.match(/^\s*\[plugins\."([^"]+)"\]\s*(?:#.*)?$/)
       if (section) {
         plugin = section[1]
         continue
       }
       if (/^\s*\[/.test(line)) plugin = undefined
-      const enabled = line.match(/^\s*enabled\s*=\s*(true|false)\s*$/)
+      const enabled = line.match(/^\s*enabled\s*=\s*(true|false)\s*(?:#.*)?$/)
       if (plugin && enabled) settings.set(plugin, enabled[1] === 'true')
     }
     return settings
@@ -115,11 +115,13 @@ async function jsonFiles(directory) {
 }
 
 function parseSemver(value) {
-  const match = value.match(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/)
+  const match = value.match(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/)
   if (!match) return undefined
+  const prerelease = match[4]?.split('.')
+  if (prerelease?.some((identifier) => /^\d+$/.test(identifier) && identifier.length > 1 && identifier.startsWith('0'))) return undefined
   return {
     core: match.slice(1, 4).map(Number),
-    prerelease: match[4]?.split('.'),
+    prerelease,
   }
 }
 
@@ -155,7 +157,9 @@ function comparePluginVersions(left, right) {
 function activePluginVersion(versionDirectories) {
   const local = versionDirectories.find((directory) => directory.name === 'local')
   if (local) return local
-  return versionDirectories.sort((left, right) => comparePluginVersions(left.name, right.name)).at(-1)
+  const semverDirectories = versionDirectories.filter((directory) => parseSemver(directory.name))
+  const candidates = semverDirectories.length ? semverDirectories : versionDirectories
+  return candidates.sort((left, right) => comparePluginVersions(left.name, right.name)).at(-1)
 }
 
 function contentHash(text) {
@@ -208,6 +212,14 @@ async function codexSkillSettings(configFile) {
     if (error?.code === 'ENOENT' || error?.code === 'EACCES') return new Map()
     throw error
   }
+}
+
+async function mergedSettings(configFiles, reader) {
+  const settings = new Map()
+  for (const configFile of configFiles) {
+    for (const [key, enabled] of await reader(configFile)) settings.set(key, enabled)
+  }
+  return settings
 }
 
 async function codexPluginLocations(pluginCache, settings) {
@@ -302,10 +314,13 @@ export async function scanInstalledSkills(options = {}) {
   const codexHome = options.codexHome || process.env.CODEX_HOME || path.join(home, '.codex')
   const claudeHome = await resolveClaudeHome({ ...options, home })
   const pluginCache = path.join(codexHome, 'plugins/cache')
-  const codexConfig = path.join(codexHome, 'config.toml')
+  const codexConfigs = [
+    path.join(codexHome, 'config.toml'),
+    path.join(project, '.codex/config.toml'),
+  ]
   const [installedPlugins, configuredSkills] = await Promise.all([
-    pluginSettings(codexConfig),
-    codexSkillSettings(codexConfig),
+    mergedSettings(codexConfigs, pluginSettings),
+    mergedSettings(codexConfigs, codexSkillSettings),
   ])
   const locations = [
     { directory: path.join(home, '.agents/skills'), runtime: 'codex', source: 'global', kind: 'skill', provider: 'Agents', enabled: true },
@@ -340,7 +355,7 @@ export async function scanInstalledSkills(options = {}) {
         throw error
       }
       const skillSetting = location.runtime === 'codex' && location.kind === 'skill'
-        ? configuredSkills.get(pathKey(file))
+        ? configuredSkills.get(pathKey(path.dirname(file)))
         : undefined
       const enabled = location.enabled && skillSetting !== false
       const disabledReason = !enabled

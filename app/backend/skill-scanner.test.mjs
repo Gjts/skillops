@@ -58,15 +58,15 @@ describe('installed Skill scanner', () => {
     await writeFile(enabledSkill, '---\nname: enabled-review\n---\n', 'utf8')
     await writeFile(path.join(codexHome, 'config.toml'), [
       '[[skills.config]]',
-      `path = ${JSON.stringify(disabledSkill)}`,
+      `path = ${JSON.stringify(path.dirname(disabledSkill))}`,
       'enabled = false',
       '',
       '[[skills.config]]',
-      `path = ${JSON.stringify(enabledSkill)}`,
+      `path = ${JSON.stringify(path.dirname(enabledSkill))}`,
       'enabled = false',
       '',
       '[[skills.config]]',
-      `path = ${JSON.stringify(enabledSkill)}`,
+      `path = ${JSON.stringify(path.dirname(enabledSkill))}`,
       'enabled = true',
       '',
     ].join('\n'), 'utf8')
@@ -90,23 +90,68 @@ describe('installed Skill scanner', () => {
     const codexHome = path.join(home, '.codex')
     const claudeHome = path.join(home, '.claude')
     const project = path.join(home, 'project')
-    const pluginSkill = path.join(codexHome, 'plugins/cache/openai-curated-remote/example/1.0.0/skills/review/SKILL.md')
-    await mkdir(path.dirname(pluginSkill), { recursive: true })
-    await writeFile(pluginSkill, '---\nname: review\n---\n', 'utf8')
+    const pluginAndSkillConfig = path.join(codexHome, 'plugins/cache/openai-curated-remote/example/1.0.0/skills/review/SKILL.md')
+    const pluginOnlySkill = path.join(codexHome, 'plugins/cache/openai-curated-remote/example/1.0.0/skills/plugin-only-review/SKILL.md')
+    await mkdir(path.dirname(pluginAndSkillConfig), { recursive: true })
+    await mkdir(path.dirname(pluginOnlySkill), { recursive: true })
+    await writeFile(pluginAndSkillConfig, '---\nname: review\n---\n', 'utf8')
+    await writeFile(pluginOnlySkill, '---\nname: plugin-only-review\n---\n', 'utf8')
     await writeFile(path.join(codexHome, 'config.toml'), [
       '[plugins."example@openai-curated"]',
       'enabled = false',
       '',
       '[[skills.config]]',
-      `path = ${JSON.stringify(pluginSkill)}`,
+      `path = ${JSON.stringify(path.dirname(pluginAndSkillConfig))}`,
+      'enabled = false',
+      '',
+      '[[skills.config]]',
+      `path = ${JSON.stringify(path.dirname(pluginOnlySkill))}`,
+      'enabled = true',
+      '',
+    ].join('\n'), 'utf8')
+
+    const skills = await scanInstalledSkills({ home, codexHome, claudeHome, project, runtime: 'codex' })
+    expect(skills).toContainEqual(expect.objectContaining({ skillId: 'review', enabled: false, disabledReason: 'plugin-and-skill-config' }))
+    expect(skills).toContainEqual(expect.objectContaining({ skillId: 'plugin-only-review', enabled: false, disabledReason: 'plugin' }))
+  })
+
+
+  it('lets trusted Codex project config override user plugin and per-Skill enablement', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'skillops-codex-project-config-'))
+    temporaryDirectories.push(home)
+    const codexHome = path.join(home, '.codex')
+    const claudeHome = path.join(home, '.claude')
+    const project = path.join(home, 'project')
+    const pluginSkill = path.join(codexHome, 'plugins/cache/openai-curated-remote/review-tools/1.0.0/skills/plugin-review/SKILL.md')
+    const directSkill = path.join(codexHome, 'skills/direct-review/SKILL.md')
+    await mkdir(path.dirname(pluginSkill), { recursive: true })
+    await mkdir(path.dirname(directSkill), { recursive: true })
+    await mkdir(path.join(project, '.codex'), { recursive: true })
+    await writeFile(pluginSkill, '---\nname: plugin-review\n---\n', 'utf8')
+    await writeFile(directSkill, '---\nname: direct-review\n---\n', 'utf8')
+    await writeFile(path.join(codexHome, 'config.toml'), [
+      '[plugins."review-tools@openai-curated"]',
+      'enabled = true',
+      '',
+      '[[skills.config]]',
+      `path = ${JSON.stringify(path.dirname(directSkill))}`,
+      'enabled = true',
+      '',
+    ].join('\n'), 'utf8')
+    await writeFile(path.join(project, '.codex/config.toml'), [
+      '[plugins."review-tools@openai-curated"] # trusted project override',
+      'enabled = false # disable for this project',
+      '',
+      '[[skills.config]]',
+      `path = ${JSON.stringify(path.dirname(directSkill))}`,
       'enabled = false',
       '',
     ].join('\n'), 'utf8')
 
-    const [skill] = await scanInstalledSkills({ home, codexHome, claudeHome, project, runtime: 'codex' })
-    expect(skill).toEqual(expect.objectContaining({ enabled: false, disabledReason: 'plugin-and-skill-config' }))
+    const skills = await scanInstalledSkills({ home, codexHome, claudeHome, project, runtime: 'codex' })
+    expect(skills).toContainEqual(expect.objectContaining({ skillId: 'plugin-review', enabled: false, disabledReason: 'plugin' }))
+    expect(skills).toContainEqual(expect.objectContaining({ skillId: 'direct-review', enabled: false, disabledReason: 'skill-config' }))
   })
-
   it('scans active Claude Code plugin Skills from the installation registry', async () => {
     const home = await mkdtemp(path.join(tmpdir(), 'skillops-claude-plugin-scanner-'))
     temporaryDirectories.push(home)
@@ -241,6 +286,50 @@ describe('installed Skill scanner', () => {
     const local = await scanInstalledSkills({ home, codexHome, claudeHome, project, runtime: 'codex' })
     expect(local.map((skill) => skill.skillId)).toEqual(['local-review'])
     expect(local[0].skillVersion).toBe('local')
+  })
+
+  it('chooses valid SemVer Codex plugin versions before invalid directory names', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'skillops-mixed-plugin-version-'))
+    temporaryDirectories.push(home)
+    const codexHome = path.join(home, '.codex')
+    const claudeHome = path.join(home, '.claude')
+    const project = path.join(home, 'project')
+    const pluginCache = path.join(codexHome, 'plugins/cache/openai-curated-remote')
+    const invalidFirstInvalid = path.join(pluginCache, 'invalid-first', '11x/skills/invalid-first-bad/SKILL.md')
+    const invalidFirstValid = path.join(pluginCache, 'invalid-first', '10.0.0/skills/invalid-first-good/SKILL.md')
+    const validFirstValid = path.join(pluginCache, 'valid-first', '10.0.0/skills/valid-first-good/SKILL.md')
+    const validFirstInvalid = path.join(pluginCache, 'valid-first', '11x/skills/valid-first-bad/SKILL.md')
+    const lexicalOld = path.join(pluginCache, 'lexical-only', 'alpha/skills/lexical-alpha/SKILL.md')
+    const lexicalNew = path.join(pluginCache, 'lexical-only', 'zulu/skills/lexical-zulu/SKILL.md')
+    const semverShapedValid = path.join(pluginCache, 'semver-shaped-invalid', '10.0.0/skills/semver-shaped-good/SKILL.md')
+    const leadingZeroPrerelease = path.join(pluginCache, 'semver-shaped-invalid', '11.0.0-01/skills/leading-zero-bad/SKILL.md')
+    const emptyPrereleaseIdentifier = path.join(pluginCache, 'semver-shaped-invalid', '12.0.0-alpha..1/skills/empty-identifier-bad/SKILL.md')
+    await mkdir(path.dirname(invalidFirstInvalid), { recursive: true })
+    await mkdir(path.dirname(invalidFirstValid), { recursive: true })
+    await mkdir(path.dirname(validFirstValid), { recursive: true })
+    await mkdir(path.dirname(validFirstInvalid), { recursive: true })
+    await mkdir(path.dirname(lexicalOld), { recursive: true })
+    await mkdir(path.dirname(lexicalNew), { recursive: true })
+    await mkdir(path.dirname(semverShapedValid), { recursive: true })
+    await mkdir(path.dirname(leadingZeroPrerelease), { recursive: true })
+    await mkdir(path.dirname(emptyPrereleaseIdentifier), { recursive: true })
+    await writeFile(invalidFirstInvalid, '---\nname: invalid-first-bad\n---\n', 'utf8')
+    await writeFile(invalidFirstValid, '---\nname: invalid-first-good\n---\n', 'utf8')
+    await writeFile(validFirstValid, '---\nname: valid-first-good\n---\n', 'utf8')
+    await writeFile(validFirstInvalid, '---\nname: valid-first-bad\n---\n', 'utf8')
+    await writeFile(lexicalOld, '---\nname: lexical-alpha\n---\n', 'utf8')
+    await writeFile(lexicalNew, '---\nname: lexical-zulu\n---\n', 'utf8')
+    await writeFile(semverShapedValid, '---\nname: semver-shaped-good\n---\n', 'utf8')
+    await writeFile(leadingZeroPrerelease, '---\nname: leading-zero-bad\n---\n', 'utf8')
+    await writeFile(emptyPrereleaseIdentifier, '---\nname: empty-identifier-bad\n---\n', 'utf8')
+
+    const skills = await scanInstalledSkills({ home, codexHome, claudeHome, project, runtime: 'codex' })
+    expect(skills).toContainEqual(expect.objectContaining({ skillId: 'invalid-first-good', skillVersion: '10.0.0' }))
+    expect(skills).toContainEqual(expect.objectContaining({ skillId: 'valid-first-good', skillVersion: '10.0.0' }))
+    expect(skills).toContainEqual(expect.objectContaining({ skillId: 'lexical-zulu', skillVersion: 'zulu' }))
+    expect(skills).toContainEqual(expect.objectContaining({ skillId: 'semver-shaped-good', skillVersion: '10.0.0' }))
+    expect(skills.some((skill) => skill.skillId.endsWith('-bad'))).toBe(false)
+    expect(skills.some((skill) => skill.skillId === 'lexical-alpha')).toBe(false)
   })
 
   it('discovers CC Switch symlinked Skills from its custom Claude directory', async () => {

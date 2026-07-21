@@ -13,7 +13,7 @@ Implementation verification snapshot (2026-07-21):
   `main@8e7de18ba2f9efbc67ec1a1aabfc2989690d4537`;
 - Node `v24.18.0`, npm `11.5.2`;
 - the pre-change baseline passed 181 tests, build, and production smoke;
-- the current expanded suite passes 268 tests, build, deterministic production
+- the current expanded suite passes 300 tests, build, deterministic production
   Promptfoo smoke, and CLI evidence verification;
 - the Local Prompt Registry passes real temporary-Git branch/version tests and
   the production governance/rollback smoke without an external account.
@@ -126,7 +126,7 @@ Status: implemented
 - [x] Unique enabled Skill versus enabled definition counts.
 - [x] Global/project/plugin and provider categories.
 - [x] Search and status filters.
-- [x] Duplicate, version conflict, disabled, and missing metadata filters.
+- [x] Duplicate definition, definition conflict, disabled, and missing metadata filters.
 - [x] Last-successful/discovery fallback when scan fails.
 
 Acceptance:
