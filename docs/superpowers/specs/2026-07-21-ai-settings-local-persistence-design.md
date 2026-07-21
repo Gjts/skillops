@@ -53,7 +53,7 @@ ${SKILLOPS_DATA_DIR}/ai-settings.json
 Default path when unset:
 
 ```text
-`<repo root>/data/ai-settings.json`
+<repo root>/data/ai-settings.json
 ```
 
 JSON shape:
