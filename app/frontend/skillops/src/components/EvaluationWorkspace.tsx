@@ -12,7 +12,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from 'lucide-react'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { activeProviderRequest, AI_PROVIDERS, createDefaultAiSettings, providerIsConfigured, type AiSettings } from '../lib/ai-settings'
 import { AiSettingsModal } from './AiSettingsModal'
 import { SkillOpsAssistantDrawer, type AssistantMessage } from './SkillOpsAssistantDrawer'
@@ -75,15 +75,19 @@ interface EvaluationResult {
   privacy: string
 }
 
+async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, init)
+  const result = await response.json() as T & { error?: string }
+  if (!response.ok) throw new Error(result.error || `Local API returned ${response.status}.`)
+  return result
+}
+
 async function postJson<T>(url: string, body: unknown): Promise<T> {
-  const response = await fetch(url, {
+  return readJson<T>(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  const result = await response.json() as T & { error?: string }
-  if (!response.ok) throw new Error(result.error || `Local API returned ${response.status}.`)
-  return result
 }
 
 function formatDuration(value: number) {
@@ -111,6 +115,19 @@ export function EvaluationWorkspace() {
   const [messages, setMessages] = useState<AssistantMessage[]>([
     { id: 'welcome', role: 'assistant', localOnly: true, content: 'Paste a public GitHub Skill URL. I can help you interpret its nearest local match and the A/B result without changing any installed Skill.' },
   ])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const loaded = await readJson<AiSettings>('/api/ai-settings')
+        if (!cancelled) setSettings(loaded)
+      } catch {
+        // Keep in-memory defaults when local settings are unavailable.
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
 
   const providerDefinition = AI_PROVIDERS.find((provider) => provider.id === settings.activeProvider)!
   const activeProvider = settings.providers[settings.activeProvider]
@@ -224,9 +241,20 @@ export function EvaluationWorkspace() {
     setAssistantOpen(false)
     setSettingsOpen(true)
   }, [])
-  const saveSettings = useCallback((next: AiSettings) => {
-    setSettings(next)
-    setSettingsOpen(false)
+  const saveSettings = useCallback(async (next: AiSettings) => {
+    try {
+      const saved = await readJson<AiSettings>('/api/ai-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(next),
+      })
+      setSettings(saved)
+      setError(null)
+      setSettingsOpen(false)
+    } catch (problem) {
+      setError(problem instanceof Error ? problem.message : 'Failed to save AI settings.')
+      setSettingsOpen(true)
+    }
   }, [])
 
   return (
