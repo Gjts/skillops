@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { aiProviderDefinition } from '../shared/ai-provider-catalog.mjs'
 import { runEvaluationAgent } from './evaluation-agent.mjs'
+import { AiSettingsError, readAiSettings, writeAiSettings } from './ai-settings-store.mjs'
 import { scanInstalledSkills } from './skill-scanner.mjs'
 
 const MAX_SKILL_BYTES = 256_000
@@ -13,6 +14,7 @@ const MAX_CHAT_MESSAGE_CHARS = 8_000
 const MAX_GITHUB_JSON_BYTES = 8_000_000
 const MAX_PROVIDER_RESPONSE_BYTES = 4_000_000
 const MAX_EVALUATION_REQUEST_BYTES = 512_000
+const MAX_AI_SETTINGS_REQUEST_BYTES = 64_000
 const REQUEST_TIMEOUT_MS = 120_000
 const REASONING_EFFORTS = new Set(['none', 'low', 'medium', 'high', 'xhigh', 'max'])
 
@@ -665,7 +667,7 @@ export async function runSkillABTest(body, options = {}) {
     baseline: resultSummary(baselineRun, baselineScore, baseline, baselineDuration),
     candidate: resultSummary(candidateRun, candidateScore, remote.definition, candidateDuration),
     judge: { tokens: judge.usage.totalTokens, provider: judge.provider, model: judge.model },
-    privacy: 'Task text, acceptance criteria, generated answers, and API credentials were not written to disk by SkillOps.',
+    privacy: 'Task text, acceptance criteria, generated answers, and chat were not written to disk by SkillOps. Saved AI provider settings may exist in local data/ai-settings.json.',
   }
 }
 
@@ -781,7 +783,7 @@ function requestHeader(request, name) {
   return headers?.[name.toLowerCase()]
 }
 
-function assertLocalBrowserRequest(request) {
+function assertLocalBrowserRequest(request, { requireJsonBody = true } = {}) {
   if (!isLoopbackHostname(request.socket?.remoteAddress)) {
     throw new EvaluationError('Evaluation APIs accept loopback socket peers only.', 403)
   }
@@ -808,21 +810,22 @@ function assertLocalBrowserRequest(request) {
       throw new EvaluationError('Cross-origin evaluation requests are not allowed.', 403)
     }
   }
+  if (!requireJsonBody) return
   const contentType = requestHeader(request, 'content-type') || ''
   if (!/^application\/json(?:\s*;|$)/i.test(contentType)) throw new EvaluationError('Evaluation requests must use application/json.', 415)
 }
 
-async function readEvaluationJsonBody(request) {
+async function readJsonBody(request, maxBytes, limitLabel) {
   const declaredLength = Number(requestHeader(request, 'content-length'))
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_EVALUATION_REQUEST_BYTES) {
-    throw new EvaluationError('Evaluation request body exceeds the 512 KB limit.', 413)
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new EvaluationError(`Evaluation request body exceeds the ${limitLabel} limit.`, 413)
   }
   const chunks = []
   let total = 0
   for await (const chunk of request) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
     total += bytes.byteLength
-    if (total > MAX_EVALUATION_REQUEST_BYTES) throw new EvaluationError('Evaluation request body exceeds the 512 KB limit.', 413)
+    if (total > maxBytes) throw new EvaluationError(`Evaluation request body exceeds the ${limitLabel} limit.`, 413)
     chunks.push(bytes)
   }
   try {
@@ -832,7 +835,58 @@ async function readEvaluationJsonBody(request) {
   }
 }
 
+async function readEvaluationJsonBody(request) {
+  return readJsonBody(request, MAX_EVALUATION_REQUEST_BYTES, '512 KB')
+}
+
+async function readAiSettingsJsonBody(request) {
+  return readJsonBody(request, MAX_AI_SETTINGS_REQUEST_BYTES, '64 KB')
+}
+
+function evaluationHttpError(error) {
+  if (error instanceof EvaluationError || error instanceof AiSettingsError) {
+    return { status: error.status || 400, message: error.message }
+  }
+  if (typeof error?.status === 'number' && error.status >= 400 && error.status < 600) {
+    return { status: error.status, message: error instanceof Error ? error.message : 'Evaluation request failed' }
+  }
+  return { status: 500, message: error instanceof Error ? error.message : 'Evaluation request failed' }
+}
+
+
 export async function handleEvaluationApi(request, response, pathname, options = {}) {
+  const setJsonHeaders = () => {
+    response.setHeader('Content-Type', 'application/json; charset=utf-8')
+    response.setHeader('Cache-Control', 'no-store')
+    response.setHeader('X-Content-Type-Options', 'nosniff')
+  }
+
+  if (pathname === '/api/ai-settings') {
+    setJsonHeaders()
+    try {
+      if (request.method === 'GET') {
+        assertLocalBrowserRequest(request, { requireJsonBody: false })
+        const read = options.readAiSettings || readAiSettings
+        response.end(JSON.stringify(await read()))
+        return true
+      }
+      if (request.method === 'PUT') {
+        assertLocalBrowserRequest(request, { requireJsonBody: true })
+        const write = options.writeAiSettings || writeAiSettings
+        response.end(JSON.stringify(await write(await readAiSettingsJsonBody(request))))
+        return true
+      }
+      response.statusCode = 405
+      response.end(JSON.stringify({ error: 'Method not allowed' }))
+      return true
+    } catch (error) {
+      const mapped = evaluationHttpError(error)
+      response.statusCode = mapped.status
+      response.end(JSON.stringify({ error: mapped.message }))
+      return true
+    }
+  }
+
   const handlers = {
     '/api/evaluations/compare': analyzeCandidateSkill,
     '/api/evaluations/run': runSkillABTest,
@@ -840,9 +894,7 @@ export async function handleEvaluationApi(request, response, pathname, options =
   }
   const handler = handlers[pathname]
   if (!handler) return false
-  response.setHeader('Content-Type', 'application/json; charset=utf-8')
-  response.setHeader('Cache-Control', 'no-store')
-  response.setHeader('X-Content-Type-Options', 'nosniff')
+  setJsonHeaders()
   if (request.method !== 'POST') {
     response.statusCode = 405
     response.end(JSON.stringify({ error: 'Method not allowed' }))
@@ -852,8 +904,9 @@ export async function handleEvaluationApi(request, response, pathname, options =
     assertLocalBrowserRequest(request)
     response.end(JSON.stringify(await handler(await readEvaluationJsonBody(request), options)))
   } catch (error) {
-    response.statusCode = error instanceof EvaluationError ? error.status : 500
-    response.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Evaluation request failed' }))
+    const mapped = evaluationHttpError(error)
+    response.statusCode = mapped.status
+    response.end(JSON.stringify({ error: mapped.message }))
   }
   return true
 }

@@ -60,6 +60,36 @@ try {
   })
   if (invalidChatResponse.status !== 400) throw new Error('Evaluation assistant API did not reject an incomplete request.')
 
+  const aiSettingsGet = await fetch(`http://127.0.0.1:${port}/api/ai-settings`)
+  const aiSettings = await aiSettingsGet.json()
+  if (!aiSettingsGet.ok || !aiSettings.activeProvider || !aiSettings.providers) {
+    throw new Error('AI settings GET did not return persisted provider configuration.')
+  }
+
+  const aiSettingsPut = await fetch(`http://127.0.0.1:${port}/api/ai-settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      activeProvider: 'ollama',
+      providers: {
+        ollama: {
+          apiKey: '',
+          model: 'smoke-model',
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          reasoningEffort: '',
+        },
+      },
+    }),
+  })
+  const savedAiSettings = await aiSettingsPut.json()
+  if (!aiSettingsPut.ok || savedAiSettings.activeProvider !== 'ollama' || savedAiSettings.providers?.ollama?.model !== 'smoke-model') {
+    throw new Error('AI settings PUT did not persist provider configuration.')
+  }
+  const rawAiSettings = JSON.parse(await readFile(path.join(smokeData, 'ai-settings.json'), 'utf8'))
+  if (rawAiSettings.providers?.ollama?.model !== 'smoke-model') {
+    throw new Error('AI settings were not written under the smoke data directory.')
+  }
+
   const connectionsResponse = await fetch(`http://127.0.0.1:${port}/api/connections`)
   const connections = await connectionsResponse.json()
   if (!connectionsResponse.ok || !Array.isArray(connections) || !connections.some((item) => item.runtime === 'codex')) {
