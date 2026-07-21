@@ -101,10 +101,10 @@ describe('EvaluationWorkspace', () => {
     expect(screen.queryByRole('region', { name: 'Run a controlled A/B task' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Explain overlap' }))
 
-    const assistant = screen.getByRole('dialog', { name: /SkillOps assistant, Context: security-review/ })
+    const assistant = screen.getByRole('complementary', { name: /SkillOps assistant, Context: security-review/ })
     expect((within(assistant).getByRole('textbox', { name: 'Ask SkillOps' }) as HTMLTextAreaElement).value).toBe('Explain the overlap')
     fireEvent.click(within(assistant).getByRole('button', { name: 'Close SkillOps assistant' }))
-    expect(screen.queryByRole('dialog', { name: /SkillOps assistant/ })).toBeNull()
+    expect(screen.queryByRole('complementary', { name: /SkillOps assistant/ })).toBeNull()
   })
 
   it('keeps the baseline unselected until the user chooses it and labels its source path', async () => {
@@ -208,32 +208,31 @@ describe('EvaluationWorkspace', () => {
 
     trigger.focus()
     fireEvent.click(trigger)
-    expect(screen.getByRole('dialog', { name: 'SkillOps assistant, Waiting for a candidate' })).toBeTruthy()
+    expect(screen.getByRole('complementary', { name: 'SkillOps assistant, Waiting for a candidate' })).toBeTruthy()
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close SkillOps assistant' }))
 
     fireEvent.keyDown(window, { key: 'Escape' })
-    expect(screen.queryByRole('dialog', { name: /SkillOps assistant/ })).toBeNull()
+    expect(screen.queryByRole('complementary', { name: /SkillOps assistant/ })).toBeNull()
     expect(document.activeElement).toBe(trigger)
   })
 
-  it('lets the user resize the assistant drawer without dimming the workspace', () => {
+  it('docks the assistant beside the workspace and resizes both panes together', () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1600 })
-    render(<EvaluationWorkspace />)
+    const { container } = render(<EvaluationWorkspace />)
     fireEvent.click(screen.getByRole('button', { name: 'Ask SkillOps' }))
 
-    const dialog = screen.getByRole('dialog', { name: 'SkillOps assistant, Waiting for a candidate' })
-    const backdrop = dialog.parentElement
-    expect(backdrop?.className).toContain('assistant-drawer-backdrop')
-    const backdropBackground = getComputedStyle(backdrop!).backgroundColor
-    expect(backdropBackground === 'rgba(0, 0, 0, 0)' || backdropBackground === 'transparent').toBe(true)
+    const shell = container.querySelector('.evaluation-workspace-shell')
+    const panel = screen.getByRole('complementary', { name: 'SkillOps assistant, Waiting for a candidate' })
+    expect(shell?.className).toContain('assistant-open')
+    expect(panel.parentElement).toBe(shell)
 
-    const before = Number.parseInt(dialog.style.getPropertyValue('--assistant-drawer-width') || '420', 10)
+    const before = Number.parseInt(panel.style.getPropertyValue('--assistant-drawer-width') || '420', 10)
     const handle = screen.getByRole('button', { name: 'Resize SkillOps assistant' })
     fireEvent.pointerDown(handle, { button: 0, clientX: 1000, pointerId: 1 })
     fireEvent(window, new PointerEvent('pointermove', { clientX: 700, bubbles: true }))
     fireEvent(window, new PointerEvent('pointerup', { clientX: 700, bubbles: true }))
 
-    const after = Number.parseInt(dialog.style.getPropertyValue('--assistant-drawer-width') || '0', 10)
+    const after = Number.parseInt(panel.style.getPropertyValue('--assistant-drawer-width') || '0', 10)
     expect(after).toBeGreaterThan(before)
     expect(window.localStorage.getItem('skillops.assistant-drawer.width.v1')).toBe(String(after))
   })
@@ -279,7 +278,7 @@ describe('EvaluationWorkspace', () => {
     expect(screen.getByText(/higher-risk path/)).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Discuss result' }))
-    const assistant = screen.getByRole('dialog', { name: /SkillOps assistant, Context: security-review/ })
+    const assistant = screen.getByRole('complementary', { name: /SkillOps assistant, Context: security-review/ })
     fireEvent.click(within(assistant).getByRole('button', { name: 'What should I test next?' }))
     fireEvent.click(within(assistant).getByRole('button', { name: 'Send message' }))
     expect(await screen.findByText(/false-positive handling/)).toBeTruthy()

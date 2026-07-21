@@ -258,7 +258,8 @@ export function EvaluationWorkspace() {
   }, [])
 
   return (
-    <div className="single-page evaluation-workspace">
+    <div className={`evaluation-workspace-shell${assistantOpen ? ' assistant-open' : ''}`}>
+      <div className="single-page evaluation-workspace">
       <div className="evaluation-intro">
         <div><h2>Compare a new open-source Skill</h2><p>Discover overlap with enabled local Skills, then run both definitions against the same task and blind judge.</p></div>
         <div className="evaluation-intro-actions">
@@ -364,7 +365,9 @@ export function EvaluationWorkspace() {
             </section>
           )}
         </div>
+      </div>
 
+      <AiSettingsModal open={settingsOpen} settings={settings} onClose={closeSettings} onSave={saveSettings} />
       </div>
 
       <SkillOpsAssistantDrawer
@@ -382,8 +385,6 @@ export function EvaluationWorkspace() {
         onOpenSettings={openSettingsFromAssistant}
         onClose={closeAssistant}
       />
-
-      <AiSettingsModal open={settingsOpen} settings={settings} onClose={closeSettings} onSave={saveSettings} />
     </div>
   )
 }
