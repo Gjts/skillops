@@ -75,7 +75,8 @@ loopback binding, export, retention, and removal behavior.
 
 - Cloud accounts, team workspaces, synchronization, or remote runtime/event ingestion.
 - Persisting raw prompt text, transcripts, tool payloads, source code, model
-  output, evaluation tasks, chat messages, or credentials.
+  output, evaluation tasks, chat messages, or credentials outside the explicit
+  Skill Lab AI settings file.
 - Proving implicit Skill selection when the runtime exposes no observable signal.
 - Declaring task success from a normal lifecycle completion.
 - Installing, promoting, or deploying a Skill from Skill Lab.
