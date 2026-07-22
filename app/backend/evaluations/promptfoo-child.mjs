@@ -1,11 +1,13 @@
-import { parentPort, workerData } from 'node:worker_threads'
 import { runEvaluationAgent } from '../evaluation-agent.mjs'
 import { renderArtifactEvaluationPrompt } from './artifact-definition.mjs'
 import { blindJudgeMessages, stableBlindSwap } from './evaluation-judge.mjs'
+import { redactEvaluationText, redactEvaluationVariables } from './evaluation-redaction.mjs'
 import { createPromptfooProvider, encodePromptMessages } from './promptfoo-provider.mjs'
 import { buildPromptfooRedteamProbes } from './promptfoo-redteam-adapter.mjs'
 import { compilePromptfooSuite } from './promptfoo-runner.mjs'
 import { callLlmProvider } from './provider-client.mjs'
+
+let workerData
 
 async function runContractFixture(promptfoo) {
   const provider = {
@@ -47,11 +49,11 @@ function assertionCriteria(testCase) {
   return testCase.assertions.map((assertion) => `${assertion.label}: ${assertion.type}${assertion.value === undefined ? '' : ` ${JSON.stringify(assertion.value)}`}`).join('\n')
 }
 
-function fakeProvider(label, outputs) {
+function fakeProvider(label, outputs, outputKey = label) {
   return {
     id: () => `skillops:${label}`,
     async callApi(_prompt, context) {
-      const value = outputs?.[label]?.[context.vars.__skillopsCaseId]
+      const value = outputs?.[outputKey]?.[context.vars.__skillopsCaseId]
       if (!value || typeof value.output !== 'string') throw new Error('Missing deterministic fake output.')
       if (value.delayMs) await new Promise((resolve) => setTimeout(resolve, value.delayMs))
       return {
@@ -84,16 +86,49 @@ function providerResult(result, startedAt) {
   }
 }
 
-function artifactProvider(label, record, suite, settings, fakeOutputs, mode = 'prompt-only', criteriaOverride) {
-  if (fakeOutputs) return fakeProvider(label, fakeOutputs)
-  const bridge = createPromptfooProvider(settings)
-  const cases = new Map(suite.cases.map((testCase) => [testCase.id, testCase]))
+function redactProviderOutput(provider, rules) {
+  if (!rules?.length) return provider
   return {
+    id: () => provider.id(),
+    async callApi(...args) {
+      const result = await provider.callApi(...args)
+      return { ...result, output: redactEvaluationText(result.output, rules) }
+    },
+  }
+}
+
+function contentAuditResult(label, record, testCase) {
+  const contents = typeof record.contents === 'string' ? record.contents : JSON.stringify(record.prompt || {})
+  const output = []
+  for (const assertion of testCase.assertions) {
+    if (!['contains', 'icontains', 'not-contains', 'not-icontains'].includes(assertion.type) || typeof assertion.value !== 'string') {
+      throw new Error(`Content audit does not support ${assertion.type} assertions.`)
+    }
+    const insensitive = assertion.type.includes('icontains')
+    const haystack = insensitive ? contents.toLocaleLowerCase('en-US') : contents
+    const needle = insensitive ? assertion.value.toLocaleLowerCase('en-US') : assertion.value
+    if (haystack.includes(needle)) output.push(assertion.value)
+  }
+  return {
+    output: [...new Set(output)].join('\n'),
+    tokenUsage: { total: 1, prompt: 1, completion: 0 },
+    metadata: { skillopsTokenUsageReported: true, skillopsCostReported: false, contentAudit: label },
+  }
+}
+
+function artifactProvider(label, record, suite, settings, fakeOutputs, mode = 'prompt-only', criteriaOverride, contentAudit = false, outputKey = label) {
+  if (fakeOutputs) return redactProviderOutput(fakeProvider(label, fakeOutputs, outputKey), suite.redaction?.output)
+  const bridge = contentAudit ? null : createPromptfooProvider(settings)
+  const cases = new Map(suite.cases.map((testCase) => [testCase.id, testCase]))
+  const provider = {
     id: () => `skillops:${label}`,
     callApi(prompt, context) {
       const testCase = cases.get(context.vars.__skillopsCaseId)
       if (!testCase) throw new Error('Unknown managed Suite case.')
-      const messages = renderArtifactEvaluationPrompt(record, prompt, criteriaOverride || assertionCriteria(testCase), testCase.variables || {})
+      const task = prompt
+      const variables = redactEvaluationVariables(testCase.variables, suite.redaction?.input)
+      const messages = renderArtifactEvaluationPrompt(record, task, criteriaOverride || assertionCriteria(testCase), variables)
+      if (contentAudit) return contentAuditResult(label, record, testCase)
       if (mode === 'agent') {
         const startedAt = Date.now()
         return runEvaluationAgent(callLlmProvider, settings, messages, {
@@ -104,14 +139,21 @@ function artifactProvider(label, record, suite, settings, fakeOutputs, mode = 'p
       return bridge.callApi(encodePromptMessages(messages), context)
     },
   }
+  return redactProviderOutput(provider, suite.redaction?.output)
 }
 
 async function runManagedSuite(promptfoo, data) {
   const compiled = compilePromptfooSuite(data.suite)
-  const baseline = artifactProvider('baseline', data.baseline, data.suite, data.provider, data.fakeOutputs)
-  const candidate = artifactProvider('candidate', data.candidate, data.suite, data.provider, data.fakeOutputs)
+  const models = data.suite.matrix?.models || [{ id: null, model: data.provider.model }]
+  compiled.providers = models.flatMap(({ id, model }) => {
+    const prefix = id ? `matrix:${id}:` : ''
+    const settings = { ...data.provider, model }
+    return [
+      artifactProvider(`${prefix}baseline`, data.baseline, data.suite, settings, data.fakeOutputs, 'prompt-only', undefined, data.contentAudit, 'baseline'),
+      artifactProvider(`${prefix}candidate`, data.candidate, data.suite, settings, data.fakeOutputs, 'prompt-only', undefined, data.contentAudit, 'candidate'),
+    ]
+  })
   const judge = data.fakeOutputs ? null : createPromptfooProvider(data.provider)
-  compiled.providers = [baseline, candidate]
   compiled.tests = compiled.tests.map((test) => ({
     ...test,
     assert: test.assert.map((assertion) => assertion.type === 'llm-rubric' ? { ...assertion, provider: judge } : assertion),
@@ -228,16 +270,51 @@ async function runRedteamEvaluation(promptfoo, data) {
   return { probes, targets, judges: await judgeRecord.toEvaluateSummary() }
 }
 
-try {
+async function execute(data) {
+  workerData = data
+  if (data.operation === 'runtime-contract') {
+    await import('promptfoo')
+    return {
+      isChildProcess: typeof process.send === 'function',
+      inheritedSecret: process.env[data.secretKey] === data.secretValue,
+      workingDirectory: process.cwd(),
+    }
+  }
+  if (data.operation === 'network-contract') {
+    try {
+      await fetch('https://example.com')
+      return { blocked: false }
+    } catch (error) {
+      return { blocked: /Unexpected network egress/.test(error instanceof Error ? error.message : '') }
+    }
+  }
+  if (data.operation === 'delay-contract') {
+    await new Promise((resolve) => setTimeout(resolve, 60_000))
+    return null
+  }
+  if (data.operation === 'linger-contract') {
+    setInterval(() => undefined, 60_000)
+    return { completed: true }
+  }
   const { default: promptfoo } = await import('promptfoo')
-  let result
-  if (workerData.operation === 'contract') result = await runContractFixture(promptfoo)
-  else if (workerData.operation === 'privacy') result = await runPrivacyFixture(promptfoo, workerData.values)
-  else if (workerData.operation === 'suite') result = await runManagedSuite(promptfoo, workerData)
-  else if (workerData.operation === 'quick') result = await runQuickComparison(promptfoo, workerData)
-  else if (workerData.operation === 'redteam') result = await runRedteamEvaluation(promptfoo, workerData)
-  else throw new Error('Unsupported isolated Promptfoo operation.')
-  parentPort.postMessage({ ok: true, result })
-} catch {
-  parentPort.postMessage({ ok: false, error: { code: 'PROMPTFOO_RUN_FAILED', message: 'The isolated Promptfoo run failed.' } })
+  if (data.operation === 'contract') return runContractFixture(promptfoo)
+  if (data.operation === 'privacy') return runPrivacyFixture(promptfoo, data.values)
+  if (data.operation === 'suite') return runManagedSuite(promptfoo, data)
+  if (data.operation === 'quick') return runQuickComparison(promptfoo, data)
+  if (data.operation === 'redteam') return runRedteamEvaluation(promptfoo, data)
+  throw new Error('Unsupported isolated Promptfoo operation.')
 }
+
+function reply(message) {
+  return new Promise((resolve) => process.send?.(message, resolve))
+}
+
+process.once('message', async (data) => {
+  try {
+    await reply({ ok: true, result: await execute(data) })
+  } catch {
+    await reply({ ok: false, error: { code: 'PROMPTFOO_RUN_FAILED', message: 'The isolated Promptfoo run failed.' } })
+  } finally {
+    process.disconnect?.()
+  }
+})

@@ -1,6 +1,6 @@
 # Getting started and local operations
 
-> Applies to: SkillOps v0.3.1
+> Applies to: SkillOps v0.3.2-rc.1
 
 ## 1. Prerequisites
 
@@ -173,14 +173,15 @@ them without opening the UI:
 
 ```powershell
 npm run eval:list
-npm run eval:run -- --suite deterministic-smoke --baseline baseline-fixture --candidate candidate-fixture --deterministic
+npm run eval:run -- --suite deterministic-smoke --baseline baseline-fixture --candidate candidate-fixture --deterministic --summary artifacts/evaluation-summary.json --html artifacts/evaluation-report.html
 npm run eval:verify -- --run <run-id>
 ```
 
-`eval:run` emits a deterministic summary and can emit JUnit for CI. Provider
-credentials are accepted for that process only and are not written into the
-evidence store. The production UI provides the same Suite/History workflow and
-Governance route.
+`eval:run` emits a deterministic summary and can emit JSON, JUnit, and a
+read-only HTML report for CI. `--timeout-ms` overrides the ten-minute run
+timeout. Provider credentials are accepted for that child process only and are
+not written into the evidence store. The production History view exposes the
+same sanitized JSON/HTML reports and the Governance route.
 
 The Local Prompt Registry reads committed `prompts/*.prompt.json` files from the
 current Git repository. Set `SKILLOPS_PROMPT_WORKSPACE` before `npm run dev` or
@@ -188,7 +189,26 @@ current Git repository. Set `SKILLOPS_PROMPT_WORKSPACE` before `npm run dev` or
 relative `SKILLOPS_PROMPT_DIRECTORY`. It needs no hosted account or registry API
 key. See the [Prompt Registry contract](../integrations/prompt-registry.md).
 
-## 13. Command reference
+## 13. Governed project templates
+
+Preview a reviewed Team Template Manifest before applying it:
+
+```powershell
+npm run template:init -- --manifest <team-template.json> --target <project> --mode greenfield
+npm run template:init -- --manifest <draft.json> --hash
+npm run template:init -- --manifest <team-template.json> --target <project> --mode migration
+npm run template:init -- --manifest <team-template.json> --target <project> --mode migration --apply
+npm run template:init -- --manifest <team-template.json> --target <project> --status
+npm run template:init -- --manifest <team-template.json> --target <project> --rollback --apply
+```
+
+`greenfield` and `adopt-existing` reject divergent existing files. `migration`
+and rollback require a clean, non-default Git review branch. Migration runs
+every affected Managed Suite before writing and leaves an ordinary Git Diff;
+it never commits. The metadata-only project lock binds the exact Stable
+template, Artifact sources, evidence, approval, and previous Stable commit.
+
+## 14. Command reference
 
 | Command | Purpose |
 | --- | --- |
@@ -202,11 +222,11 @@ key. See the [Prompt Registry contract](../integrations/prompt-registry.md).
 | `npm run eval:list` | List validated Managed Suites |
 | `npm run eval:run -- --suite <id> ...` | Run a Managed Suite through Promptfoo |
 | `npm run eval:verify -- --run <run-id>` | Verify stored evidence identity and gates |
+| `npm run template:init -- --manifest <file> ...` | Preview/apply/status/rollback a governed Team project template |
 | `npm run codex:*` | Preview/install/remove Codex adapter |
 | `npm run claude:*` | Preview/install/remove Claude Code adapter |
-| `npm run claude:*` | Preview/install/remove Claude adapter |
 
-## 13. Normal shutdown
+## 15. Normal shutdown
 
 Stop Vite or the production server with `Ctrl+C`. Hooks can continue appending
 directly to the local event store even while the dashboard is closed, provided

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "ci-evaluation-suite-quality",
+  "name": "CI Evaluation Suite candidate quality",
+  "version": "1.0.0",
+  "owner": "skillops-maintainers",
+  "sensitivity": "synthetic",
+  "artifactKind": "evaluation-suite",
+  "repeats": 2,
+  "cases": [
+    {
+      "id": "candidate-evidence",
+      "input": "Validate the exact Evaluation Suite schema.",
+      "weight": 1,
+      "assertions": [
+        { "type": "contains", "value": "schemaVersion", "label": "has-schema-version" },
+        { "type": "contains", "value": "artifactKind", "label": "has-artifact-kind" }
+      ]
+    }
+  ]
+}

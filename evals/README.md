@@ -14,6 +14,11 @@ Use only synthetic data or cases that have been reviewed and sanitized for Git.
 - Prompt suites may declare only scalar, allowlisted case variables. Unsafe
   names, missing values, prototype-pollution keys, and nested values fail before
   provider execution.
+- Optional `redaction.task`, `redaction.input`, and `redaction.output` arrays
+  accept up to 20 bounded `{ "pattern", "replacement" }` rules each. Task rules
+  cover case text, input rules cover scalar variables, and output rules run
+  before assertions. Patterns use the same restricted regular-expression
+  validator as Suite assertions.
 - Prompt suites identify immutable `prompt-registry:` baseline and Candidate
   references. Prompt bodies are read from their pinned Git commits while the
   explicitly selected provider performs the run.

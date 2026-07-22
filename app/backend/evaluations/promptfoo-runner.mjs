@@ -2,6 +2,7 @@ import { normalizeArtifactDefinition } from '../../shared/evaluation-schema.mjs'
 import { normalizePromptfooEvaluation } from './evaluation-normalizer.mjs'
 import { EvaluationError } from './errors.mjs'
 import { parseBlindJudgeResult } from './evaluation-judge.mjs'
+import { redactEvaluationText } from './evaluation-redaction.mjs'
 import { normalizeProvider } from './provider-client.mjs'
 import { PROMPTFOO_VERSION, runPromptfooIsolated } from './promptfoo-runtime.mjs'
 
@@ -10,7 +11,7 @@ export function compilePromptfooSuite(suite) {
   const repeats = suite.repeats || 1
   const tests = suite.cases.flatMap((testCase) => Array.from({ length: repeats }, (_, repeat) => ({
     vars: {
-      input: testCase.input,
+      input: redactEvaluationText(testCase.input, suite.redaction?.task),
       __skillopsCaseId: testCase.id,
       __skillopsRepeat: repeat,
     },
@@ -51,6 +52,7 @@ export async function runPromptfooSuite(input, options = {}) {
     candidate: input.candidate,
     provider,
     fakeOutputs: options.fakeOutputs,
+    contentAudit: options.contentAudit === true,
   }, {
     runtimeRoot: options.runtimeRoot,
     signal: options.signal,

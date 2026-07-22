@@ -48,6 +48,15 @@ describe('Skill inventory health', () => {
     expect([...issues.get(definitionKey(disabled)) ?? []]).toEqual(['disabled'])
   })
 
+  it('groups Skills and commands with the same runtime name as invocable definitions', () => {
+    const skill = definition()
+    const command = definition({ kind: 'command', sourcePath: '/repo/.agents/commands/review.md' })
+    const issues = buildInventoryIssues([skill, command])
+
+    expect([...issues.get(definitionKey(skill)) ?? []]).toEqual(['duplicate'])
+    expect([...issues.get(definitionKey(command)) ?? []]).toEqual(['duplicate'])
+  })
+
   it('keeps same names in different runtimes independent and scopes health counts', () => {
     const codex = definition()
     const claude = definition({ runtime: 'claude-code', provider: 'Claude Code', sourcePath: '/home/me/.claude/skills/review/SKILL.md' })

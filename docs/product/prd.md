@@ -1,8 +1,8 @@
 # PRD: SkillOps local Skill observability
 
-> Version: v0.3.1
-> Status: implemented MVP baseline
-> Last reviewed: 2026-07-20
+> Version: v0.3.2-rc.1
+> Status: implemented local + Git release candidate
+> Last reviewed: 2026-07-22
 
 ## 1. Product statement
 
@@ -13,8 +13,8 @@ them:
 1. **What Skill definitions are available on this machine?**
 2. **Which Skills were actually invoked, and what lifecycle evidence exists?**
 
-Cursor appears as a preview runtime only. There is no installable Cursor adapter
-in v0.3.1.
+Cursor appears as a preview runtime only. This release does not include an
+installable Cursor adapter.
 
 ## 2. Problem
 
@@ -88,16 +88,17 @@ loopback binding, export, retention, and removal behavior.
 - Require verified evidence and independent approval before Candidate, Canary,
   or Stable transitions; a remote `head` never deploys itself.
 
-## 5. Non-goals for v0.3.1
+## 5. Non-goals for this local release
 
-- Cloud accounts, team workspaces, synchronization, or remote runtime/event ingestion.
+- Cloud accounts, hosted multi-user Team workspaces or synchronization, and
+  remote runtime/event ingestion.
 - Persisting raw prompt text, transcripts, tool payloads, source code, model
   output, evaluation tasks, chat messages, or credentials outside the explicit
   Skill Lab AI settings file.
 - Proving implicit Skill selection when the runtime exposes no observable signal.
 - Declaring task success from a normal lifecycle completion.
-- Installing, promoting, or deploying a Skill from Skill Lab.
-- Managing or editing `SKILL.md` definitions.
+- Installing, promoting, or deploying a Skill directly from Skill Lab.
+- Free-form editing of `SKILL.md` contents from the dashboard.
 - A production-ready Cursor adapter.
 
 ## 6. Core concepts
@@ -112,9 +113,9 @@ loopback binding, export, retention, and removal behavior.
 | Evaluated run | A run whose outcome is known as success or failed. |
 | Lifecycle only | A completed run with `outcome: unknown`. |
 | Connection | Inspection result for installed hook configuration plus observed activity. |
-| Candidate | One public GitHub `SKILL.md` selected for comparison; not installed locally. |
+| Candidate | One bounded public GitHub Skill package rooted at a selected `SKILL.md`; not installed locally. |
 | A/B evaluation | One task run against a local baseline and remote candidate, then blind-judged by the configured model. |
-| Artifact | A metadata identity for a Skill, Prompt, or Workflow; content remains behind a controlled backend renderer. |
+| Artifact | A metadata identity for a Skill, Prompt, Workflow, Rules file, or Agent definition; content remains behind a controlled backend renderer. |
 | Managed Suite | A versioned, user-authored set of synthetic or sanitized evaluation cases stored as product source, not telemetry. |
 | Evidence | A sanitized run/gate summary bound to Artifact, suite, dataset, and policy hashes. |
 
@@ -294,10 +295,11 @@ denominator.
 
 ### FR-7 Candidate and baseline safety
 
-Candidate discovery is limited to bounded public GitHub `SKILL.md` content. A
-local baseline is accepted only when its exact path appears in the current
-enabled live scan; the frontend cannot use the evaluation interface to read an
-arbitrary local path.
+Candidate discovery loads the complete regular-file package rooted at the selected
+public GitHub `SKILL.md`, bounded to 500 files and 10 MB, and binds its immutable
+commit plus package hash. A local baseline is accepted only when its exact path
+appears in the current enabled live scan; the frontend cannot read arbitrary
+local paths or receive either package's private body.
 
 ### FR-8 Local AI evaluation settings
 
@@ -361,7 +363,7 @@ explicitly trusted emitter.
 ### Local API exposure
 
 The production server binds to loopback. Non-loopback deployment requires an
-explicit authentication/access-control seam that v0.3.1 does not provide.
+explicit authentication/access-control seam that this release does not provide.
 
 ### Configuration drift
 
@@ -398,5 +400,5 @@ control.
 - [x] Skill Lab compares public candidates with live local definitions.
 - [x] Explicitly persisted local AI settings, hash-pinned blinded A/B results, bounded read-only agent mode, and contextual chat exist.
 - [ ] Cursor native adapter is implemented.
-- [ ] Multi-case evaluation confidence, report export, and real version promotion exist.
+- [x] Multi-case evaluation confidence, report export, and real version promotion exist.
 - [ ] Automatic retention and event-store compaction policy exist.

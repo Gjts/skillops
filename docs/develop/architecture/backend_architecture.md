@@ -1,6 +1,6 @@
 # Backend architecture: local event and inventory plane
 
-> Version: v0.3.1
+> Version: v0.3.2-rc.1
 > Status: implemented
 
 ## 1. Backend goals
@@ -53,6 +53,13 @@ interpretation, bounded recursive traversal, frontmatter extraction, and
 definition metadata. It resolves the active Codex plugin cache version, applies
 Codex per-Skill disable entries, applies Claude file-setting precedence, and
 computes a normalized local content hash without returning definition bodies.
+
+### `conflicts/conflict-service.mjs`
+
+Owns conflict inspection, reviewed action plans, apply, and undo. Mutations use a
+process-shared lock, atomically quarantine the exact target before hashing it,
+and install regular files without clobbering a concurrently recreated path.
+Failed apply or undo keeps recovery paths instead of overwriting editor bytes.
 
 ### `runtime-connections.mjs`
 
@@ -266,20 +273,22 @@ concurrent processes coordinate with an exclusive lock file. A lock older than
 
 ### Supported sources
 
-- global Agents, Codex, Claude Code, legacy Claude commands, and Cursor folders;
-- project-local `.agents`, `.codex`, `.claude`, and `.cursor` folders;
+- global Agents, Codex, Claude Code, legacy command/Prompt Workflow, Rules,
+  custom Agent, and Cursor folders;
+- project-local `.agents`, `.codex`, `.claude`, Rules, and custom Agent folders;
 - active Codex plugin caches registered under the Codex home (`local` first,
   otherwise the highest valid semantic version; lexical maximum only when no
   valid semantic version exists);
-- Claude installed plugin Skill and command folders that apply to the current project.
+- Claude installed plugin asset folders that apply to the current project.
 
 ### Metadata
 
 Each result contains Skill ID, version, runtime, source, path, kind, provider,
-enabled state, optional disabled reason, normalized SHA-256 content hash,
-optional description, and optional tags. The hash removes a UTF-8 BOM and
-normalizes line endings before hashing; Skill contents do not cross the scan
-API.
+enabled state, optional disabled reason, deterministic SHA-256 content hash,
+optional description, and optional tags. A Skill hash binds the relative path
+and bytes of every regular file in its complete Skill directory; other
+definitions remove a UTF-8 BOM and normalize line endings before hashing.
+Definition contents do not cross the scan API.
 
 ### Traversal safety
 
@@ -287,6 +296,7 @@ API.
 - canonical paths prevent symlink loops and duplicate paths;
 - missing and access-denied conventional locations are treated as absent;
 - only `SKILL.md` is accepted as a Skill; Claude command folders accept Markdown files.
+- Skill packages reject symlinks and filesystem-colliding paths and are bounded to 500 files / 10 MB;
 
 ### Plugin enablement
 
@@ -337,19 +347,32 @@ Activity is calculated from non-discovery events only.
 | `SKILLOPS_DATA_DIR` | `<repo>/data` | Event/index/error storage directory |
 | `CODEX_HOME` | `~/.codex` | Codex runtime home |
 | `CLAUDE_CONFIG_DIR` | resolved by Claude adapter | Claude effective config home |
+| `SKILLOPS_SKELETON_ROOT` | unset | Explicit managed project root for governed new-file installation |
+| `SKILLOPS_GOVERNANCE_PRINCIPALS` | unset | JSON array mapping 32+ character Bearer tokens to server-defined governance principals |
 
 CC Switch configuration participates in Claude home resolution as documented in
 [runtime adapters](../integrations/runtime_adapters.md).
 
 **Implemented evaluation runtime:** Managed Suites are explicit repository files
-under `evals/`. Promptfoo runs with cache, telemetry, update checks, sharing,
-and remote generation disabled in a run-scoped temporary config directory.
-Only sanitized evidence summaries are stored separately from events. The
-manager provides bounded FIFO concurrency, idempotency, cancellation, and
-interrupted-run recovery. Capability governance uses atomic lock-protected
-metadata registries, exact evidence hashes, independent approvals, and
-recoverable promotion/rollback. The exact package surface, privacy controls,
-Red Team seam, and upgrade gate are documented in the
+under `evals/`. Promptfoo runs in a child process with cache, telemetry, update
+checks, sharing, remote generation, and inherited secret environment variables
+disabled in a run-scoped temporary config directory. Only sanitized evidence
+summaries are stored separately from events and used to generate JSON/HTML
+reports. The manager provides bounded FIFO concurrency, idempotency,
+cancellation, timeout, child-process cleanup, and interrupted-run recovery.
+Capability governance uses atomic lock-protected metadata registries, exact
+evidence hashes, independent server-resolved principals, write-ahead audit
+records, and compensated install/promotion/deprecation/rollback transactions.
+Configured Bearer tokens can resolve a distinct reviewer without accepting an
+identity from the browser. New files must use a relative target beneath
+`SKILLOPS_SKELETON_ROOT`; existing targets must resolve through the enabled
+scan inventory. The installer rejects symlink/non-file targets, creates
+exact-byte backups before replacement or removal, and verifies every file
+operation with a fresh scan before committing the Capability registry and
+project lock. Metadata-only recovery records persist across restarts while
+opaque restore references and backup bytes stay outside API responses. The
+exact evaluation package surface,
+privacy controls, Red Team seam, and upgrade gate are documented in the
 [Promptfoo integration contract](../integrations/promptfoo.md).
 
 `app/backend/prompts/` owns the Local Prompt Registry. It reads strict Prompt
@@ -359,6 +382,39 @@ for backend evaluation, and creates Candidates only after an explicit request.
 It never edits files, changes branches, creates commits, or calls a hosted Prompt
 service. The full contract is documented in
 [Prompt Registry integration](../integrations/prompt-registry.md).
+
+`app/backend/evaluations/artifact-registry.mjs` derives the Unified Artifact
+Registry from live scans, committed Prompt metadata, governance capabilities,
+and skeleton locks. The compatibility facade in
+`app/backend/skill-evaluations.mjs` owns its HTTP exposure. The Registry owns
+metadata Diff and GitHub Candidate preview, while Artifact body resolution stays
+with the source adapter. Its opt-in migration accepts only the legacy scan
+allowlist, serializes apply with a process-shared lock, verifies pre/post and
+read-time snapshot hashes, and restores exact backup bytes.
+
+`app/backend/team-control-plane.mjs` owns the local Team model and keeps its
+interface small: state/role mutations, revocable device collection, derived
+Artifact catalog and governance queues, policy exceptions, audit, export,
+backup, and retention. It reuses the Artifact Registry and governance module
+rather than copying lifecycle truth. Mutations run under the governance file
+lock, preserve referenced-entity integrity, write state atomically, and append a
+hash-chained metadata-only audit record. Collector commits compensate state and
+collector bytes if the audit record cannot commit. The HTTP adapter in
+`team-control-plane-api.mjs` applies loopback, JSON-size, route-field, principal,
+and Bearer-token guards. The deployment metadata explicitly reports local +
+Git, with network API, SSO, and SCIM disabled.
+
+`app/backend/project-template.mjs` is the governed Team Template boundary. It
+accepts only schema-versioned Stable manifests tied to an immutable Git commit,
+exact template/evidence hashes, and separate submitter/reviewer approval. Its
+small interface previews or applies three initialization modes, reports drift
+and pending upgrades, and previews/applies previous-Stable rollback. Existing
+content is never overwritten unless it is a byte-identical managed preimage.
+Migration and rollback require a clean non-default Git branch. Affected Managed
+Suites run before the compensating multi-file transaction, so a gate failure
+does not touch the project. The project lock stores references and hashes, not
+file bodies. `bin/project-template-cli.mjs` supplies the existing evaluation
+runner and rejects command-line provider keys.
 
 ## 11. Error and privacy behavior
 

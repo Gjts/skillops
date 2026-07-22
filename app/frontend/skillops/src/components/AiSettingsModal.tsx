@@ -1,5 +1,6 @@
 import { BrainCircuit, ExternalLink, Eye, EyeOff, KeyRound, LockKeyhole, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useI18n } from '../i18n/I18nProvider'
 import { AI_PROVIDERS, type AiProviderConfig, type AiSettings } from '../lib/ai-settings'
 
 interface AiSettingsModalProps {
@@ -10,6 +11,7 @@ interface AiSettingsModalProps {
 }
 
 export function AiSettingsModal({ open, settings, onClose, onSave }: AiSettingsModalProps) {
+  const { t } = useI18n()
   const [draft, setDraft] = useState(settings)
   const [showKey, setShowKey] = useState(false)
   const dialog = useRef<HTMLDivElement>(null)
@@ -57,9 +59,7 @@ export function AiSettingsModal({ open, settings, onClose, onSave }: AiSettingsM
     }))
   }
 
-  const helper = useMemo(() => provider.id === 'ollama'
-    ? 'No API key is required. SkillOps connects through the loopback Ollama endpoint.'
-    : 'The key is sent only through the loopback SkillOps API to the selected provider.', [provider.id])
+  const helper = useMemo(() => provider.id === 'ollama' ? t('ai.ollamaHelper') : t('ai.providerHelper'), [provider.id, t])
 
   if (!open) return null
 
@@ -68,14 +68,14 @@ export function AiSettingsModal({ open, settings, onClose, onSave }: AiSettingsM
       <div className="ai-settings-modal" role="dialog" aria-modal="true" aria-labelledby="ai-settings-title" ref={dialog}>
         <header>
           <span className="ai-modal-icon"><BrainCircuit size={21} /></span>
-          <div><h2 id="ai-settings-title">AI settings</h2><p>Configure the model used for chat and A/B evaluation.</p></div>
-          <button type="button" aria-label="Close AI settings" onClick={onClose}><X size={19} /></button>
+          <div><h2 id="ai-settings-title">{t('ai.settingsTitle')}</h2><p>{t('ai.settingsDescription')}</p></div>
+          <button type="button" aria-label={t('ai.closeSettings')} onClick={onClose}><X size={19} /></button>
         </header>
 
         <div className="ai-settings-body">
           <div className="ai-provider-column">
             <section className="ai-provider-section" aria-labelledby="provider-heading">
-              <h3 id="provider-heading">Provider</h3>
+              <h3 id="provider-heading">{t('common.provider')}</h3>
               <div className="ai-provider-grid">
                 {AI_PROVIDERS.map((item, index) => (
                   <button
@@ -92,7 +92,7 @@ export function AiSettingsModal({ open, settings, onClose, onSave }: AiSettingsM
               </div>
             </section>
 
-            <div className="session-key-note"><LockKeyhole size={15} /><span>API keys stay only in this page's memory. Reloading or closing the page clears them.</span></div>
+            <div className="session-key-note"><LockKeyhole size={15} /><span>{t('ai.savedKeyNote')}</span></div>
           </div>
 
           <div className="ai-config-column">
@@ -100,46 +100,46 @@ export function AiSettingsModal({ open, settings, onClose, onSave }: AiSettingsM
               <div><h3 id="provider-config-title">{provider.label}</h3><p>{helper}</p></div>
               {provider.requiresKey && (
                 <label className="ai-field">
-                  <span><KeyRound size={14} /> API key</span>
+                  <span><KeyRound size={14} /> {t('ai.apiKey')}</span>
                   <span className="secret-input">
-                    <input type={showKey ? 'text' : 'password'} value={config.apiKey} autoComplete="off" placeholder={`Enter ${provider.label} API key`} onChange={(event) => updateConfig({ apiKey: event.target.value })} />
-                    <button type="button" aria-label={showKey ? 'Hide API key' : 'Show API key'} onClick={() => setShowKey((visible) => !visible)}>{showKey ? <EyeOff size={15} /> : <Eye size={15} />}</button>
+                    <input type={showKey ? 'text' : 'password'} value={config.apiKey} autoComplete="off" placeholder={t('ai.enterApiKey', { provider: provider.label })} onChange={(event) => updateConfig({ apiKey: event.target.value })} />
+                    <button type="button" aria-label={showKey ? t('ai.hideApiKey') : t('ai.showApiKey')} onClick={() => setShowKey((visible) => !visible)}>{showKey ? <EyeOff size={15} /> : <Eye size={15} />}</button>
                   </span>
-                  {provider.keyUrl && <small>Get an API key from <a href={provider.keyUrl} target="_blank" rel="noreferrer">{provider.label}<ExternalLink size={11} /></a></small>}
+                  {provider.keyUrl && <small><a href={provider.keyUrl} target="_blank" rel="noreferrer">{t('ai.getApiKey', { provider: provider.label })}<ExternalLink size={11} /></a></small>}
                 </label>
               )}
               <label className="ai-field">
-                <span>Model{provider.id === 'azure-openai' ? ' / deployment' : ''}</span>
-                <input className="mono" type="text" value={config.model} placeholder={provider.defaultModel || 'Enter deployment name'} onChange={(event) => updateConfig({ model: event.target.value })} />
+                <span>{provider.id === 'azure-openai' ? t('ai.modelDeployment') : t('common.model')}</span>
+                <input className="mono" type="text" value={config.model} placeholder={provider.defaultModel || t('ai.enterDeployment')} onChange={(event) => updateConfig({ model: event.target.value })} />
               </label>
               {provider.transport !== 'anthropic' && (
                 <label className="ai-field">
-                  <span>Reasoning effort</span>
-                  <select aria-label="Reasoning effort" value={config.reasoningEffort} onChange={(event) => updateConfig({ reasoningEffort: event.target.value as AiProviderConfig['reasoningEffort'] })}>
-                    <option value="">Provider default</option>
-                    <option value="none">None</option>
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                    <option value="high">High</option>
-                    <option value="xhigh">XHigh</option>
-                    <option value="max">Max</option>
+                  <span>{t('ai.reasoningEffort')}</span>
+                  <select aria-label={t('ai.reasoningEffort')} value={config.reasoningEffort} onChange={(event) => updateConfig({ reasoningEffort: event.target.value as AiProviderConfig['reasoningEffort'] })}>
+                    <option value="">{t('ai.providerDefault')}</option>
+                    <option value="none">{t('ai.reasoningNone')}</option>
+                    <option value="low">{t('ai.reasoningLow')}</option>
+                    <option value="medium">{t('ai.reasoningMedium')}</option>
+                    <option value="high">{t('ai.reasoningHigh')}</option>
+                    <option value="xhigh">{t('ai.reasoningXHigh')}</option>
+                    <option value="max">{t('ai.reasoningMax')}</option>
                   </select>
-                  <small>Sent as <span className="mono">reasoning_effort</span> when selected. GPT-5.6 defaults to Medium; its Chat Completions tool mode requires None.</small>
+                  <small>{t('ai.reasoningHelp')}</small>
                 </label>
               )}
               <label className="ai-field">
-                <span>{provider.baseUrlLabel || 'Base URL'}</span>
+                <span>{provider.id === 'azure-openai' ? t('ai.azureEndpoint') : t('ai.baseUrl')}</span>
                 <input type="url" value={config.baseUrl} placeholder={provider.defaultBaseUrl || 'https://your-resource.openai.azure.com'} onChange={(event) => updateConfig({ baseUrl: event.target.value })} />
-                <small>Credentialed providers require HTTPS. Ollama may use HTTP only on a loopback address. A custom endpoint receives the API key above.</small>
+                <small>{t('ai.endpointHelp')}</small>
               </label>
-              {provider.id === 'azure-openai' && <label className="ai-field"><span>API version</span><input className="mono" value={config.apiVersion || 'v1'} onChange={(event) => updateConfig({ apiVersion: event.target.value })} /></label>}
+              {provider.id === 'azure-openai' && <label className="ai-field"><span>{t('ai.apiVersion')}</span><input className="mono" value={config.apiVersion || 'v1'} onChange={(event) => updateConfig({ apiVersion: event.target.value })} /></label>}
             </section>
 
-            <div className="ai-privacy-note"><LockKeyhole size={17} /><p><strong>Privacy</strong> Saving stores provider settings, including API keys, in the local SkillOps data directory (`data/ai-settings.json`). Evaluation prompts, chat messages, and model output are still not written to disk. Read-only agent mode can send requested allowed workspace excerpts to the provider; review source for embedded sensitive data. Provider requests follow that provider's data policy.</p></div>
+            <div className="ai-privacy-note"><LockKeyhole size={17} /><p><strong>{t('ai.privacy')}</strong> {t('ai.privacyDescription')}</p></div>
           </div>
         </div>
 
-        <footer><button className="button secondary" type="button" onClick={onClose}>Cancel</button><button className="button ai-primary" type="button" disabled={!canSave} onClick={() => onSave(draft)}>Save settings</button></footer>
+        <footer><button className="button secondary" type="button" onClick={onClose}>{t('common.cancel')}</button><button className="button ai-primary" type="button" disabled={!canSave} onClick={() => onSave(draft)}>{t('ai.saveSettings')}</button></footer>
       </div>
     </div>
   )

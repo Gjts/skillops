@@ -1,9 +1,9 @@
 // @vitest-environment node
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { scanInstalledSkills } from './skill-scanner.mjs'
+import { scanInstalledSkills, scanSkillInventory } from './skill-scanner.mjs'
 
 const temporaryDirectories = []
 
@@ -41,6 +41,36 @@ describe('installed Skill scanner', () => {
       provider: 'Codex',
       enabled: true,
     }))
+  })
+
+  it('changes a Skill identity when any regular file in its package changes', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'skillops-package-hash-'))
+    temporaryDirectories.push(home)
+    const codexHome = path.join(home, '.codex')
+    const skillFile = path.join(codexHome, 'skills/review/SKILL.md')
+    const scriptFile = path.join(codexHome, 'skills/review/scripts/check.mjs')
+    await mkdir(path.dirname(scriptFile), { recursive: true })
+    await writeFile(skillFile, '---\nname: review\nversion: 1.0.0\n---\n', 'utf8')
+    await writeFile(scriptFile, 'export const verdict = \"safe\"\n', 'utf8')
+
+    const before = (await scanInstalledSkills({
+      home,
+      codexHome,
+      claudeHome: path.join(home, '.claude'),
+      project: path.join(home, 'project'),
+      runtime: 'codex',
+    })).find((skill) => skill.skillId === 'review')
+    await writeFile(scriptFile, 'export const verdict = \"unsafe\"\n', 'utf8')
+    const after = (await scanInstalledSkills({
+      home,
+      codexHome,
+      claudeHome: path.join(home, '.claude'),
+      project: path.join(home, 'project'),
+      runtime: 'codex',
+    })).find((skill) => skill.skillId === 'review')
+
+    expect(before.packageFileCount).toBe(2)
+    expect(after.contentHash).not.toBe(before.contentHash)
   })
 
   it('respects Codex per-Skill configuration and reports why a definition is disabled', async () => {
@@ -190,6 +220,42 @@ describe('installed Skill scanner', () => {
     expect(skills.some((skill) => skill.skillId === 'project-only')).toBe(false)
   })
 
+  it('discovers runtime Rules and Agent definitions without treating arbitrary Markdown as assets', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'skillops-runtime-artifacts-'))
+    temporaryDirectories.push(home)
+    const codexHome = path.join(home, '.codex')
+    const claudeHome = path.join(home, '.claude')
+    const project = path.join(home, 'project')
+    const projectAgent = path.join(project, '.claude/agents/reviewer.md')
+    const projectRule = path.join(project, 'CLAUDE.md')
+    const codexRule = path.join(project, 'AGENTS.md')
+    const codexPrompt = path.join(codexHome, 'prompts/review.md')
+    const codexAgent = path.join(project, '.codex/agents/reviewer.toml')
+    const codexGlobalRule = path.join(codexHome, 'AGENTS.md')
+    const unrelated = path.join(project, 'README.md')
+    await mkdir(path.dirname(projectAgent), { recursive: true })
+    await mkdir(path.dirname(codexPrompt), { recursive: true })
+    await mkdir(path.dirname(codexAgent), { recursive: true })
+    await writeFile(projectAgent, '---\nname: reviewer\nversion: 2.0.0\n---\nReview changes.', 'utf8')
+    await writeFile(projectRule, '# Claude instructions\n', 'utf8')
+    await writeFile(codexRule, '# Codex instructions\n', 'utf8')
+    await writeFile(unrelated, '# Not a runtime rule\n', 'utf8')
+    await writeFile(codexPrompt, '---\ndescription: Review changes\n---\nReview carefully.\n', 'utf8')
+    await writeFile(codexAgent, 'name = "reviewer"\ndescription = "Review changes."\ndeveloper_instructions = """Review carefully."""\n', 'utf8')
+    await writeFile(codexGlobalRule, '# Global Codex instructions\n', 'utf8')
+
+    const definitions = await scanInstalledSkills({ home, codexHome, claudeHome, project })
+    expect(definitions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ skillId: 'reviewer', kind: 'agent', runtime: 'claude-code', sourcePath: projectAgent }),
+      expect.objectContaining({ skillId: 'CLAUDE', kind: 'rules', runtime: 'claude-code', sourcePath: projectRule }),
+      expect.objectContaining({ skillId: 'AGENTS', kind: 'rules', runtime: 'codex', sourcePath: codexRule }),
+      expect.objectContaining({ skillId: 'review', kind: 'command', runtime: 'codex', sourcePath: codexPrompt }),
+      expect.objectContaining({ skillId: 'reviewer', kind: 'agent', runtime: 'codex', description: 'Review changes.', sourcePath: codexAgent }),
+      expect.objectContaining({ skillId: 'AGENTS', kind: 'rules', runtime: 'codex', sourcePath: codexGlobalRule }),
+    ]))
+    expect(definitions.some((item) => item.sourcePath === unrelated)).toBe(false)
+  })
+
   it('lets Claude project-local settings override shared and user plugin enablement', async () => {
     const home = await mkdtemp(path.join(tmpdir(), 'skillops-claude-local-settings-'))
     temporaryDirectories.push(home)
@@ -210,7 +276,12 @@ describe('installed Skill scanner', () => {
     await writeFile(path.join(project, '.claude/settings.local.json'), JSON.stringify({ enabledPlugins: { 'review-tools@official': false } }), 'utf8')
 
     const [skill] = await scanInstalledSkills({ home, codexHome, claudeHome, project, runtime: 'claude-code' })
-    expect(skill).toEqual(expect.objectContaining({ enabled: false, disabledReason: 'plugin' }))
+    expect(skill).toEqual(expect.objectContaining({
+      enabled: false,
+      disabledReason: 'plugin',
+      configurationSource: 'local',
+      originConfigs: expect.arrayContaining([path.join(project, '.claude/settings.local.json')]),
+    }))
   })
 
   it('applies Claude file-managed plugin policy after local settings and ordered drop-ins', async () => {
@@ -237,7 +308,11 @@ describe('installed Skill scanner', () => {
     const [skill] = await scanInstalledSkills({
       home, codexHome, claudeHome, project, runtime: 'claude-code', claudeManagedSettingsDirectory: managed,
     })
-    expect(skill).toEqual(expect.objectContaining({ enabled: true }))
+    expect(skill).toEqual(expect.objectContaining({
+      enabled: true,
+      configurationSource: 'managed',
+      originConfigs: expect.arrayContaining([path.join(managed, 'managed-settings.d/20-plugin-policy.json')]),
+    }))
   })
 
   it('only scans canonical Codex plugin skill directories', async () => {
@@ -257,6 +332,56 @@ describe('installed Skill scanner', () => {
     const skills = await scanInstalledSkills({ home, codexHome, claudeHome, project, runtime: 'codex' })
     expect(skills.filter((skill) => skill.skillId === 'ponytail-review')).toHaveLength(1)
     expect(skills.find((skill) => skill.skillId === 'ponytail-review')?.sourcePath).toBe(canonical)
+  })
+
+  it('scans the default Windows Codex administrator Skill directory', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'skillops-windows-admin-scanner-'))
+    temporaryDirectories.push(home)
+    const programData = path.join(home, 'ProgramData')
+    const adminSkill = path.join(programData, 'OpenAI', 'Codex', 'skills', 'admin-review', 'SKILL.md')
+    await mkdir(path.dirname(adminSkill), { recursive: true })
+    await writeFile(adminSkill, '---\nname: admin-review\n---\nReview system policy.\n', 'utf8')
+
+    const definitions = await scanInstalledSkills({
+      home,
+      codexHome: path.join(home, '.codex'),
+      claudeHome: path.join(home, '.claude'),
+      project: path.join(home, 'project'),
+      runtime: 'codex',
+      platform: 'win32',
+      environment: { ProgramData: programData },
+    })
+
+    expect(definitions).toContainEqual(expect.objectContaining({
+      skillId: 'admin-review',
+      sourcePath: adminSkill,
+      configurationSource: 'admin',
+      scope: 'admin',
+    }))
+  })
+
+  it('emits one definition when scan roots alias the same physical Skill', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'skillops-physical-dedup-'))
+    temporaryDirectories.push(home)
+    const realDirectory = path.join(home, 'admin-skills')
+    const aliasDirectory = path.join(home, 'admin-skills-alias')
+    const skill = path.join(realDirectory, 'review/SKILL.md')
+    await mkdir(path.dirname(skill), { recursive: true })
+    await writeFile(skill, '---\nname: physical-review\n---\nReview once.\n', 'utf8')
+    await symlink(realDirectory, aliasDirectory, 'junction')
+
+    const definitions = await scanInstalledSkills({
+      home,
+      codexHome: path.join(home, '.codex'),
+      claudeHome: path.join(home, '.claude'),
+      project: path.join(home, 'project'),
+      runtime: 'codex',
+      codexAdminSkillsDirectories: [realDirectory, aliasDirectory],
+    })
+
+    expect(definitions.filter((item) => item.skillId === 'physical-review')).toEqual([
+      expect.objectContaining({ sourcePath: skill }),
+    ])
   })
 
   it('scans only the active Codex plugin version, preferring local over the highest version', async () => {
@@ -359,6 +484,147 @@ describe('installed Skill scanner', () => {
       runtime: 'claude-code',
       provider: 'Claude Code',
       sourcePath: path.join(linkedSkill, 'SKILL.md'),
+    }))
+  })
+
+  it('resolves repository roots and scans parent plus administrator Skill locations', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'skillops-root-scan-'))
+    temporaryDirectories.push(home)
+    const repository = path.join(home, 'repository')
+    const project = path.join(repository, 'packages', 'dashboard', 'src')
+    const rootSkill = path.join(repository, '.agents/skills/root-review/SKILL.md')
+    const packageSkill = path.join(repository, 'packages/dashboard/.agents/skills/package-review/SKILL.md')
+    const adminDirectory = path.join(home, 'admin-skills')
+    const adminSkill = path.join(adminDirectory, 'admin-review/SKILL.md')
+    await mkdir(path.join(repository, '.git'), { recursive: true })
+    await mkdir(project, { recursive: true })
+    await mkdir(path.dirname(rootSkill), { recursive: true })
+    await mkdir(path.dirname(packageSkill), { recursive: true })
+    await mkdir(path.dirname(adminSkill), { recursive: true })
+    await writeFile(rootSkill, '---\nname: root-review\n---\n', 'utf8')
+    await writeFile(packageSkill, '---\nname: package-review\n---\n', 'utf8')
+    await writeFile(adminSkill, '---\nname: admin-review\n---\n', 'utf8')
+
+    const skills = await scanInstalledSkills({
+      home,
+      codexHome: path.join(home, '.codex'),
+      claudeHome: path.join(home, '.claude'),
+      project,
+      runtime: 'codex',
+      codexAdminSkillsDirectories: [adminDirectory],
+    })
+
+    expect(skills).toEqual(expect.arrayContaining([
+      expect.objectContaining({ skillId: 'root-review', configurationSource: 'project', projectRoot: repository }),
+      expect.objectContaining({ skillId: 'package-review', configurationSource: 'project', projectRoot: repository }),
+      expect.objectContaining({ skillId: 'admin-review', configurationSource: 'admin', projectRoot: repository }),
+    ]))
+  })
+
+  it('classifies known Claude precedence without guessing external policy', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'skillops-claude-status-'))
+    temporaryDirectories.push(home)
+    const project = path.join(home, 'project')
+    const personal = path.join(home, '.claude/skills/review/SKILL.md')
+    const projectSkill = path.join(project, '.claude/skills/review/SKILL.md')
+    const legacyCommand = path.join(project, '.claude/commands/review.md')
+    const projectRules = path.join(project, 'CLAUDE.md')
+    await mkdir(path.dirname(personal), { recursive: true })
+    await mkdir(path.dirname(projectSkill), { recursive: true })
+    await mkdir(path.dirname(legacyCommand), { recursive: true })
+    await writeFile(projectRules, 'description: Private project instructions\nNever persist this body.\n', 'utf8')
+    await writeFile(personal, '---\nname: review\n---\nPersonal review.\n', 'utf8')
+    await writeFile(projectSkill, '---\nname: review\n---\nProject review.\n', 'utf8')
+    await writeFile(legacyCommand, '---\nname: review\n---\nLegacy review.\n', 'utf8')
+
+    const skills = await scanInstalledSkills({
+      home,
+      codexHome: path.join(home, '.codex'),
+      claudeHome: path.join(home, '.claude'),
+      project,
+      runtime: 'claude-code',
+    })
+    const byPath = new Map(skills.map((skill) => [skill.sourcePath, skill]))
+
+    expect(byPath.get(personal)).toEqual(expect.objectContaining({ status: 'active', configurationSource: 'user' }))
+    expect(byPath.get(projectSkill)).toEqual(expect.objectContaining({ status: 'shadowed', shadowedBy: personal }))
+    expect(byPath.get(legacyCommand)).toEqual(expect.objectContaining({ status: 'shadowed', shadowedBy: personal }))
+    expect(byPath.get(projectRules)).toEqual(expect.objectContaining({ kind: 'rules', description: undefined }))
+  })
+
+  it('returns scan identity, coverage, permission errors, and partial Claude observability', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'skillops-scan-report-'))
+    temporaryDirectories.push(home)
+    const blocked = path.join(home, 'blocked-admin-skills')
+    const project = path.join(home, 'project')
+    await mkdir(project, { recursive: true })
+
+    const report = await scanSkillInventory({
+      home,
+      codexHome: path.join(home, '.codex'),
+      claudeHome: path.join(home, '.claude'),
+      project,
+      codexAdminSkillsDirectories: [blocked],
+      inspectPath: async (location) => {
+        if (location === blocked) throw Object.assign(new Error('Access denied'), { code: 'EACCES' })
+        return stat(location)
+      },
+    })
+
+    expect(report.definitions).toBeInstanceOf(Array)
+    expect(report.scan).toEqual(expect.objectContaining({
+      id: expect.stringMatching(/^scan_/),
+      projectRoot: project,
+      startedAt: expect.any(String),
+      completedAt: expect.any(String),
+      durationMs: expect.any(Number),
+    }))
+    expect(report.scan.coverage).toContainEqual(expect.objectContaining({
+      directory: blocked,
+      state: 'inaccessible',
+    }))
+    expect(report.scan.errors).toContainEqual(expect.objectContaining({ code: 'EACCES', path: blocked }))
+    expect(report.scan.observability).toContainEqual(expect.objectContaining({
+      runtime: 'claude-code',
+      state: 'partial',
+    }))
+  })
+
+  it('reports inaccessible nested directories as partial scan coverage', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'skillops-nested-scan-error-'))
+    temporaryDirectories.push(home)
+    const adminRoot = path.join(home, 'admin-skills')
+    const blocked = path.join(adminRoot, 'blocked')
+    const visibleSkill = path.join(adminRoot, 'visible', 'SKILL.md')
+    const project = path.join(home, 'project')
+    await Promise.all([
+      mkdir(blocked, { recursive: true }),
+      mkdir(path.dirname(visibleSkill), { recursive: true }),
+      mkdir(project, { recursive: true }),
+    ])
+    await writeFile(visibleSkill, '---\nname: visible\n---\n')
+
+    const report = await scanSkillInventory({
+      home,
+      codexHome: path.join(home, '.codex'),
+      claudeHome: path.join(home, '.claude'),
+      project,
+      runtime: 'codex',
+      codexAdminSkillsDirectories: [adminRoot],
+      readDirectory: async (directory, options) => {
+        if (directory === blocked) throw Object.assign(new Error('Access denied'), { code: 'EACCES' })
+        return readdir(directory, options)
+      },
+    })
+
+    expect(report.definitions).toContainEqual(expect.objectContaining({ skillId: 'visible' }))
+    expect(report.scan.coverage).toContainEqual(expect.objectContaining({ directory: adminRoot, state: 'partial' }))
+    expect(report.scan.errors).toContainEqual(expect.objectContaining({
+      code: 'EACCES',
+      path: blocked,
+      runtime: 'codex',
+      source: 'global',
+      configurationSource: 'admin',
     }))
   })
 })

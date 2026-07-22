@@ -1,6 +1,6 @@
 # Event model and local data design
 
-> Version: v0.3.1
+> Version: v0.3.2-rc.1
 > Status: implemented
 > Authoritative implementation: `app/shared/event-schema.mjs`
 
@@ -57,7 +57,7 @@ in the dashboard.
   "runtime": "codex",
   "timestamp": "2026-07-20T00:00:02.000Z",
   "durationMs": 2000,
-  "sessionId": "session-123",
+  "sessionId": "hmac-sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "turnId": "turn-456",
   "project": "web-console",
   "outcome": "unknown",
@@ -83,7 +83,7 @@ in the dashboard.
 
 | Field | Type | Purpose |
 | --- | --- | --- |
-| `sessionId` | string | Host session correlation |
+| `sessionId` | HMAC pseudonym | Same-install session correlation without persisting the host identifier |
 | `turnId` | string | Turn correlation |
 | `promptId` | string | Prompt correlation without prompt text |
 | `toolUseId` | string | Tool-call correlation |
@@ -108,7 +108,7 @@ in the dashboard.
 | `sourcePath` | string | Local definition path |
 | `source` | enum | `global`, `project`, or `plugin` |
 | `provider` | string | Runtime/plugin/project provider label |
-| `kind` | enum | `skill` or `command` |
+| `kind` | enum | `skill`, `command`, `rules`, or `agent` |
 | `enabled` | boolean | Effective enabled state at scan time |
 | `description` | string | Frontmatter description |
 | `tags` | string[] | Frontmatter tags |
@@ -121,7 +121,6 @@ in the dashboard.
 | `costUsd` | finite number | Reported USD cost, not estimated by SkillOps |
 | `tokens` | finite number | Reported token count |
 | `outcome` | enum | `success`, `failed`, or `unknown` |
-| `error` | string | Sanitized error label/message only; adapters avoid raw details |
 | `reason` | string | Sanitized skip/failure reason |
 
 ### Detection metadata
@@ -180,6 +179,7 @@ Important rules:
 
 - discovery may occur without any later run;
 - match/start may be absent when a runtime exposes insufficient signals;
+- Rules discovery is inventory evidence only; neither adapter emits Rule match/start/terminal events without a trustworthy host lifecycle signal;
 - normal stop proves a lifecycle boundary, not output correctness;
 - a missing event is not proof that a Skill was not used;
 - confidence describes detection evidence, not task quality.
@@ -191,6 +191,7 @@ Default files:
 ```text
 data/
 ├─ events.jsonl
+├─ session-identity.key          local HMAC key; never exported
 ├─ discovery-index.json
 ├─ discovery-index.lock          transient
 ├─ events.jsonl.backup-*         created by destructive maintenance
@@ -205,6 +206,11 @@ The full `data/` directory is ignored by Git.
 `events.jsonl` is authoritative. The discovery index is rebuildable from
 `skill.discovered` records. A malformed line is ignored on read but preserved by
 maintenance rewrites unless the operation explicitly removes its event.
+
+Every append path, including runtime adapters, desktop ingestion, CLI emission,
+and JSON/JSONL import, replaces a raw `sessionId` and any matching substring in
+the event ID with a stable `hmac-sha256:` pseudonym. The random per-install key
+stays in `session-identity.key` under the local data directory.
 
 ### Ordering
 

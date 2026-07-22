@@ -9,6 +9,7 @@ import {
   Menu,
   ShieldCheck,
   Settings,
+  Users,
   X,
 } from 'lucide-react'
 import { useI18n } from '../i18n/I18nProvider'
@@ -23,6 +24,7 @@ const navigation: Array<{ id: PageId; label: MessageKey; icon: typeof Activity }
   { id: 'evaluations', label: 'nav.evaluations', icon: ChartNoAxesCombined },
   { id: 'registry', label: 'nav.registry', icon: Boxes },
   { id: 'governance', label: 'nav.governance', icon: ShieldCheck },
+  { id: 'team', label: 'nav.team', icon: Users },
   { id: 'settings', label: 'nav.settings', icon: Settings },
 ]
 

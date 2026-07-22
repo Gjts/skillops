@@ -40,6 +40,15 @@ semantics are weak.
   branch/commit versions, component Diff, explicit model-hint adoption,
   direct-provider evaluation, and the common governance/rollback path without
   a hosted Prompt-management dependency.
+- A PromptHub v1 read connector with Candidate-only import, conflict blocking,
+  native credential storage, offline Stable preservation, and mock-server
+  contract tests.
+- A local + Git Team control plane with five roles, revocable metadata-only
+  Collector devices, a unified Artifact directory, approval/release queues,
+  Policy Packs and exceptions, hash-chained audit, backup/export, and retention.
+- Governed Team Template manifests with three initialization modes, exact
+ conflict/drift previews, metadata-only asset locks, pre-write Suite gates,
+ Git-review-only upgrades, adoption metrics, and previous-Stable rollback.
 - Outcome coverage and lifecycle-only semantics.
 - Atomic import, local export, backup-first clear, discovery deduplication.
 - Automated unit/integration/UI tests, build, and smoke verification.
@@ -123,23 +132,42 @@ signals. Requirements:
 
 A label or manual emitter is not sufficient to call a runtime connected.
 
-## 7. Phase 5: Scale and collaboration decision
+## 7. Phase 5: Local collaboration boundary
 
-Goal: decide from measured user evidence whether SkillOps remains single-user
-local or needs shared/team operation.
+Goal: provide shared governance semantics without silently changing the local
+trust model.
 
-Possible work only if justified:
+Status: implemented for local + Git Team operation.
 
-- indexed local storage or server-side aggregation for large histories;
-- multiple local workspaces;
-- signed/exported evaluation reports;
-- opt-in remote collector with authentication, encryption, tenant isolation,
-  retention, and privacy review.
+Implemented outcomes:
 
-Remote synchronization is not an automatic next step. It materially changes the
-trust model and requires a separate product/security decision.
+- Team, Workspace, Project, Environment, Member, and Device metadata;
+- five ordered roles and independently reviewed policy exceptions;
+- revocable least-privilege Collector tokens and allowlisted summaries;
+- Registry-derived Artifact directory, Approval Inbox, and Release Queue;
+- append-only audit plus explicit sanitized backup/export and retention.
 
-## 8. Explicitly deferred
+An opt-in remote collector or multi-tenant service remains possible only after
+measured demand and requires authentication, encryption, tenant isolation,
+deletion/retention guarantees, backup recovery, and a separate privacy review.
+Local Team operation is not evidence that those network guarantees exist.
+
+## 8. Phase 6: Governed project templates
+
+Goal: bring reviewed Team assets into new and existing projects without
+overwriting local rules or bypassing evidence.
+
+Status: implemented for local Git workspaces.
+
+The Team supplies a schema-versioned Stable manifest from an immutable Git
+commit. Preview is read-only. Greenfield and adopt-existing reject divergent
+files; migration and rollback require a clean non-default branch. Affected
+Managed Suites pass before any write, the project lock remains metadata-only,
+and upgrades stay as ordinary Git Diffs until a human commits them. Per-project
+status feeds Team adoption, drift, and pending-upgrade metrics. Hosted template
+distribution and automatic PR creation remain deferred.
+
+## 9. Explicitly deferred
 
 - cloud accounts and billing;
 - social/team feed;
@@ -147,9 +175,10 @@ trust model and requires a separate product/security decision.
 - opaque AI-generated success verdicts;
 - automatic Skill promotion based only on lifecycle counts;
 - generic runtime adapters without observable host signals;
-- editing arbitrary Skill contents from the dashboard.
+- editing arbitrary Skill contents from the dashboard;
+- hosted Team synchronization, SaaS tenancy, SSO, and SCIM.
 
-## 9. Decision checkpoints
+## 10. Decision checkpoints
 
 ### Checkpoint A: retention
 
@@ -170,7 +199,7 @@ Proceed only when native runtime signals can prove use with documented limits.
 Require repeated user need that cannot be met by export/import. Revisit the full
 privacy/security model before adding network collection.
 
-## 10. Roadmap metrics
+## 11. Roadmap metrics
 
 | Area | Measure |
 | --- | --- |
@@ -182,7 +211,7 @@ privacy/security model before adding network collection.
 | Inventory | Runtime/source/provider totals reconcile with definition rows |
 | Maintenance | Clear/compaction actions have verified backup/rollback |
 
-## 11. Prioritization rule
+## 12. Prioritization rule
 
 Work order is:
 

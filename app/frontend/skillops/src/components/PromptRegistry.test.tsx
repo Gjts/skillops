@@ -44,13 +44,14 @@ describe('Prompt Registry UI', () => {
     rerender(<PromptRegistryBrowser baselineRef={baselineRef} candidateRef={candidateRef} onBaseline={onBaseline} onCandidate={onCandidate} onModelHint={onModelHint} />)
     fireEvent.click(screen.getByRole('button', { name: 'Compare versions' }))
     expect(await screen.findByText('Changed fields: prompt')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Target skeleton'), { target: { value: 'prompt:release-summary' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create governed Candidate' }))
     expect(await screen.findByText(/Governed Candidate created:/)).toBeTruthy()
     expect(document.body.textContent).toContain('cap-local-1')
     fireEvent.click(screen.getAllByRole('button', { name: 'Use model hint' })[0])
     expect(onModelHint).toHaveBeenCalledWith({ provider: 'openai', model: 'gpt-5.6-sol' })
     expect(fetchMock).toHaveBeenCalledWith('/api/prompt-registry/nominate', expect.objectContaining({
-      method: 'POST', body: expect.stringContaining(candidateRef),
+      method: 'POST', body: JSON.stringify({ sourceRef: candidateRef, targetSkeleton: 'prompt:release-summary' }),
     }))
   })
 })

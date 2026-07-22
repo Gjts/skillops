@@ -1,5 +1,6 @@
 import { sendApiError, sendJson, setJsonApiHeaders } from '../api-response.mjs'
 import { initializeGovernanceServices } from '../governance/governance-api.mjs'
+import { resolveGovernancePrincipal } from '../governance/principal.mjs'
 import { EvaluationError } from '../evaluations/errors.mjs'
 import { assertLocalApiRequest, readEvaluationJsonBody } from '../evaluations/request-guard.mjs'
 import { promptRegistry } from './prompt-registry.mjs'
@@ -52,13 +53,17 @@ export async function handlePromptRegistryApi(request, response, pathname, optio
       sendJson(response, 200, await registry.compare(required(body.leftRef, 'Left Prompt reference'), required(body.rightRef, 'Right Prompt reference')))
     } else {
       if (!post) throw new EvaluationError('Method not allowed.', 405)
-      const body = onlyKeys(await readEvaluationJsonBody(request), new Set(['sourceRef', 'owner', 'targetSkeleton']), 'Prompt Candidate nomination')
+      const body = onlyKeys(await readEvaluationJsonBody(request), new Set(['sourceRef', 'targetSkeleton', 'projectId']), 'Prompt Candidate nomination')
+      const principal = await resolveGovernancePrincipal(request, options)
       const record = await registry.resolveArtifact(required(body.sourceRef, 'Prompt reference'))
-      const { governance } = options.governanceServices || await initializeGovernanceServices(options)
+      const { governance, teamControlPlane } = options.governanceServices || await initializeGovernanceServices(options)
+      await teamControlPlane?.authorize?.(principal, 'Developer')
       const result = await governance.nominate({
         artifact: record.artifact,
-        owner: required(body.owner, 'Capability owner', 200),
-        targetSkeleton: optional(body.targetSkeleton, 'Target reference', 4_000) || `prompt:${record.artifact.artifactId}`,
+        owner: principal.id,
+        ownerIdentityAssurance: principal.assurance,
+        ...(body.projectId ? { projectId: required(body.projectId, 'Project ID', 200) } : {}),
+        targetSkeleton: required(body.targetSkeleton, 'Target reference', 4_000),
       })
       sendJson(response, result.reused ? 200 : 201, result)
     }

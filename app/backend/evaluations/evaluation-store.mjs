@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto'
-import { appendFile, mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFile, copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { normalizeArtifactDefinition } from '../../shared/evaluation-schema.mjs'
 import { EvaluationError } from './errors.mjs'
 import { canonicalJson } from './suite-registry.mjs'
+import { withGovernanceFileLock } from '../governance/skeleton-lock.mjs'
 
 const RUN_STATUSES = new Set(['queued', 'running', 'completed', 'failed', 'cancelled', 'interrupted'])
 const RUN_MODES = new Set(['quick', 'suite', 'redteam'])
@@ -59,6 +60,47 @@ function ensureFiniteSigned(value, label) {
   if (value !== null && (!Number.isFinite(value))) throw new EvaluationError(`${label} is invalid.`, 500)
 }
 
+function migrateLegacyArtifact(value) {
+  if (value?.source !== 'github' || typeof value.sourceRef !== 'string') return value
+  try {
+    normalizeArtifactDefinition(value)
+    return value
+  } catch {
+    const reference = value.sourceRef
+    if (!reference.startsWith('github:https://') || reference.length > 4_000 || /[\u0000\r\n]/.test(reference)) return value
+    return {
+      ...value,
+      source: 'local-scan',
+      sourceRef: `local-scan:legacy-github:${createHash('sha256').update(reference, 'utf8').digest('hex')}`,
+      gitCommit: undefined,
+      repository: undefined,
+    }
+  }
+}
+
+function persistedSummary(record) {
+  if (record.schemaVersion === 2) return record.summary
+  if (record.schemaVersion !== undefined && record.schemaVersion !== 1) {
+    throw new EvaluationError('Evaluation store record schema is unsupported.', 500)
+  }
+  return {
+    ...record.summary,
+    baseline: migrateLegacyArtifact(record.summary?.baseline),
+    candidate: migrateLegacyArtifact(record.summary?.candidate),
+  }
+}
+
+export function sanitizePersistedArtifact(value) {
+  const artifact = normalizeArtifactDefinition(value)
+  if (artifact.source !== 'local-scan') return artifact
+  const match = /^local-scan:([^:]+):(.+)$/.exec(artifact.sourceRef)
+  if (!match || match[2].startsWith('sha256:')) return artifact
+  return {
+    ...artifact,
+    sourceRef: `local-scan:${match[1]}:sha256:${createHash('sha256').update(artifact.sourceRef, 'utf8').digest('hex')}`,
+  }
+}
+
 export function sanitizeEvaluationRunSummary(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new EvaluationError('Evaluation run summary is invalid.', 500)
   if (!RUN_STATUSES.has(value.status)) throw new EvaluationError('Evaluation run status is invalid.', 500)
@@ -71,19 +113,28 @@ export function sanitizeEvaluationRunSummary(value) {
   }
   const engine = value.engine && typeof value.engine === 'object' && !Array.isArray(value.engine) ? value.engine : {}
   const provider = value.provider && typeof value.provider === 'object' && !Array.isArray(value.provider) ? value.provider : {}
+  let providerModels
+  if (provider.models !== undefined) {
+    if (!Array.isArray(provider.models) || !provider.models.length || provider.models.length > 8) throw new EvaluationError('Provider models are invalid.', 500)
+    providerModels = provider.models.map((model) => text(model, 'Provider model', 200))
+  }
+  const configurationHash = provider.configurationHash === undefined ? undefined : text(provider.configurationHash, 'Provider configuration hash', 64)
+  if (configurationHash && !/^[a-f0-9]{64}$/.test(configurationHash)) throw new EvaluationError('Provider configuration hash is invalid.', 500)
   return {
     id: text(value.id, 'Run ID', 200),
     mode: value.mode,
     status: value.status,
     capabilityId: value.capabilityId === undefined ? undefined : text(value.capabilityId, 'Capability ID', 200),
+    subjectHash: value.subjectHash === undefined || value.subjectHash === null ? null : text(value.subjectHash, 'Evaluation subject hash', 64),
     suiteId: value.suiteId === undefined ? undefined : text(value.suiteId, 'Suite ID', 120),
     suiteVersion: value.suiteVersion === undefined ? undefined : text(value.suiteVersion, 'Suite version', 100),
     suiteHash: value.suiteHash === undefined || value.suiteHash === null ? null : text(value.suiteHash, 'Suite hash', 64),
     datasetHash: value.datasetHash === undefined || value.datasetHash === null ? null : text(value.datasetHash, 'Dataset hash', 64),
-    baseline: normalizeArtifactDefinition(value.baseline),
-    candidate: normalizeArtifactDefinition(value.candidate),
+    casesHash: value.casesHash === undefined || value.casesHash === null ? null : text(value.casesHash, 'Cases hash', 64),
+    baseline: sanitizePersistedArtifact(value.baseline),
+    candidate: sanitizePersistedArtifact(value.candidate),
     engine: { name: text(engine.name, 'Engine name', 50), version: text(engine.version, 'Engine version', 100) },
-    provider: { id: text(provider.id, 'Provider ID', 100), model: text(provider.model, 'Provider model', 200) },
+    provider: { id: text(provider.id, 'Provider ID', 100), model: text(provider.model, 'Provider model', 200), ...(providerModels ? { models: providerModels } : {}), ...(configurationHash ? { configurationHash } : {}) },
     metrics,
     policyHash: value.policyHash === undefined || value.policyHash === null ? null : text(value.policyHash, 'Policy hash', 64),
     gates: Array.isArray(value.gates) ? value.gates.map((gate) => ({
@@ -116,15 +167,22 @@ export function sanitizeEvaluationCases(value) {
         score: nullableNumber(assertion.score, 'Assertion score'),
       })) : [],
     })
+    const hasMatrixId = item.matrixId !== undefined
+    if (hasMatrixId !== (item.model !== undefined)) throw new EvaluationError('Evaluation matrix case identity is incomplete.', 500)
     return {
       id: text(item.id, 'Case summary ID', 200),
       caseId: text(item.caseId, 'Case ID', 120),
       repeat: nullableNumber(item.repeat, 'Case repeat'),
       weight: nullableNumber(item.weight, 'Case weight'),
+      ...(hasMatrixId ? { matrixId: text(item.matrixId, 'Evaluation matrix ID', 120), model: text(item.model, 'Evaluation matrix model', 200) } : {}),
       baseline: variant(item.baseline, 'Baseline'),
       candidate: variant(item.candidate, 'Candidate'),
     }
   })
+}
+
+export function computeEvaluationCasesHash(cases) {
+  return createHash('sha256').update(canonicalJson(sanitizeEvaluationCases(cases)), 'utf8').digest('hex')
 }
 
 export function computeEvaluationEvidenceHash(summary) {
@@ -140,7 +198,6 @@ function parseRecords(contents) {
     const line = lines[index]
     if (!line.trim()) continue
     try { records.push(JSON.parse(line)) } catch {
-      if (index === lines.length - 1 || lines.slice(index + 1).every((next) => !next.trim())) break
       throw new EvaluationError('Evaluation store contains a malformed record.', 500)
     }
   }
@@ -166,51 +223,33 @@ export function createEvaluationStore(options = {}) {
     const runs = new Map()
     const cases = new Map()
     for (const record of await records()) {
-      if (record?.type === 'run') runs.set(record.summary?.id, sanitizeEvaluationRunSummary(record.summary))
+      if (record?.schemaVersion !== undefined && ![1, 2].includes(record.schemaVersion)) {
+        throw new EvaluationError('Evaluation store record schema is unsupported.', 500)
+      }
+      if (record?.type === 'run') runs.set(record.summary?.id, sanitizeEvaluationRunSummary(persistedSummary(record)))
       else if (record?.type === 'cases') cases.set(record.runId, sanitizeEvaluationCases(record.cases))
+    }
+    for (const run of runs.values()) {
+      if (run.status !== 'completed' || !run.casesHash) continue
+      const persistedCases = cases.get(run.id)
+      if (!persistedCases || computeEvaluationCasesHash(persistedCases) !== run.casesHash) {
+        throw new EvaluationError('Evaluation store case evidence does not match its immutable summary.', 500)
+      }
     }
     return { runs, cases }
   }
 
   async function repairTrailingNewline() {
-    let handle
     try {
-      handle = await open(storeFile, 'r+')
-      const info = await handle.stat()
-      if (!info.size) return
-      const last = Buffer.alloc(1)
-      await handle.read(last, 0, 1, info.size - 1)
-      if (last[0] === 10) return
       const contents = await readFile(storeFile, 'utf8')
-      const lastNewline = contents.lastIndexOf('\n')
-      const trailing = contents.slice(lastNewline + 1)
-      try {
-        JSON.parse(trailing)
-        await appendFile(storeFile, '\n', 'utf8')
-      } catch {
-        await handle.truncate(Buffer.byteLength(contents.slice(0, lastNewline + 1), 'utf8'))
-      }
+      if (contents && !contents.endsWith('\n')) await appendFile(storeFile, '\n', 'utf8')
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error
-    } finally { await handle?.close() }
+    }
   }
 
-  async function withLock(operation) {
-    await mkdir(dataDir, { recursive: true })
-    let handle
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      try { handle = await open(lockFile, 'wx'); break } catch (error) {
-        if (error?.code !== 'EEXIST') throw error
-        const info = await stat(lockFile).catch(() => null)
-        if (info && Date.now() - info.mtimeMs > 30_000) await rm(lockFile, { force: true })
-        await new Promise((resolve) => setTimeout(resolve, 10))
-      }
-    }
-    if (!handle) throw new EvaluationError('Timed out waiting for the evaluation store lock.', 503)
-    try { return await operation() } finally {
-      await handle.close()
-      await rm(lockFile, { force: true })
-    }
+  function withLock(operation) {
+    return withGovernanceFileLock(lockFile, operation, options.lockAttempts || 100, 'evaluation store')
   }
 
   function serialized(operation) {
@@ -232,8 +271,9 @@ export function createEvaluationStore(options = {}) {
   }
 
   async function appendRecord(record) {
+    await latestState()
     await repairTrailingNewline()
-    await appendFile(storeFile, `${JSON.stringify(record)}\n`, 'utf8')
+    await appendFile(storeFile, `${JSON.stringify({ schemaVersion: 2, ...record })}\n`, 'utf8')
     await writeIndex()
   }
 
@@ -248,7 +288,11 @@ export function createEvaluationStore(options = {}) {
     async writeCases(runId, caseSummaries) {
       const id = text(runId, 'Run ID', 200)
       const sanitized = sanitizeEvaluationCases(caseSummaries)
-      await serialized(() => appendRecord({ type: 'cases', runId: id, cases: sanitized }))
+      await serialized(async () => {
+        const run = (await latestState()).runs.get(id)
+        if (run?.status === 'completed') throw new EvaluationError('Completed evaluation case evidence is immutable.', 409)
+        await appendRecord({ type: 'cases', runId: id, cases: sanitized })
+      })
       return sanitized
     },
     async getRun(runId) {
@@ -272,8 +316,8 @@ export function createEvaluationStore(options = {}) {
       return { items: page, nextCursor: items.length > limit ? page.at(-1).id : null }
     },
     async interruptRunning() {
-      const running = [...(await latestState()).runs.values()].filter((run) => run.status === 'running')
-      for (const run of running) {
+      const unfinished = [...(await latestState()).runs.values()].filter((run) => run.status === 'queued' || run.status === 'running')
+      for (const run of unfinished) {
         await serialized(() => appendRecord({ type: 'run', summary: sanitizeEvaluationRunSummary({
           ...run,
           status: 'interrupted',
@@ -283,7 +327,59 @@ export function createEvaluationStore(options = {}) {
           gateResult: 'not-evaluated',
         }) }))
       }
-      return running.length
+      return unfinished.length
+    },
+    async pruneBefore(cutoff, { preserveRunIds = [], backup = true } = {}) {
+      const cutoffMs = cutoff instanceof Date ? cutoff.getTime() : Date.parse(cutoff)
+      if (!Number.isFinite(cutoffMs)) throw new EvaluationError('Evaluation retention cutoff is invalid.', 422)
+      if (!Array.isArray(preserveRunIds) || preserveRunIds.some((id) => typeof id !== 'string' || !id)) {
+        throw new EvaluationError('Preserved evaluation run IDs are invalid.', 422)
+      }
+      const preserved = new Set(preserveRunIds)
+      return serialized(async () => {
+        const { runs } = await latestState()
+        const removedRunIds = new Set([...runs.values()]
+          .filter((run) => TERMINAL_STATUSES.has(run.status) && Date.parse(run.requestedAt) < cutoffMs && !preserved.has(run.id))
+          .map((run) => run.id))
+        let removedRecords = 0
+        let backupFile
+        if (removedRunIds.size) {
+          const all = await records()
+          const kept = all.filter((record) => {
+            const runId = record?.type === 'run' ? record.summary?.id : record?.type === 'cases' ? record.runId : null
+            if (!removedRunIds.has(runId)) return true
+            removedRecords += 1
+            return false
+          })
+          const suffix = new Date().toISOString().replace(/[:.]/g, '-')
+          backupFile = backup ? `${storeFile}.backup-${suffix}` : undefined
+          if (backupFile) await copyFile(storeFile, backupFile)
+          const temporary = `${storeFile}.${process.pid}.retention.tmp`
+          try {
+            await writeFile(temporary, kept.length ? `${kept.map(JSON.stringify).join('\n')}\n` : '', 'utf8')
+            await rename(temporary, storeFile)
+          } finally {
+            await rm(temporary, { force: true })
+          }
+          await writeIndex()
+        }
+        let removedBackups = 0
+        for (const entry of await readdir(dataDir, { withFileTypes: true })) {
+          if (!entry.isFile() || !entry.name.startsWith('evaluations.jsonl.backup-')) continue
+          const candidate = path.join(dataDir, entry.name)
+          if (candidate === backupFile) continue
+          if ((await stat(candidate)).mtimeMs >= cutoffMs) continue
+          await rm(candidate)
+          removedBackups += 1
+        }
+        return {
+          removedRuns: removedRunIds.size,
+          removedRecords,
+          retainedRuns: runs.size - removedRunIds.size,
+          removedBackups,
+          backupFile,
+        }
+      })
     },
     async health() {
       const info = await stat(storeFile).catch((error) => error?.code === 'ENOENT' ? null : Promise.reject(error))

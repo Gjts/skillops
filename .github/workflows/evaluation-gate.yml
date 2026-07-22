@@ -2,6 +2,7 @@ name: Evaluation gate
 
 on:
   pull_request:
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -9,11 +10,11 @@ permissions:
 
 jobs:
   deterministic-evaluation:
+    name: Required Artifact evaluation
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       SKILLOPS_DATA_DIR: ${{ github.workspace }}/.skillops-ci-data
-      SKILLOPS_EVAL_API_KEY: ${{ secrets.SKILLOPS_EVAL_API_KEY }}
       PROMPTFOO_DISABLE_TELEMETRY: "1"
       PROMPTFOO_DISABLE_UPDATE: "1"
       PROMPTFOO_DISABLE_SHARING: "1"
@@ -22,6 +23,8 @@ jobs:
       PROMPTFOO_CACHE_ENABLED: "false"
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -34,9 +37,19 @@ jobs:
         shell: bash
         run: |
           mkdir -p artifacts
-          npm run eval:run -- --suite deterministic-smoke --baseline baseline-fixture --candidate candidate-fixture --deterministic --summary artifacts/evaluation-summary.json --junit artifacts/evaluation-junit.xml | tee artifacts/evaluation-command.json
+          npm run eval:run -- --suite deterministic-smoke --baseline baseline-fixture --candidate candidate-fixture --deterministic --summary artifacts/evaluation-summary.json --junit artifacts/evaluation-junit.xml --html artifacts/evaluation-report.html | tee artifacts/evaluation-command.json
           RUN_ID=$(node -e "const fs=require('fs');const lines=fs.readFileSync(process.env.SKILLOPS_DATA_DIR+'/evaluations.jsonl','utf8').trim().split(/\n/).map(JSON.parse).filter(x=>x.type==='run'&&x.summary.status==='completed');process.stdout.write(lines.at(-1).summary.id)")
           npm run eval:verify -- --run "$RUN_ID"
+      - name: Evaluate changed immutable Artifacts
+        shell: bash
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
+          HEAD_REF: ${{ github.sha }}
+        run: |
+          BASE_SHA=$(git rev-parse "$BASE_REF")
+          HEAD_SHA=$(git rev-parse "$HEAD_REF")
+          if [ "$BASE_SHA" = "$HEAD_SHA" ]; then BASE_SHA=$(git rev-parse "$HEAD_SHA^"); fi
+          npm run eval:changed -- --base "$BASE_SHA" --head "$HEAD_SHA" --output-dir artifacts/changed | tee artifacts/changed-evaluation-index.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -44,3 +57,6 @@ jobs:
           path: |
             artifacts/evaluation-summary.json
             artifacts/evaluation-junit.xml
+            artifacts/evaluation-report.html
+            artifacts/changed-evaluation-index.json
+            artifacts/changed/**

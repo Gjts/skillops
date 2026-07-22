@@ -33,8 +33,9 @@ Promptfoo upgrade is contained to the runtime adapter, fixture, and normalizer.
 
 ## Isolation and privacy boundary
 
-`promptfoo-runtime.mjs` creates a worker thread for each run. Before that worker
-imports Promptfoo, SkillOps gives it a per-run `PROMPTFOO_CONFIG_DIR` and sets:
+`promptfoo-runtime.mjs` forks one child process per run with no inherited Node
+arguments or secret-named environment variables. Before that process imports
+Promptfoo, SkillOps gives it a per-run `PROMPTFOO_CONFIG_DIR` and sets:
 
 ```text
 PROMPTFOO_DISABLE_TELEMETRY=1
@@ -47,9 +48,10 @@ PROMPTFOO_LOG_LEVEL=error
 ```
 
 Every evaluation also passes `cache: false`, uses concurrency 1 inside the
-worker, disables latest-result writes and sharing, audits the temporary runtime
+child, disables latest-result writes and sharing, audits the temporary runtime
 directory for secrets and evaluation content, and removes that directory after
-the run. A cancellation terminates the worker. The contract tests additionally
+the run. Cancellation, configured timeout, and shutdown terminate the child;
+startup recovery marks previously running jobs interrupted. Contract tests also
 verify that the user's default `~/.promptfoo` directory is unchanged.
 
 The remote-generation switches are defense in depth, not a network firewall.
@@ -57,8 +59,11 @@ Promptfoo's own documentation warns that the general switch does not disable
 providers, telemetry, sharing, or account checks. SkillOps therefore controls
 those features independently. The only intended model egress is through the
 user-selected SkillOps provider bridge. Credentials may originate from the
-explicit local AI settings file, stay in request and Worker memory during a run,
-and are excluded from normalized evidence.
+explicit local AI settings file, stay in request and child-process memory during
+a run, and are excluded from normalized evidence. Optional Suite Schema v1
+redaction rules separately cover task text, scalar variables, and provider
+output; output rules run before Promptfoo assertions. JSON and inert HTML
+reports are regenerated only from the sanitized evidence allowlist.
 
 ## Red Team experimental seam
 
@@ -95,14 +100,14 @@ silently skipping a probe.
 
 ## Known dependency advisory
 
-As of 2026-07-21, `npm audit` reports four high-severity entries along the
-transitive chain
-`promptfoo -> @huggingface/transformers -> onnxruntime-node -> adm-zip` for
-`GHSA-xcpc-8h2w-3j85`. npm's offered remediation downgrades Promptfoo to
-`0.121.3`, outside this tested contract, so it has not been applied
-automatically. Re-evaluate the advisory on every Promptfoo upgrade and avoid
-feeding untrusted archive/model artifacts to the affected optional inference
-path.
+As of 2026-07-22, `npm audit` reports 12 transitive entries: five high-severity
+entries through `@huggingface/transformers -> onnxruntime-node -> adm-zip` and
+the nested `sharp` package, plus seven moderate entries through Promptfoo's
+agent dependencies and `@hono/node-server`. npm's offered remediation
+downgrades Promptfoo to `0.120.8`, outside this tested contract, so it has not
+been applied automatically. Re-evaluate the advisories on every Promptfoo
+upgrade and avoid feeding untrusted archive/model artifacts to affected
+optional inference paths.
 
 ## Official references
 

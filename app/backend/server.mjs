@@ -3,13 +3,17 @@ import { stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import path from 'node:path'
 import { appendEvent, appendEvents, clearEvents, eventVersion, readEvents, readJsonBody } from './event-store.mjs'
-import { handleEvaluationApi, initializeManagedEvaluationServices } from './skill-evaluations.mjs'
+import { initializeConflictServices } from './conflicts/conflict-api.mjs'
+import { handleEvaluationApi, initializeGovernanceServices, initializeManagedEvaluationServices, initializeTeamControlPlane } from './skill-evaluations.mjs'
 import { syncCodexDesktopEvents } from './codex-desktop-ingest.mjs'
 import { enrichRuntimeConnections, readRuntimeConnections } from './runtime-connections.mjs'
-import { scanInstalledSkills } from './skill-scanner.mjs'
+import { scanSkillInventory } from './skill-scanner.mjs'
+import { isLoopbackHostname } from './evaluations/provider-client.mjs'
+import { assertLocalApiRequest } from './evaluations/request-guard.mjs'
 
 const port = Number(process.env.PORT || 4173)
 const host = process.env.SKILLOPS_HOST || '127.0.0.1'
+if (!isLoopbackHostname(host)) throw new Error('SKILLOPS_HOST must remain a loopback hostname until authenticated network APIs are implemented.')
 const dist = path.resolve(process.cwd(), 'dist')
 const mime = {
   '.css': 'text/css; charset=utf-8',
@@ -20,10 +24,23 @@ const mime = {
 }
 
 const managedEvaluationServices = await initializeManagedEvaluationServices()
+await initializeGovernanceServices()
+const teamControlPlane = await initializeTeamControlPlane()
+initializeConflictServices()
 
 const server = createServer(async (request, response) => {
-  const pathname = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`).pathname
-  if (await handleEvaluationApi(request, response, pathname)) return
+  const pathname = new URL(request.url || '/', 'http://localhost').pathname
+  if (await handleEvaluationApi(request, response, pathname, { managedEvaluationServices, teamControlPlane })) return
+  if (pathname === '/api/connections' || pathname === '/api/scan' || pathname === '/api/events' || pathname === '/api/import') {
+    try {
+      assertLocalApiRequest(request, { requireJson: request.method === 'POST' && (pathname === '/api/events' || pathname === '/api/import') })
+    } catch (error) {
+      const status = error && typeof error === 'object' && 'status' in error ? Number(error.status) : NaN
+      response.setHeader('Content-Type', 'application/json')
+      response.statusCode = Number.isInteger(status) ? status : 403
+      return response.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Local API request rejected.' }))
+    }
+  }
 
   if (pathname === '/api/connections') {
     response.setHeader('Content-Type', 'application/json')
@@ -44,7 +61,7 @@ const server = createServer(async (request, response) => {
   if (pathname === '/api/scan') {
     response.setHeader('Content-Type', 'application/json')
     try {
-      if (request.method === 'POST') return response.end(JSON.stringify(await scanInstalledSkills()))
+      if (request.method === 'POST') return response.end(JSON.stringify(await scanSkillInventory()))
       response.statusCode = 405
       return response.end(JSON.stringify({ error: 'Method not allowed' }))
     } catch (error) {

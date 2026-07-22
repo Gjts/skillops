@@ -1,17 +1,22 @@
-import { defineConfig, type Plugin } from 'vite'
+import type { Plugin } from 'vite'
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import path from 'node:path'
 import { themeBootstrapConfig } from './app/frontend/skillops/src/lib/themeCatalog'
 // @ts-expect-error Plain JavaScript module is shared with the production server.
 import { appendEvent, appendEvents, clearEvents, eventVersion, readEvents, readJsonBody } from './app/backend/event-store.mjs'
 // @ts-expect-error Plain JavaScript module is shared with the production server.
-import { handleEvaluationApi, initializeManagedEvaluationServices } from './app/backend/skill-evaluations.mjs'
+import { initializeConflictServices } from './app/backend/conflicts/conflict-api.mjs'
+// @ts-expect-error Plain JavaScript module is shared with the production server.
+import { handleEvaluationApi, initializeManagedEvaluationServices, initializeTeamControlPlane } from './app/backend/skill-evaluations.mjs'
 // @ts-expect-error Plain JavaScript module is shared with the production server.
 import { syncCodexDesktopEvents } from './app/backend/codex-desktop-ingest.mjs'
 // @ts-expect-error Plain JavaScript module is shared with the production server.
 import { enrichRuntimeConnections, readRuntimeConnections } from './app/backend/runtime-connections.mjs'
 // @ts-expect-error Plain JavaScript module is shared with the production server.
-import { scanInstalledSkills } from './app/backend/skill-scanner.mjs'
+import { scanSkillInventory } from './app/backend/skill-scanner.mjs'
+// @ts-expect-error Plain JavaScript module is shared with the production server.
+import { assertLocalApiRequest } from './app/backend/evaluations/request-guard.mjs'
 
 function themeBootstrap(): Plugin {
   return {
@@ -37,11 +42,24 @@ function localEventApi(): Plugin {
   return {
     name: 'skillops-local-event-api',
     configureServer(server) {
+      initializeConflictServices()
       const managedServices = initializeManagedEvaluationServices()
+      const teamControlPlane = initializeTeamControlPlane()
       server.httpServer?.once('close', () => { void managedServices.then((services: { manager: { shutdown(): Promise<void> } }) => services.manager.shutdown()) })
       server.middlewares.use(async (request, response, next) => {
         const pathname = new URL(request.url || '/', 'http://localhost').pathname
-        if (await handleEvaluationApi(request, response, pathname)) return
+        if (await handleEvaluationApi(request, response, pathname, { managedEvaluationServices: await managedServices, teamControlPlane: await teamControlPlane })) return
+        if (pathname === '/api/connections' || pathname === '/api/scan' || pathname === '/api/events' || pathname === '/api/import') {
+          try {
+            assertLocalApiRequest(request, { requireJson: request.method === 'POST' && (pathname === '/api/events' || pathname === '/api/import') })
+          } catch (error) {
+            const status = error && typeof error === 'object' && 'status' in error ? Number(error.status) : NaN
+            response.setHeader('Content-Type', 'application/json')
+            response.statusCode = Number.isInteger(status) ? status : 403
+            response.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Local API request rejected.' }))
+            return
+          }
+        }
         if (pathname === '/api/connections') {
           response.setHeader('Content-Type', 'application/json')
           if (request.method !== 'GET') {
@@ -67,7 +85,7 @@ function localEventApi(): Plugin {
               response.end(JSON.stringify({ error: 'Method not allowed' }))
               return
             }
-            response.end(JSON.stringify(await scanInstalledSkills()))
+            response.end(JSON.stringify(await scanSkillInventory()))
           } catch (error) {
             response.statusCode = 500
             response.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Scan failed' }))
@@ -134,6 +152,7 @@ export default defineConfig({
   root: path.resolve('app/frontend/skillops'),
   plugins: [stripNodeShebangs(), themeBootstrap(), react(), localEventApi()],
   server: { port: 5173 },
+  test: { maxWorkers: 2, testTimeout: 30_000, setupFiles: [path.resolve('scripts/test-no-egress.mjs')] },
   build: {
     outDir: path.resolve('dist'),
     emptyOutDir: true,

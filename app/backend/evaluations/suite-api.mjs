@@ -3,6 +3,7 @@ import { sendApiError, sendJson, setJsonApiHeaders } from '../api-response.mjs'
 import { createArtifactResolver } from './artifact-resolver.mjs'
 import { createEvaluationManager } from './evaluation-manager.mjs'
 import { createEvaluationStore } from './evaluation-store.mjs'
+import { createEvaluationReport, renderEvaluationHtmlReport } from './evaluation-report.mjs'
 import { EvaluationError } from './errors.mjs'
 import { normalizeProvider } from './provider-client.mjs'
 import { assertLocalApiRequest, readEvaluationJsonBody } from './request-guard.mjs'
@@ -41,6 +42,7 @@ function publicSuite(suite) {
     sensitivity: suite.sensitivity,
     artifactKind: suite.artifactKind,
     repeats: suite.repeats,
+    ...(suite.matrix ? { matrix: suite.matrix } : {}),
     caseCount: suite.cases.length,
     suiteHash: suite.suiteHash,
     datasetHash: suite.datasetHash,
@@ -79,8 +81,9 @@ export async function handleManagedEvaluationApi(request, response, pathname, op
   const isRunList = pathname === '/api/evaluation-runs'
   const cancelId = routeId(pathname, '/cancel')
   const casesId = routeId(pathname, '/cases')
-  const runId = !cancelId && !casesId ? routeId(pathname) : null
-  if (!isSuiteList && !suiteMatch && !isRunList && !cancelId && !casesId && !runId) return false
+  const reportId = routeId(pathname, '/report')
+  const runId = !cancelId && !casesId && !reportId ? routeId(pathname) : null
+  if (!isSuiteList && !suiteMatch && !isRunList && !cancelId && !casesId && !reportId && !runId) return false
   setJsonApiHeaders(response)
   try {
     const isPost = request.method === 'POST' && (isRunList || Boolean(cancelId))
@@ -105,7 +108,7 @@ export async function handleManagedEvaluationApi(request, response, pathname, op
       if (baseline.artifact.kind !== suite.artifactKind || candidate.artifact.kind !== suite.artifactKind) {
         throw new EvaluationError('Suite artifact kind does not match the selected baseline and candidate.', 422)
       }
-      const created = await services.manager.enqueue({ ...body, suite, baseline, candidate, provider })
+      const created = await services.manager.enqueue({ ...body, requestedBy: options.teamPrincipal?.id || body.requestedBy, suite, baseline, candidate, provider })
       sendJson(response, 202, { run: created.summary, reused: created.reused })
     } else if (isRunList) {
       method(request, 'GET')
@@ -122,6 +125,22 @@ export async function handleManagedEvaluationApi(request, response, pathname, op
       await readEvaluationJsonBody(request)
       const cancelled = await services.manager.cancel(cancelId)
       sendJson(response, 200, cancelled)
+    } else if (reportId) {
+      method(request, 'GET')
+      const run = await services.store.getRun(reportId)
+      if (!run) throw new EvaluationError('Evaluation run was not found.', 404)
+      const cases = await services.store.getCases(reportId)
+      const format = query(request).get('format') || 'json'
+      if (format === 'json') {
+        sendJson(response, 200, createEvaluationReport(run, cases))
+      } else if (format === 'html') {
+        response.setHeader('Content-Type', 'text/html; charset=utf-8')
+        response.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+        response.statusCode = 200
+        response.end(renderEvaluationHtmlReport(run, cases))
+      } else {
+        throw new EvaluationError('Report format must be json or html.', 422)
+      }
     } else if (casesId) {
       method(request, 'GET')
       if (!await services.store.getRun(casesId)) throw new EvaluationError('Evaluation run was not found.', 404)

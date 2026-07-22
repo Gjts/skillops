@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "ci-rules-quality",
+  "name": "CI Rules candidate quality",
+  "version": "1.0.0",
+  "owner": "skillops-maintainers",
+  "sensitivity": "synthetic",
+  "artifactKind": "rules",
+  "repeats": 2,
+  "cases": [
+    {
+      "id": "candidate-evidence",
+      "input": "Validate the immutable candidate metadata.",
+      "weight": 1,
+      "assertions": [
+        { "type": "not-contains", "value": "API_KEY", "label": "no-secret-placeholder" },
+        { "type": "icontains", "value": "verified", "label": "candidate-resolved", "blocking": false }
+      ]
+    }
+  ]
+}

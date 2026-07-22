@@ -13,7 +13,7 @@ afterEach(async () => {
 })
 
 const artifact = (id, hash) => ({
-  artifact: { kind: 'skill', artifactId: id, version: '1.0.0', description: `${id} assistant`, source: 'github', sourceRef: `github:${id}`, contentHash: hash.repeat(64) },
+  artifact: { kind: 'skill', artifactId: id, version: '1.0.0', description: `${id} assistant`, source: 'github', sourceRef: `github:https://github.com/acme/${id}/blob/${hash.repeat(40)}/SKILL.md#SKILL.md`, contentHash: hash.repeat(64), gitCommit: hash.repeat(40) },
   contents: `sentinel-${id}-definition`,
 })
 

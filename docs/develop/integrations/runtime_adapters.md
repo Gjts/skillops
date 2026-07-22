@@ -1,6 +1,6 @@
 # Runtime adapters: Codex and Claude Code
 
-> Version: v0.3.1
+> Version: v0.3.2-rc.1
 > Status: Codex and Claude Code implemented; Cursor preview
 
 ## 1. Adapter role
@@ -77,10 +77,13 @@ User installation merges handlers into `~/.codex/hooks.json` or
 | --- | --- | --- |
 | Explicit `$skill-name` matching an installed Skill | `explicit_prompt` | Exact, `1.0` |
 | Actual tool command reads `.../skills/<name>/SKILL.md` | `skill_path` | Heuristic, `0.92` |
+| Explicit `/prompts:name` custom Prompt reference | `explicit_prompt` | Exact Workflow match, `1.0` |
+| `SessionStart` inventory finds `AGENTS.md` Rules | None | Discovery only; no trustworthy Rule-load lifecycle signal |
+| `SubagentStart` matching `.codex/agents/*.toml` | `hook` | Exact Agent definition |
 | Implicit internal selection with neither signal | None | Cannot be proven |
 
 Codex has no dedicated generic Skill lifecycle hook. Normal `Stop` closes active
-Skill lifecycle with `outcome: unknown`.
+Skill, Workflow, and Agent lifecycle with `outcome: unknown`; Rules remain inventory-only.
 
 ### Codex Desktop ingestion
 
@@ -115,15 +118,18 @@ This applies to settings, global Skills, legacy commands, and plugin resolution.
 | Claude Code signal | SkillOps event | Detection |
 | --- | --- | --- |
 | `SessionStart` / `SessionEnd` | session start/completion | Exact |
+| `SessionStart` inventory finds Claude Rules | Rules discovery only | Definition presence; no trustworthy Rule-load lifecycle signal |
 | `UserPromptSubmit` | prompt submitted | Exact, length only |
 | `UserPromptExpansion` for `/skill-name` | match + start | Exact slash command |
 | `PreToolUse` with `Skill` tool | match + start | Exact Skill tool |
 | Tool input reads a Skill path | match + start | Heuristic `0.92` |
 | `PostToolUse` / failure | tool completion | Exact lifecycle outcome |
 | `SubagentStart` / `SubagentStop` | subagent lifecycle | Exact |
+| `SubagentStart` matching `.claude/agents/*.md` | Agent match + start | Exact definition match |
 | `Stop` / `StopFailure` | terminal Skill/turn | Exact lifecycle boundary |
 
-Normal `Stop` creates lifecycle-only completion. `StopFailure` creates failure.
+Normal `Stop` creates lifecycle-only completion for active Skills, Workflows,
+and Agents. `StopFailure` creates failure. Rules remain inventory-only.
 
 ### CC Switch compatibility
 
@@ -147,9 +153,9 @@ plugin hook. Local installation cannot bypass policy.
 
 ## 6. Cursor status
 
-Cursor is represented in inventory scans and the dashboard, but the adapter is
-**Preview** in v0.3.1. Manual `npm run emit` can create Cursor-labeled events for
-integration testing, but this is not native runtime observation.
+Cursor is represented in inventory scans and the dashboard, but its adapter is
+**Preview** in this release. Manual `npm run emit` can create Cursor-labeled
+events for integration testing, but this is not native runtime observation.
 
 ## 7. Connection-status interpretation
 

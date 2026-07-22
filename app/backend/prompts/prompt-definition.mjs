@@ -7,7 +7,7 @@ import { canonicalJson } from '../evaluations/suite-registry.mjs'
 const MODEL_CONFIGURATION_FIELDS = new Set([
   'max_tokens', 'max_tokens_to_sample', 'temperature', 'top_p', 'top_k', 'frequency_penalty', 'presence_penalty', 'seed', 'stop',
 ])
-const TOP_LEVEL_FIELDS = new Set(['schemaVersion', 'id', 'name', 'description', 'system', 'template', 'messages', 'model', 'variables'])
+const TOP_LEVEL_FIELDS = new Set(['schemaVersion', 'id', 'name', 'description', 'system', 'template', 'messages', 'model', 'variables', 'variableDefaults'])
 
 function object(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new EvaluationError(`${label} must be an object.`, 422)
@@ -72,6 +72,20 @@ function declaredVariables(value) {
   return value.map(normalizePromptVariableName)
 }
 
+function variableDefaults(value) {
+  if (value === undefined) return {}
+  const input = object(value, 'Prompt variable defaults')
+  if (Object.keys(input).length > 100) throw new EvaluationError('Prompt variable defaults must contain at most 100 entries.', 422)
+  return Object.fromEntries(Object.entries(input)
+    .map(([key, item]) => {
+      const name = normalizePromptVariableName(key)
+      if (item === null || typeof item === 'boolean' || typeof item === 'number' && Number.isFinite(item)) return [name, item]
+      if (typeof item === 'string') return [name, text(item, `Prompt variable default ${name}`, { maxLength: 12_000 })]
+      throw new EvaluationError(`Prompt variable default ${name} must be a scalar value.`, 422)
+    })
+    .sort(([left], [right]) => left.localeCompare(right)))
+}
+
 export function promptRegistrySourceRef(commit, relativePath, contentHash) {
   if (!/^[a-f0-9]{40,64}$/i.test(commit) || !relativePath || !/^[a-f0-9]{64}$/.test(contentHash)) {
     throw new EvaluationError('Prompt Registry source reference is invalid.', 422)
@@ -92,7 +106,7 @@ export function parsePromptRegistrySourceRef(value) {
   }
 }
 
-export function adaptPromptDefinition(value, { commit, relativePath }) {
+export function adaptPromptDefinition(value, { commit, relativePath, repository }) {
   const input = object(value, 'Prompt definition')
   onlyKeys(input, TOP_LEVEL_FIELDS, 'Prompt definition')
   if (input.schemaVersion !== 1) throw new EvaluationError('Prompt definition schemaVersion must be 1.', 422)
@@ -101,14 +115,16 @@ export function adaptPromptDefinition(value, { commit, relativePath }) {
   if (Boolean(promptMessages) === Boolean(template)) throw new EvaluationError('Prompt definition requires exactly one template or messages field.', 422)
   const system = text(input.system, 'Prompt system message')
   const normalizedModel = model(input.model)
+  const defaults = variableDefaults(input.variableDefaults)
   const usedVariables = promptVariableNames(system, template, ...(promptMessages || []).map((message) => message.content))
-  const variables = [...new Set([...declaredVariables(input.variables), ...usedVariables])].sort()
+  const variables = [...new Set([...declaredVariables(input.variables), ...Object.keys(defaults), ...usedVariables])].sort()
   const prompt = {
     schemaVersion: 1,
     system,
     ...(promptMessages ? { messages: promptMessages } : { template }),
     model: normalizedModel,
     variables,
+    ...(Object.keys(defaults).length ? { variableDefaults: defaults } : {}),
   }
   const canonical = canonicalJson(prompt)
   const contentHash = artifactContentHash(canonical)
@@ -117,7 +133,7 @@ export function adaptPromptDefinition(value, { commit, relativePath }) {
     prompt: artifactContentHash(canonicalJson(prompt.messages || prompt.template || '')),
     model: artifactContentHash(canonicalJson({ provider: prompt.model.provider, name: prompt.model.name })),
     configuration: artifactContentHash(canonicalJson(prompt.model.configuration)),
-    variables: artifactContentHash(canonicalJson(prompt.variables)),
+    variables: artifactContentHash(canonicalJson(Object.keys(defaults).length ? { names: prompt.variables, defaults } : prompt.variables)),
   }
   const sourceRef = promptRegistrySourceRef(commit, relativePath, contentHash)
   const name = text(input.name, 'Prompt name', { required: true, maxLength: 200 }).trim()
@@ -131,6 +147,8 @@ export function adaptPromptDefinition(value, { commit, relativePath }) {
       source: 'prompt-registry',
       sourceRef,
       contentHash,
+      gitCommit: commit.toLowerCase(),
+      repository,
       providerHint: normalizedModel.provider || undefined,
       modelHint: normalizedModel.name || undefined,
       variables,

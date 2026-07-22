@@ -1,20 +1,53 @@
 import { EvaluationSchemaError, normalizeEvaluationApiBody } from '../shared/evaluation-schema.mjs'
 import { AiSettingsError, readAiSettings, writeAiSettings } from './ai-settings-store.mjs'
+import { handleConflictApi } from './conflicts/conflict-api.mjs'
+import { handleArtifactRegistryApi } from './evaluations/artifact-registry-api.mjs'
 import { analyzeCandidateSkill } from './evaluations/candidate-source.mjs'
 import { EvaluationError } from './evaluations/errors.mjs'
 import { assertLocalApiRequest, assertLocalBrowserRequest, readEvaluationJsonBody } from './evaluations/request-guard.mjs'
 import { chatWithSkillOps, runSkillABTest } from './evaluations/session-evaluator.mjs'
 import { handleManagedEvaluationApi } from './evaluations/suite-api.mjs'
-import { handleGovernanceApi } from './governance/governance-api.mjs'
+import { handleGovernanceApi, initializeGovernanceServices } from './governance/governance-api.mjs'
+import { resolveGovernancePrincipal } from './governance/principal.mjs'
 import { handlePromptRegistryApi } from './prompts/prompt-registry-api.mjs'
+import { handlePromptHubApi } from './prompts/prompthub-api.mjs'
+import { handleTeamControlPlaneApi, initializeTeamControlPlane } from './team-control-plane-api.mjs'
 
 const MAX_AI_SETTINGS_REQUEST_BYTES = 64_000
 
+function minimumTeamRole(pathname, requestMethod) {
+  if (pathname === '/api/ai-settings' || pathname === '/api/connectors/prompthub/credential') return 'Owner'
+  if (/^\/api\/capabilities\/[^/]+\/approve$/.test(pathname)) return 'Reviewer'
+  if (/^\/api\/capabilities\/[^/]+\/(?:canary|install|promote|deprecate|rollback)$/.test(pathname)
+      || pathname === '/api/connectors/prompthub/publish'
+      || requestMethod !== 'GET' && (pathname.startsWith('/api/conflicts') || pathname.startsWith('/api/artifacts/migration'))) {
+    return 'Maintainer'
+  }
+  return requestMethod === 'GET' ? 'Viewer' : 'Developer'
+}
+
+async function authorizeTeamApiRequest(request, response, pathname, options) {
+  if (!options.teamControlPlane || !pathname.startsWith('/api/') || pathname.startsWith('/api/team')) return options
+  try {
+    const principal = await resolveGovernancePrincipal(request, options)
+    const member = await options.teamControlPlane.authorize(principal, minimumTeamRole(pathname, request.method))
+    return member ? { ...options, teamPrincipal: principal } : options
+  } catch (error) {
+    const mapped = evaluationHttpError(error)
+    setJsonHeaders(response)
+    response.statusCode = mapped.status
+    response.end(JSON.stringify({ error: mapped.message }))
+    return null
+  }
+}
+
+export { createArtifactRegistry } from './evaluations/artifact-registry.mjs'
 export { analyzeCandidateSkill, compareSkillDefinitions, discoverGithubSkill } from './evaluations/candidate-source.mjs'
 export { EvaluationError } from './evaluations/errors.mjs'
 export { callLlmProvider } from './evaluations/provider-client.mjs'
 export { chatWithSkillOps, runSkillABTest } from './evaluations/session-evaluator.mjs'
 export { createManagedEvaluationServices, initializeManagedEvaluationServices } from './evaluations/suite-api.mjs'
+export { initializeGovernanceServices, initializeTeamControlPlane }
 
 function requestHeader(request, name) {
   const headers = request.headers
@@ -85,10 +118,17 @@ async function handleAiSettingsApi(request, response, pathname, options) {
 }
 
 export async function handleEvaluationApi(request, response, pathname, options = {}) {
+  const authorizedOptions = await authorizeTeamApiRequest(request, response, pathname, options)
+  if (!authorizedOptions) return true
+  options = authorizedOptions
+  if (await handleConflictApi(request, response, pathname)) return true
+  if (await handleArtifactRegistryApi(request, response, pathname, options)) return true
   if (await handleAiSettingsApi(request, response, pathname, options)) return true
   if (await handlePromptRegistryApi(request, response, pathname, options)) return true
+  if (await handlePromptHubApi(request, response, pathname, options)) return true
   if (await handleManagedEvaluationApi(request, response, pathname, options)) return true
   if (await handleGovernanceApi(request, response, pathname, options)) return true
+  if (await handleTeamControlPlaneApi(request, response, pathname, options)) return true
   const handlers = {
     '/api/evaluations/compare': analyzeCandidateSkill,
     '/api/evaluations/run': runSkillABTest,

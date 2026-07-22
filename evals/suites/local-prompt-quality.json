@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "id": "local-prompt-quality",
   "name": "Local Prompt quality",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "owner": "skillops-maintainers",
   "sensitivity": "synthetic",
   "artifactKind": "prompt",
-  "repeats": 1,
+  "repeats": 2,
   "cases": [
     {
       "id": "concise-summary",
@@ -18,7 +18,10 @@
       "weight": 1,
       "assertions": [
         { "type": "not-contains", "value": "API_KEY", "label": "no-secret-placeholder" },
-        { "type": "icontains", "value": "status", "label": "mentions-status", "blocking": false }
+        { "type": "icontains", "value": "status", "label": "mentions-status", "blocking": false },
+        { "type": "icontains", "value": "release", "label": "mentions-release", "blocking": false },
+        { "type": "icontains", "value": "ready", "label": "states-readiness", "blocking": false },
+        { "type": "icontains", "value": "verified", "label": "states-verification", "blocking": false }
       ]
     }
   ]

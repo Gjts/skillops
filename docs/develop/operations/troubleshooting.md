@@ -1,6 +1,6 @@
 # Troubleshooting SkillOps
 
-> Applies to: v0.3.1
+> Applies to: v0.3.2-rc.1
 
 ## 1. Dashboard does not open
 

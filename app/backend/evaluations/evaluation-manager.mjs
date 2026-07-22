@@ -2,12 +2,24 @@ import { randomUUID } from 'node:crypto'
 import { normalizeArtifactDefinition } from '../../shared/evaluation-schema.mjs'
 import { DEFAULT_GATE_POLICY, evaluateGatePolicy, evaluateRedteamGatePolicy } from '../governance/capability-policy.mjs'
 import { EvaluationError } from './errors.mjs'
-import { computeEvaluationEvidenceHash } from './evaluation-store.mjs'
+import { computeEvaluationCasesHash, computeEvaluationEvidenceHash } from './evaluation-store.mjs'
 import { normalizeProvider } from './provider-client.mjs'
 import { PROMPTFOO_VERSION } from './promptfoo-runtime.mjs'
 import { runPromptfooRedteam, runPromptfooSuite } from './promptfoo-runner.mjs'
+import { sha256Json } from './suite-registry.mjs'
 
 const MAX_CONCURRENCY = 4
+const DEFAULT_TIMEOUT_MS = 10 * 60_000
+const MAX_TIMEOUT_MS = 60 * 60_000
+
+function normalizeTimeout(value) {
+  const timeoutMs = value === undefined ? DEFAULT_TIMEOUT_MS : Number(value)
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS) {
+    throw new EvaluationError(`Evaluation timeout must be between 1 and ${MAX_TIMEOUT_MS} milliseconds.`, 422)
+  }
+  return timeoutMs
+}
+
 
 function normalizeConcurrency(value) {
   const concurrency = value === undefined ? 1 : Number(value)
@@ -23,8 +35,32 @@ function optionalId(value, label) {
   return value.trim()
 }
 
-function activeFingerprint(input, baseline, candidate) {
-  return [candidate.contentHash, input.suite.suiteHash, input.suite.datasetHash || '', baseline.contentHash].join(':')
+function optionalHash(value, label) {
+  const normalized = optionalId(value, label)
+  if (normalized && !/^[a-f0-9]{64}$/.test(normalized)) throw new EvaluationError(`${label} must be a SHA-256 hash.`, 422)
+  return normalized
+}
+
+function providerConfigurationHash(input, provider) {
+  return sha256Json({
+    provider: provider.provider,
+    transport: provider.transport,
+    baseUrl: provider.baseUrl,
+    apiVersion: provider.apiVersion,
+    reasoningEffort: provider.reasoningEffort || null,
+    models: input.suite.matrix?.models.map((entry) => entry.model) || [provider.model],
+  })
+}
+
+function activeFingerprint(input, baseline, candidate, configurationHash) {
+  return [
+    candidate.contentHash,
+    input.suite.suiteHash,
+    input.suite.datasetHash || '',
+    baseline.contentHash,
+    input.subjectHash || '',
+    configurationHash,
+  ].join(':')
 }
 
 function errorCode(error) {
@@ -34,20 +70,24 @@ function errorCode(error) {
   return 'EVALUATION_FAILED'
 }
 
-function queuedSummary(input, id, baseline, candidate, provider, requestedAt) {
+function queuedSummary(input, id, baseline, candidate, provider, configurationHash, requestedAt) {
   return {
     id,
     mode: input.mode || 'suite',
     status: 'queued',
     capabilityId: optionalId(input.capabilityId, 'Capability ID') || undefined,
+    subjectHash: optionalHash(input.subjectHash, 'Evaluation subject hash'),
     suiteId: input.suite.id,
     suiteVersion: input.suite.version,
     suiteHash: input.suite.suiteHash,
     datasetHash: input.suite.datasetHash || null,
+    casesHash: null,
     baseline,
     candidate,
     engine: { name: 'promptfoo', version: PROMPTFOO_VERSION },
-    provider: { id: provider.id || provider.provider, model: provider.model },
+    provider: input.suite.matrix
+      ? { id: provider.id || provider.provider, model: input.suite.matrix.models.length === 1 ? input.suite.matrix.models[0].model : 'matrix', models: input.suite.matrix.models.map((entry) => entry.model), configurationHash }
+      : { id: provider.id || provider.provider, model: provider.model, configurationHash },
     metrics: null,
     policyHash: null,
     gates: [],
@@ -69,6 +109,7 @@ export function createEvaluationManager(options = {}) {
     : runPromptfooSuite(input, runnerOptions))
   const policy = options.policy || DEFAULT_GATE_POLICY
   const concurrency = normalizeConcurrency(options.concurrency)
+  const timeoutMs = normalizeTimeout(options.timeoutMs)
   const waiting = []
   const jobs = new Map()
   const idempotency = new Map()
@@ -115,6 +156,11 @@ export function createEvaluationManager(options = {}) {
     if (job.cancelRequested || stopped) return
     const startedAt = new Date().toISOString()
     await store.appendRun({ ...job.summary, status: 'running', startedAt })
+    const timeout = setTimeout(() => {
+      job.timeoutRequested = true
+      job.controller.abort()
+    }, job.timeoutMs)
+    timeout.unref()
     try {
       const result = await runner({
         ...job.input,
@@ -122,16 +168,16 @@ export function createEvaluationManager(options = {}) {
         requestedAt: job.summary.requestedAt,
         requestedBy: job.summary.requestedBy,
       }, { ...job.runnerOptions, signal: job.controller.signal })
-      if (job.cancelRequested || job.controller.signal.aborted) {
-        await terminal(job, { status: 'cancelled', metrics: null, policyHash: null, gates: [], evidenceHash: null, gateResult: 'not-evaluated', errorCode: 'CANCELLED' })
-        return
-      }
+      if (job.controller.signal.aborted) throw Object.assign(new Error('Evaluation execution aborted.'), { name: 'AbortError' })
       const evaluated = result.summary.mode === 'redteam'
         ? evaluateRedteamGatePolicy(result.summary, policy)
         : evaluateGatePolicy(result.summary, policy)
       const completed = {
         ...result.summary,
+        provider: { ...result.summary.provider, configurationHash: job.summary.provider.configurationHash },
+        subjectHash: job.summary.subjectHash,
         policyHash: evaluated.policyHash,
+        casesHash: computeEvaluationCasesHash(result.cases),
         gates: evaluated.gates,
         gateResult: evaluated.gateResult,
         evidenceHash: null,
@@ -141,21 +187,25 @@ export function createEvaluationManager(options = {}) {
       await terminal(job, completed)
     } catch (error) {
       const interrupted = job.interruptRequested
-      const cancelled = !interrupted && (job.cancelRequested || job.controller.signal.aborted || error?.name === 'AbortError')
+      const timedOut = !interrupted && job.timeoutRequested
+      const cancelled = !interrupted && !timedOut && (job.cancelRequested || job.controller.signal.aborted || error?.name === 'AbortError')
       await terminal(job, {
-        status: interrupted ? 'interrupted' : cancelled ? 'cancelled' : 'failed',
+        status: interrupted ? 'interrupted' : timedOut ? 'failed' : cancelled ? 'cancelled' : 'failed',
         metrics: null,
         policyHash: null,
         gates: [],
         evidenceHash: null,
         gateResult: 'not-evaluated',
-        errorCode: interrupted ? 'PROCESS_SHUTDOWN' : cancelled ? 'CANCELLED' : errorCode(error),
+        errorCode: interrupted ? 'PROCESS_SHUTDOWN' : timedOut ? 'RUN_TIMEOUT' : cancelled ? 'CANCELLED' : errorCode(error),
       })
+    } finally {
+      clearTimeout(timeout)
     }
   }
 
   return {
     concurrency,
+    timeoutMs,
     async initialize() {
       stopped = false
       return store.interruptRunning()
@@ -167,10 +217,13 @@ export function createEvaluationManager(options = {}) {
       const baseline = normalizeArtifactDefinition(input.baseline.artifact)
       const candidate = normalizeArtifactDefinition(input.candidate.artifact)
       const clientRequestId = optionalId(input.clientRequestId, 'Client request ID')
+      const configurationHash = providerConfigurationHash(input, provider)
+      const fingerprint = activeFingerprint(input, baseline, candidate, configurationHash)
       if (clientRequestId && idempotency.has(clientRequestId)) {
-        return { summary: await store.getRun(idempotency.get(clientRequestId)), reused: true }
+        const replay = idempotency.get(clientRequestId)
+        if (replay.fingerprint !== fingerprint) throw new EvaluationError('Client request ID was already used for different evaluation settings.', 409)
+        return { summary: await store.getRun(replay.id), reused: true }
       }
-      const fingerprint = activeFingerprint(input, baseline, candidate)
       if (activeFingerprints.has(fingerprint)) {
         const existingId = activeFingerprints.get(fingerprint)
         if (input.reuseActive === true) return { summary: await store.getRun(existingId), reused: true }
@@ -179,7 +232,7 @@ export function createEvaluationManager(options = {}) {
       const id = optionalId(input.runId, 'Run ID') || randomUUID()
       if (await store.getRun(id)) throw new EvaluationError('Evaluation run ID already exists.', 409)
       const requestedAt = new Date().toISOString()
-      const summary = await store.appendRun(queuedSummary(input, id, baseline, candidate, provider, requestedAt))
+      const summary = await store.appendRun(queuedSummary(input, id, baseline, candidate, provider, configurationHash, requestedAt))
       const job = {
         id,
         input: { ...input, baseline: { ...input.baseline, artifact: baseline }, candidate: { ...input.candidate, artifact: candidate }, provider },
@@ -188,13 +241,15 @@ export function createEvaluationManager(options = {}) {
         fingerprint,
         controller: new AbortController(),
         cancelRequested: false,
+        timeoutMs: normalizeTimeout(input.timeoutMs ?? timeoutMs),
+        timeoutRequested: false,
         interruptRequested: false,
         started: false,
         execution: null,
       }
       jobs.set(id, job)
       activeFingerprints.set(fingerprint, id)
-      if (clientRequestId) idempotency.set(clientRequestId, id)
+      if (clientRequestId) idempotency.set(clientRequestId, { id, fingerprint })
       waiting.push(job)
       schedule()
       return { summary, reused: false }

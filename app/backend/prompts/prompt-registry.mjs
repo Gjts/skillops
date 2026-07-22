@@ -61,6 +61,22 @@ export function createPromptRegistry(options = {}) {
     }
   })
 
+  async function repositoryIdentity(commit) {
+    const remote = await runGit(['config', '--get', 'remote.origin.url']).catch(() => '')
+    const scp = /^git@([^:]+):(.+?)(?:\.git)?$/.exec(remote)
+    const candidate = scp ? `https://${scp[1]}/${scp[2]}` : remote
+    try {
+      const url = new URL(candidate)
+      if (url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash) {
+        return url.toString().replace(/\.git\/?$/, '').replace(/\/$/, '')
+      }
+    } catch {
+      // A local or credentialed remote is not public metadata.
+    }
+    const roots = await runGit(['rev-list', '--max-parents=0', commit]).catch(() => '')
+    const root = roots.split(/\r?\n/).find((item) => /^[a-f0-9]{40,64}$/i.test(item)) || commit
+    return `git-root:${root.toLowerCase()}`
+  }
   async function commitFor(value) {
     const ref = revision(value)
     const commit = await runGit(['rev-parse', '--verify', `${ref}^{commit}`])
@@ -73,7 +89,7 @@ export function createPromptRegistry(options = {}) {
     return [...new Set(output.split(/\r?\n/).map((item) => item.trim()).filter(Boolean))].sort()
   }
 
-  async function readCommittedPrompt(commit, relativePath) {
+  async function readCommittedPrompt(commit, relativePath, repository) {
     if (!relativePath.startsWith(`${directory}/`) || !relativePath.endsWith('.prompt.json') || relativePath.includes('\\') || relativePath.split('/').includes('..')) {
       throw new EvaluationError('Prompt Registry path is outside the configured prompt directory.', 422)
     }
@@ -81,18 +97,19 @@ export function createPromptRegistry(options = {}) {
     if (Buffer.byteLength(contents, 'utf8') > MAX_PROMPT_BYTES) throw new EvaluationError('Prompt definition exceeds the 256 KiB limit.', 422)
     let parsed
     try { parsed = JSON.parse(contents) } catch { throw new EvaluationError(`Prompt definition ${relativePath} is not valid JSON.`, 422) }
-    return adaptPromptDefinition(parsed, { commit, relativePath })
+    return adaptPromptDefinition(parsed, { commit, relativePath, repository: repository || await repositoryIdentity(commit) })
   }
 
   async function list(input = {}) {
     const commit = await commitFor(input.revision || 'HEAD')
+    const repository = await repositoryIdentity(commit)
     const output = await runGit(['ls-tree', '-r', '--name-only', commit, '--', directory])
     const files = output.split(/\r?\n/).filter((item) => item.startsWith(`${directory}/`) && item.endsWith('.prompt.json'))
     if (files.length > MAX_PROMPTS) throw new EvaluationError(`Prompt Registry contains more than ${MAX_PROMPTS} prompt definitions.`, 422)
     const items = []
     const warnings = []
     for (const relativePath of files) {
-      try { items.push(publicRecord(await readCommittedPrompt(commit, relativePath))) } catch (error) {
+      try { items.push(publicRecord(await readCommittedPrompt(commit, relativePath, repository))) } catch (error) {
         warnings.push({ relativePath, code: 'INVALID_PROMPT_DEFINITION', message: error instanceof Error ? error.message : 'Prompt definition is invalid.' })
       }
     }

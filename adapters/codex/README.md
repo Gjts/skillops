@@ -34,7 +34,10 @@ This removes handlers containing the `skillops-codex-hook` marker and leaves eve
 ## Detection guarantees
 
 - Explicit `$skill-name` references matching an installed Skill: exact, confidence `1.0`.
+- Explicit `/prompts:name` references matching a custom prompt under the effective Codex home's `prompts` directory: exact Workflow match, confidence `1.0`.
 - A `.../skills/<name>/SKILL.md` path in a local tool call: high-confidence inference, confidence `0.92`.
+- `SessionStart` discovers `AGENTS.md` / `AGENTS.override.md` Rules, but Codex exposes no trustworthy Rule-load lifecycle signal; Rules remain inventory-only.
+- `SubagentStart` matching a `.codex/agents/*.toml` definition creates exact Agent lifecycle evidence.
 - Codex has no dedicated Skill lifecycle hook, so implicit internal selection that exposes neither signal cannot be proven.
 - `Stop` proves that a turn ended, not that the Skill succeeded. These records use `outcome: "unknown"` and do not affect the success-rate denominator.
 
@@ -47,11 +50,17 @@ This removes handlers containing the `skillops-codex-hook` marker and leaves eve
 - `Stop`
 
 Adapter failures are swallowed so telemetry never blocks Codex. Diagnostics, if any, go to `data/codex-adapter-errors.log`.
+Raw Codex session IDs are replaced with stable per-install HMAC pseudonyms before any event is written.
 
-The inventory scanner merges plugin and `[[skills.config]]` entries from the
-effective Codex home's `config.toml`, then the current trusted project's
-`.codex/config.toml`; project entries win. A definition whose normalized Skill
-directory (the folder containing `SKILL.md`) is set to `enabled = false`
-remains visible in Registry as disabled and does not create a duplicate or
-conflict. A disabled plugin always wins over a per-Skill `enabled = true`
-entry.
+The inventory scanner covers Skills, `AGENTS.md` / `AGENTS.override.md` Rules,
+custom Prompt Workflows, and custom Agents. It reads global Workflows from
+`$CODEX_HOME/prompts`, global Agents from `$CODEX_HOME/agents`, project Agents
+from `.codex/agents`, and Rules from the effective Codex home plus each
+directory from the project root to the current working directory.
+
+Plugin and `[[skills.config]]` entries are merged from the effective Codex
+home's `config.toml`, then the current trusted project's `.codex/config.toml`;
+project entries win. A definition whose normalized Skill directory (the folder
+containing `SKILL.md`) is set to `enabled = false` remains visible in Registry
+as disabled and does not create a duplicate or conflict. A disabled plugin
+always wins over a per-Skill `enabled = true` entry.

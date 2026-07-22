@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -49,6 +49,7 @@ describe('ai-settings-store', () => {
     const raw = JSON.parse(await readFile(store.aiSettingsFile, 'utf8'))
     expect(raw.providers.openai.apiKey).toBe('sk-test-secret')
     expect(await store.readAiSettings()).toEqual(written)
+    if (process.platform !== 'win32') expect((await stat(store.aiSettingsFile)).mode & 0o777).toBe(0o600)
   })
 
   it('strips unknown providers and merges missing slots from defaults', async () => {

@@ -74,6 +74,8 @@ describe('managed evaluations UI', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Filter by case or assertion' }), { target: { value: 'missing' } })
     expect(screen.queryByText('case-1')).toBeNull()
     expect(screen.getByText(/full prompts and model outputs are not returned/)).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Download JSON report' }).getAttribute('href')).toBe('/api/evaluation-runs/run-1/report?format=json')
+    expect(screen.getByRole('link', { name: 'Open HTML report' }).getAttribute('href')).toBe('/api/evaluation-runs/run-1/report?format=html')
   })
 
   it('starts a queued run with page-memory settings and cancels it explicitly', async () => {

@@ -1,11 +1,12 @@
+import { fork } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { Worker } from 'node:worker_threads'
 import { EvaluationError } from './errors.mjs'
 
 const defaultRuntimeRoot = fileURLToPath(new URL('../../../data/promptfoo-runtime/', import.meta.url))
-const workerUrl = new URL('./promptfoo-worker.mjs', import.meta.url)
+const workerPath = fileURLToPath(new URL('./promptfoo-child.mjs', import.meta.url))
+const testNoEgressUrl = new URL('../../../scripts/test-no-egress.mjs', import.meta.url).href
 
 export const PROMPTFOO_VERSION = '0.121.19'
 
@@ -18,6 +19,19 @@ export const PROMPTFOO_PRIVACY_ENV = Object.freeze({
   PROMPTFOO_CACHE_ENABLED: 'false',
   PROMPTFOO_LOG_LEVEL: 'error',
 })
+
+const RUNTIME_ENV_NAMES = new Set([
+  'COMSPEC', 'LANG', 'LANGUAGE', 'LC_ALL', 'LC_CTYPE', 'PATH', 'PATHEXT',
+  'SYSTEMROOT', 'TEMP', 'TMP', 'TMPDIR', 'TZ', 'WINDIR',
+])
+
+function isolatedEnvironment(runDirectory) {
+  return {
+    ...Object.fromEntries(Object.entries(process.env).filter(([name]) => RUNTIME_ENV_NAMES.has(name.toUpperCase()))),
+    ...PROMPTFOO_PRIVACY_ENV,
+    PROMPTFOO_CONFIG_DIR: runDirectory,
+  }
+}
 
 async function inspectRuntimeDirectory(directory, forbiddenValues) {
   const entries = await readdir(directory, { recursive: true, withFileTypes: true })
@@ -50,43 +64,59 @@ export async function runPromptfooIsolated(payload, options = {}) {
   await mkdir(runtimeRoot, { recursive: true })
   const runDirectory = await mkdtemp(path.join(runtimeRoot, 'run-'))
   const signal = options.signal
-  let worker
   try {
     const result = await new Promise((resolve, reject) => {
-      worker = new Worker(workerUrl, {
-        workerData: payload,
-        env: { ...process.env, ...PROMPTFOO_PRIVACY_ENV, PROMPTFOO_CONFIG_DIR: runDirectory },
-        stdout: true,
-        stderr: true,
+      const child = fork(workerPath, [], {
+        execArgv: process.env.NODE_ENV === 'test' ? ['--import', testNoEgressUrl] : [],
+        env: isolatedEnvironment(runDirectory),
+        cwd: runDirectory,
+        stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+        serialization: 'advanced',
       })
-      const abort = () => {
-        worker.terminate().catch(() => {})
-        reject(new EvaluationError('The Promptfoo run was cancelled.', 409))
+      let message
+      let failure
+      let stopTimer
+
+      const stop = (error) => {
+        failure ||= error
+        if (child.exitCode === null && child.signalCode === null) child.kill()
       }
-      if (signal?.aborted) return abort()
+      const cleanup = () => {
+        clearTimeout(stopTimer)
+        signal?.removeEventListener('abort', abort)
+      }
+      const abort = () => stop(new EvaluationError('The Promptfoo run was cancelled.', 409))
+
+      child.once('message', (value) => {
+        message = value
+        if (child.connected) child.disconnect()
+        stopTimer = setTimeout(() => {
+          if (child.exitCode === null && child.signalCode === null) child.kill()
+        }, 1_000)
+        stopTimer.unref()
+      })
+      child.once('error', () => {
+        failure ||= new EvaluationError('The isolated Promptfoo process failed.', 500)
+        cleanup()
+        reject(failure)
+      })
+      child.once('exit', (code, exitSignal) => {
+        cleanup()
+        if (failure) return reject(failure)
+        if (!message) return reject(new EvaluationError(`The isolated Promptfoo process exited unexpectedly (${exitSignal || code}).`, 500))
+        if (message.ok) return resolve(message.result)
+        reject(new EvaluationError(message.error?.message || 'The isolated Promptfoo run failed.', 500))
+      })
       signal?.addEventListener('abort', abort, { once: true })
-      worker.once('message', (message) => {
-        signal?.removeEventListener('abort', abort)
-        if (message?.ok) resolve(message.result)
-        else reject(new EvaluationError(message?.error?.message || 'The isolated Promptfoo run failed.', 502))
-      })
-      worker.once('error', () => {
-        signal?.removeEventListener('abort', abort)
-        reject(new EvaluationError('The isolated Promptfoo worker failed.', 502))
-      })
-      worker.once('exit', (code) => {
-        if (code !== 0 && !signal?.aborted) reject(new EvaluationError('The isolated Promptfoo worker exited unexpectedly.', 502))
+      if (signal?.aborted) abort()
+      else child.send(payload, (error) => {
+        if (error) stop(new EvaluationError('The isolated Promptfoo process could not start.', 500))
       })
     })
-    const forbiddenValues = {
-      ...(options.forbiddenValues || {}),
-      ...(options.auditResultStrings ? collectResultStrings(result) : {}),
-    }
+    const forbiddenValues = { ...(options.forbiddenValues || {}), ...collectResultStrings(result) }
     const runtimeAudit = await inspectRuntimeDirectory(runDirectory, forbiddenValues)
     return { result, runtimeAudit }
   } finally {
-    if (worker) await worker.terminate().catch(() => {})
-    const resolvedRunDirectory = path.resolve(runDirectory)
-    if (resolvedRunDirectory.startsWith(`${runtimeRoot}${path.sep}`)) await rm(resolvedRunDirectory, { recursive: true, force: true })
+    await rm(runDirectory, { recursive: true, force: true })
   }
 }

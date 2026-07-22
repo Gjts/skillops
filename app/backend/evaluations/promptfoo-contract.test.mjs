@@ -86,6 +86,40 @@ describe('Promptfoo 0.121.19 public Node contract', () => {
     })
   })
 
+  it.each(['SKILLOPS_EVAL_API_KEY', 'SKILLOPS_GOVERNANCE_PRINCIPALS', 'DATABASE_URL', 'NODE_OPTIONS'])(
+    'runs Promptfoo without inheriting %s',
+    async (secretKey) => {
+      const previous = process.env[secretKey]
+      process.env[secretKey] = 'SENTINEL_PARENT_SECRET'
+      try {
+        const { result } = await runPromptfooIsolated({ operation: 'runtime-contract', secretKey, secretValue: 'SENTINEL_PARENT_SECRET' })
+        expect(result).toEqual(expect.objectContaining({ isChildProcess: true, inheritedSecret: false }))
+        expect(path.basename(result.workingDirectory)).toMatch(/^run-/)
+        expect(result.workingDirectory).not.toBe(process.cwd())
+      } finally {
+        if (previous === undefined) delete process.env[secretKey]
+        else process.env[secretKey] = previous
+      }
+    },
+  )
+
+  it('installs the no-egress guard inside the isolated Promptfoo child', async () => {
+    await expect(runPromptfooIsolated({ operation: 'network-contract' }))
+      .resolves.toEqual(expect.objectContaining({ result: { blocked: true } }))
+  })
+
+  it('terminates an isolated Promptfoo process when the run is aborted', async () => {
+    const controller = new AbortController()
+    const run = runPromptfooIsolated({ operation: 'delay-contract' }, { signal: controller.signal })
+    controller.abort()
+    await expect(run).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('accepts a completed result before force-recycling a child with lingering handles', async () => {
+    await expect(runPromptfooIsolated({ operation: 'linger-contract' }))
+      .resolves.toEqual(expect.objectContaining({ result: { completed: true } }))
+  })
+
   it('keeps task, criteria, Skill content, API key, and provider output out of runtime files', async () => {
     const values = {
       task: 'SENTINEL_TASK_7b2f',

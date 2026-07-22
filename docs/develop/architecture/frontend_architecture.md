@@ -1,6 +1,6 @@
 # Frontend architecture: SkillOps dashboard
 
-> Version: v0.3.1
+> Version: v0.3.2-rc.1
 > Status: implemented, including the live Skill Lab evaluation workspace
 
 ## 1. Frontend goals
@@ -29,8 +29,8 @@ Its primary responsibilities are:
 | Charts | Lightweight React/SVG/CSS modules |
 | Tests | Vitest + Testing Library + jsdom |
 
-There is no remote client SDK, account authentication state, router package, or
-global state library in v0.3.1. AI provider credentials are loaded from and
+There is no remote client SDK, hosted-account authentication state, router
+package, or global state library. AI provider credentials are loaded from and
 saved through loopback `GET`/`PUT /api/ai-settings` into local
 `data/ai-settings.json`. Browser storage is not used for credentials.
 
@@ -43,6 +43,8 @@ saved through loopback `GET`/`PUT /api/ai-settings` into local
 | `/runs` | Runs | Terminal and correlated lifecycle events |
 | `/evaluations` | Skill Lab | Live GitHub candidate comparison, A/B evaluation, and assistant chat |
 | `/registry` | Registry | Live scan, falling back to discovery events on failure |
+| `/governance` | Governance | Capability lifecycle, evidence, approvals, previews, and rollback |
+| `/team` | Team | Team state, unified Artifact directory, approval/release queues, and local backup |
 | `/settings` | Settings | Connections + local events |
 
 `popstate` restores the matching page. Navigation updates browser history. The
@@ -66,6 +68,8 @@ production server falls back to `index.html` for extensionless SPA paths.
   `skillops.theme.v1` light/dark preference to those two themes;
 - candidate URL/selection, local baseline, A/B inputs/results, and chat messages;
 - active AI provider settings loaded from `/api/ai-settings` and kept in page state while the workspace is open.
+- Team state, derived Artifact catalog, Approval Inbox, and Release Queue loaded
+  on `/team`; device secrets are never held by this page.
 
 Evaluation request/result and Artifact types come from the shared Evaluation
 Schema declaration. The frontend does not define parallel Candidate/result
@@ -163,6 +167,15 @@ follow that scope. Definitions are then categorized by:
 Combined view inserts runtime group rows and marks Skill names present in more
 than one runtime as shared.
 
+### Team
+
+`TeamPage` initializes the local Team from the server principal, then presents a
+bounded-height Registry-derived Artifact table so the approval and release
+queues remain visible. Summary cards report Artifact versions, active members,
+pending approvals, and pending releases. Refresh is explicit; backup invokes
+the sanitized backend export. The page does not offer network deployment, SSO,
+SCIM, or browser-selected identities.
+
 ### Settings
 
 Connection rows show config truth separately from activity. Export serializes
@@ -211,6 +224,8 @@ Chat Completions tool-call constraint and disables incompatible agent runs.
 | `ActivityRail` | Recent/expanded terminal lifecycle list |
 | `RunDetail` | Correlated evidence for one selected run |
 | `RegistryPage` | Live inventory and health analysis |
+| `GovernancePage` | Evidence-bound Candidate, approval, Canary, Stable, deprecation, and rollback workflow |
+| `TeamPage` | Local Team initialization, Artifact directory, governance queues, entity/template-adoption summary, and sanitized backup |
 | `ConnectModal` | Install command, config check, and live-activity check |
 | `EvaluationWorkspace` | Candidate discovery, local match selection, A/B run, result, and contextual chat |
 | `AiSettingsModal` | Multi-provider/model/endpoint configuration saved via local API |
@@ -285,8 +300,8 @@ Implemented frontend boundaries:
 - Quick Compare, Managed Suites, and History are separate views; Quick Compare
   keeps tasks and model content memory-only while loading explicitly saved AI
   settings from the local backend.
-- Managed runs expose polling, cancellation, multi-case metrics, gates, and
-  sanitized evidence details.
+- Managed runs expose polling, cancellation, multi-case metrics, gates,
+  sanitized evidence details, and JSON/HTML report actions.
 - Governance shows Candidate-to-Stable provenance, exact hash bindings,
   independent approvals, stale evidence, preview/confirm installation, and
   rollback results.
@@ -294,6 +309,11 @@ Implemented frontend boundaries:
   displaying Prompt bodies, lets the user set immutable baseline/Candidate
   references, compares component hashes, applies model hints explicitly, and
   requires a separate action to create a governed Candidate.
+- The Unified Artifact Registry filters the five kind-scoped asset types,
+  displays immutable version metadata, compatibility, dependencies, and
+  desired/observed installation state, and keeps GitHub import and version Diff
+  actions preview-only. Stale asynchronous responses cannot replace a newer
+  selection or preview.
 - All new user-visible evaluation, governance, and connector copy is available
   in Chinese, English, French, Russian, Spanish, and Japanese.
 

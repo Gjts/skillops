@@ -20,8 +20,30 @@ describe('registry governance nomination', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Nominate' }))
     expect(await screen.findByRole('button', { name: 'Nominated' })).toBeTruthy()
     expect(fetchMock).toHaveBeenCalledWith('/api/capabilities', expect.objectContaining({
-      body: JSON.stringify({ sourceRef: 'local-scan:codex:C:/workspace/.codex/skills/review/SKILL.md', owner: 'local-owner' }),
+      body: JSON.stringify({ sourceRef: 'local-scan:codex:C:/workspace/.codex/skills/review/SKILL.md' }),
     }))
+  })
+
+  it('requires a new nomination after rescanning changed content at the same path', async () => {
+    let scanCount = 0
+    const fetchMock = vi.fn((input: string) => {
+      if (input === '/api/scan') {
+        scanCount += 1
+        return Promise.resolve({ ok: true, json: async () => [{
+          skillId: 'review-skill', skillVersion: '1.0.0', runtime: 'codex', source: 'project',
+          sourcePath: 'C:/workspace/.codex/skills/review/SKILL.md', provider: 'Project', kind: 'skill', enabled: true,
+          contentHash: String(scanCount).repeat(64),
+        }] })
+      }
+      if (input === '/api/capabilities') return Promise.resolve({ ok: true, status: 201, json: async () => ({ capability: { id: 'cap-1' } }) })
+      return Promise.reject(new Error(`Unexpected request: ${input}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<RegistryPage events={[]} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Nominate' }))
+    expect(await screen.findByRole('button', { name: 'Nominated' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Scan again' }))
+    expect(await screen.findByRole('button', { name: 'Nominate' })).toBeTruthy()
   })
 
   it('scopes health counts by runtime and excludes disabled definitions from collisions', async () => {
@@ -64,5 +86,50 @@ describe('registry governance nomination', () => {
 
     fireEvent.click(healthButton('Disabled')!)
     expect(screen.getByText('Skill configuration disabled')).toBeTruthy()
+  })
+
+  it('shows scan provenance, effective status, and partial observability', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: string) => {
+      if (input !== '/api/scan') return Promise.reject(new Error(`Unexpected request: ${input}`))
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          definitions: [{
+            skillId: 'admin-review',
+            skillVersion: '1.0.0',
+            runtime: 'codex',
+            source: 'global',
+            sourcePath: '/etc/codex/skills/admin-review/SKILL.md',
+            provider: 'Codex Admin',
+            kind: 'skill',
+            enabled: true,
+            status: 'active',
+            configurationSource: 'admin',
+          }],
+          scan: {
+            id: 'scan_123',
+            projectRoot: '/workspace/repository',
+            startedAt: '2026-07-22T00:00:00.000Z',
+            completedAt: '2026-07-22T00:00:00.012Z',
+            durationMs: 12,
+            coverage: [],
+            errors: [],
+            observability: [{
+              runtime: 'claude-code',
+              state: 'partial',
+              reason: 'External policy cannot be reconstructed.',
+            }],
+          },
+        }),
+      })
+    }))
+
+    render(<RegistryPage events={[]} />)
+
+    expect(await screen.findByText('scan_123')).toBeTruthy()
+    expect(screen.getByText('/workspace/repository')).toBeTruthy()
+    expect(screen.getByText('Admin')).toBeTruthy()
+    expect(screen.getByText('Active')).toBeTruthy()
+    expect(screen.getByText('Partially observable')).toBeTruthy()
   })
 })

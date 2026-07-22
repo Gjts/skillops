@@ -14,7 +14,7 @@ export function artifactContentHash(contents) {
 
 export function createSkillArtifactDefinition(skill, source) {
   const sourceRef = source === 'github'
-    ? `github:${skill.sourceUrl}#${skill.sourcePath}`
+    ? `github:${skill.sourceUrl}`
     : `local-scan:${skill.runtime || 'unknown'}:${skill.sourcePath}`
   return normalizeArtifactDefinition({
     kind: 'skill',
@@ -25,8 +25,32 @@ export function createSkillArtifactDefinition(skill, source) {
     sourceRef,
     contentHash: skill.contentHash,
     providerHint: skill.provider,
+    gitCommit: skill.gitCommit,
+    repository: skill.repository,
   })
 }
+const runtimeArtifactKinds = { skill: 'skill', command: 'workflow', rules: 'rules', agent: 'agent' }
+
+export function artifactKindForRuntimeDefinition(kind) {
+  return runtimeArtifactKinds[kind]
+}
+
+export function createRuntimeArtifactDefinition(definition) {
+  const kind = artifactKindForRuntimeDefinition(definition.kind)
+  if (!kind) throw new EvaluationError(`Unsupported runtime Artifact kind: ${definition.kind}.`, 422)
+  return normalizeArtifactDefinition({
+    kind,
+    artifactId: definition.skillId,
+    version: definition.skillVersion || 'unversioned',
+    description: definition.description,
+    source: 'local-scan',
+    sourceRef: `local-scan:${definition.runtime || 'unknown'}:${definition.sourcePath}`,
+    contentHash: definition.contentHash,
+    providerHint: definition.provider,
+    runtimeTargets: definition.runtime ? [definition.runtime] : [],
+  })
+}
+
 
 export function renderArtifactEvaluationPrompt(record, task, criteria, variables = {}) {
   const artifact = normalizeArtifactDefinition(record?.artifact)
@@ -62,5 +86,21 @@ export function renderArtifactEvaluationPrompt(record, task, criteria, variables
     messages.push({ role: 'user', content: `Evaluation task:\n${task}\n\nAcceptance criteria:\n${criteria}` })
     return messages
   }
-  throw new EvaluationError('Workflow artifacts do not yet have an evaluation renderer.', 422)
+  if (['workflow', 'rules', 'agent', 'evaluation-suite', 'policy-pack'].includes(artifact.kind)) {
+    if (typeof record.contents !== 'string' || !record.contents.trim()) {
+      throw new EvaluationError(`${artifact.kind} artifacts require UTF-8 instruction content.`, 422)
+    }
+    const label = artifact.kind[0].toUpperCase() + artifact.kind.slice(1)
+    return [
+      {
+        role: 'system',
+        content: `You are executing a ${label} Artifact in a controlled evaluation. Treat its contents as instructions and constraints. Do not discuss the evaluation harness.\n\n<${artifact.kind}-definition>\n${normalizeArtifactContent(record.contents)}\n</${artifact.kind}-definition>`,
+      },
+      {
+        role: 'user',
+        content: `Evaluation task:\n${task}\n\nAcceptance criteria:\n${criteria}\n\nReturn the best final answer the ${label} Artifact would produce.`,
+      },
+    ]
+  }
+  throw new EvaluationError(`Unsupported Artifact kind: ${artifact.kind}.`, 422)
 }

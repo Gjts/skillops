@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { appendEvent, appendUniqueDiscoveries } from '../app/backend/event-store.mjs'
+import { appendEvent, appendUniqueDiscoveries, migrateLegacyEvents } from '../app/backend/event-store.mjs'
 import { scanInstalledSkills } from '../app/backend/skill-scanner.mjs'
 import { flags } from './cli-flags.mjs'
 
@@ -45,12 +45,20 @@ export async function main(values = process.argv.slice(2)) {
   try {
     if (command === 'scan') await scan()
     else if (command === 'emit') await emit(args)
+    else if (command === 'events:migrate') console.log(JSON.stringify(await migrateLegacyEvents(), null, 2))
+    else if (command === 'init') {
+      const { projectTemplateInit } = await import('./project-template-cli.mjs')
+      console.log(JSON.stringify(await projectTemplateInit(args), null, 2))
+    }
     else if (command === 'eval:list') {
       const { evaluationList } = await import('./evaluation-cli.mjs')
       console.log(JSON.stringify(await evaluationList(), null, 2))
     } else if (command === 'eval:run') {
       const { evaluationRun } = await import('./evaluation-cli.mjs')
       console.log(JSON.stringify(await evaluationRun(args), null, 2))
+    } else if (command === 'eval:changed') {
+      const { evaluationChanged } = await import('./evaluation-changed-cli.mjs')
+      console.log(JSON.stringify(await evaluationChanged(args), null, 2))
     } else if (command === 'eval:verify') {
       const { evaluationVerify } = await import('./evaluation-cli.mjs')
       const result = await evaluationVerify(args)
@@ -62,8 +70,15 @@ export async function main(values = process.argv.slice(2)) {
 
 Usage:
   npm run scan
+  npm run events:migrate
+  npm run template:init -- --manifest <draft.json> --hash
+  npm run template:init -- --manifest <stable-candidate.json> --nominate
+  npm run template:init -- --approve --approval <approval-id>
+  npm run template:init -- --manifest <team-template.json> --mode greenfield
+  npm run template:init -- --manifest <team-template.json> --mode migration --apply
   npm run eval:list
   npm run eval:run -- --suite deterministic-smoke --baseline baseline --candidate candidate --deterministic
+  npm run eval:changed -- --base <base-commit> --head <head-commit>
   npm run eval:verify -- --run <run-id>
   npm run emit -- skill.started --skill frontend-builder --runtime codex --version 2.1.0
   npm run emit -- skill.completed --skill frontend-builder --runtime codex --version 2.1.0 --duration 82000 --cost 0.12 --outcome success`)

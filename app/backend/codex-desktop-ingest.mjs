@@ -1,7 +1,7 @@
 import { open, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
-import { appendEvents, readEvents } from './event-store.mjs'
+import { anonymizeEventSession, appendEvents, readEvents } from './event-store.mjs'
 import { scanInstalledSkills } from './skill-scanner.mjs'
 
 const desktopSources = new Set(['vscode', 'desktop', 'codex-desktop'])
@@ -357,7 +357,7 @@ async function cachedSkills(project, ttlMs) {
     skillCache = {
       project,
       createdAt: Date.now(),
-      skills: await scanInstalledSkills({ project, runtime: 'codex' }),
+      skills: (await scanInstalledSkills({ project, runtime: 'codex' })).filter((skill) => skill.kind === 'skill'),
     }
   }
   return skillCache.skills
@@ -410,8 +410,9 @@ async function performSync(options) {
   }
 
   if (!generated.length) return { created: [], scannedFiles }
+  const anonymized = await Promise.all(generated.map(anonymizeEventSession))
   const existingKeys = new Set((await readEvents()).map(semanticKey))
-  const unique = generated.filter((event) => {
+  const unique = anonymized.filter((event) => {
     const key = semanticKey(event)
     if (existingKeys.has(key)) return false
     existingKeys.add(key)

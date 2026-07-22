@@ -3,7 +3,7 @@ import { lstat, readFile, readdir, realpath } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EvaluationError } from './errors.mjs'
-import { normalizeEvaluationSuite, normalizeSuiteDataset } from './suite-schema.mjs'
+import { assertEvaluationMatrixSize, normalizeEvaluationSuite, normalizeSuiteDataset } from './suite-schema.mjs'
 
 const defaultEvalsRoot = fileURLToPath(new URL('../../../evals/', import.meta.url))
 const MAX_SUITE_FILE_BYTES = 1_000_000
@@ -51,6 +51,7 @@ function metadata(entry) {
     sensitivity: entry.suite.sensitivity,
     artifactKind: entry.suite.artifactKind,
     repeats: entry.suite.repeats,
+    ...(entry.suite.matrix ? { matrix: entry.suite.matrix } : {}),
     caseCount: entry.cases.length,
     suiteHash: entry.suiteHash,
     datasetHash: entry.datasetHash,
@@ -80,6 +81,7 @@ export function createSuiteRegistry(options = {}) {
       const raw = await readJsonFile(path.join(suitesRoot, entry.name), suitesRoot, `Evaluation suite ${entry.name}`)
       const suite = normalizeEvaluationSuite(raw)
       const resolved = await resolveDataset(suite, evalsRoot)
+      assertEvaluationMatrixSize(suite, resolved.cases)
       loaded.push({ suite, cases: resolved.cases, datasetHash: resolved.datasetHash, datasetId: resolved.datasetId, suiteHash: sha256Json(suite) })
     }
     const seen = new Set()

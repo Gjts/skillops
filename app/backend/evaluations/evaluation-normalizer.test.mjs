@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { normalizePromptfooEvaluation } from './evaluation-normalizer.mjs'
+import { DEFAULT_GATE_POLICY, evaluateGatePolicy } from '../governance/capability-policy.mjs'
 
 const artifact = (id, hash) => ({
-  kind: 'skill', artifactId: id, version: '1.0.0', source: 'github', sourceRef: `github:${id}`, contentHash: hash.repeat(64),
+  kind: 'skill', artifactId: id, version: '1.0.0', source: 'github', sourceRef: `github:https://github.com/acme/${id}/blob/${hash.repeat(40)}/SKILL.md#SKILL.md`, contentHash: hash.repeat(64), gitCommit: hash.repeat(40),
 })
 
 const suite = {
@@ -65,6 +66,46 @@ describe('Promptfoo result normalizer', () => {
       candidateP95LatencyMs: 40,
       latencyDeltaPct: 100,
     }))
+  })
+
+  it('counts failed blocking assertions while tolerating failed nonblocking assertions', () => {
+    const mixedSuite = {
+      ...suite,
+      cases: [
+        suite.cases[0],
+        { ...suite.cases[1], assertions: [{ ...suite.cases[1].assertions[0], blocking: false }] },
+      ],
+    }
+    const normalized = normalizePromptfooEvaluation({ results: [
+      rawResult('case-a', 'baseline', { pass: true }),
+      rawResult('case-a', 'candidate', { pass: false }),
+      rawResult('case-b', 'baseline', { pass: true }),
+      rawResult('case-b', 'candidate', { pass: false }),
+    ] }, { ...context(), suite: mixedSuite })
+    expect(normalized.summary.metrics).toEqual(expect.objectContaining({ casesPassed: 1, criticalFindings: 1 }))
+    expect(normalized.cases[1].candidate).toEqual(expect.objectContaining({
+      pass: true,
+      assertions: [expect.objectContaining({ blocking: false, pass: false })],
+    }))
+    const tolerantPolicy = {
+      ...DEFAULT_GATE_POLICY,
+      maxFailedCases: 1,
+      minCandidateScore: 0,
+      minScoreDeltaPp: -100,
+      minPassRatePct: 0,
+      maxRegressionRatePct: 100,
+    }
+    expect(evaluateGatePolicy(normalized.summary, tolerantPolicy).gates
+      .filter((gate) => gate.status === 'failed').map((gate) => gate.id)).toEqual(['critical-findings'])
+
+    const nonblockingOnly = normalizePromptfooEvaluation({ results: [
+      rawResult('case-a', 'baseline', { pass: true }),
+      rawResult('case-a', 'candidate', { pass: true }),
+      rawResult('case-b', 'baseline', { pass: true }),
+      rawResult('case-b', 'candidate', { pass: false }),
+    ] }, { ...context(), suite: mixedSuite })
+    expect(nonblockingOnly.summary.metrics.criticalFindings).toBe(0)
+    expect(evaluateGatePolicy(nonblockingOnly.summary, tolerantPolicy).gateResult).toBe('passed')
   })
 
   it('uses null when any provider metric is missing', () => {

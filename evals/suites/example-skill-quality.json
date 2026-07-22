@@ -6,6 +6,6 @@
   "owner": "skillops-maintainers",
   "sensitivity": "synthetic",
   "artifactKind": "skill",
-  "repeats": 1,
+  "repeats": 2,
   "dataset": "example-skill-cases.json"
 }

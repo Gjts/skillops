@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { spawn } from 'node:child_process'
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -22,9 +22,13 @@ afterEach(async () => {
 
 function runHook(input, environment, hookMode = 'default') {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [path.resolve('adapters/claude/hook.mjs')], {
+    const child = spawn(process.execPath, [
+      path.resolve('adapters/claude/hook.mjs'),
+      '--adapter=skillops-claude-hook',
+      `--hook-mode=${hookMode}`,
+    ], {
       cwd: input.cwd,
-      env: { ...process.env, ...environment, SKILLOPS_HOOK_MODE: hookMode },
+      env: { ...process.env, ...environment },
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     let stderr = ''
@@ -78,6 +82,13 @@ describe('Claude Code hook installer', () => {
     const installed = JSON.parse(await readFile(settingsFile, 'utf8'))
     expect(installed.permissions.allow).toEqual(['Read'])
     expect(installed.hooks.PreToolUse.flatMap((group) => group.hooks).filter((hook) => hook.command.includes('skillops-claude-hook'))).toHaveLength(2)
+    const skillOpsCommands = Object.values(installed.hooks)
+      .flatMap((groups) => groups)
+      .flatMap((group) => group.hooks)
+      .map((hook) => hook.command)
+      .filter((command) => command.includes('skillops-claude-hook'))
+    expect(skillOpsCommands.every((command) => !command.includes('SKILLOPS_HOOK_MODE='))).toBe(true)
+    expect(skillOpsCommands.some((command) => command.includes('--hook-mode=generic'))).toBe(true)
     expect(installed.hooks.PreToolUse.flatMap((group) => group.hooks).some((hook) => hook.command === 'echo existing')).toBe(true)
     expect(Object.keys(installed.hooks)).toEqual(expect.arrayContaining([
       'SessionStart', 'UserPromptSubmit', 'UserPromptExpansion', 'PreToolUse', 'PostToolUse',
@@ -167,6 +178,40 @@ describe('Claude Code lifecycle adapter', () => {
     expect(events.some((event) => event.skillId === 'superpowers:brainstorming')).toBe(false)
   })
 
+  it('migrates legacy raw-session state before completing active Skills', async () => {
+    const root = await temporaryDirectory('skillops-claude-state-migration-')
+    const dataDir = path.join(root, 'data')
+    const project = path.join(root, 'project')
+    const rawSessionId = 'legacy-claude-session'
+    const invocation = path.join(dataDir, 'claude-state', rawSessionId, 'prompt-1_skill_tool_review')
+    await mkdir(invocation, { recursive: true })
+    await mkdir(project, { recursive: true })
+    await writeFile(path.join(invocation, 'started.json'), JSON.stringify({
+      runtime: 'claude-code',
+      sessionId: rawSessionId,
+      promptId: 'prompt-1',
+      turnId: 'prompt-1',
+      skillId: 'review',
+      skillVersion: '1.0.0',
+      startedAt: '2026-07-22T00:00:00.000Z',
+    }))
+
+    await runHook({
+      session_id: rawSessionId,
+      prompt_id: 'prompt-1',
+      cwd: project,
+      hook_event_name: 'Stop',
+    }, { SKILLOPS_DATA_DIR: dataDir })
+
+    const events = await readFile(path.join(dataDir, 'events.jsonl'), 'utf8')
+    expect(events).not.toContain(rawSessionId)
+    expect(events).toContain('"event":"skill.completed"')
+    await expect(access(path.join(dataDir, 'claude-state', rawSessionId))).rejects.toMatchObject({ code: 'ENOENT' })
+    const [stateDirectory] = await readdir(path.join(dataDir, 'claude-state'))
+    expect(stateDirectory).toMatch(/^hmac-sha256_[a-f0-9]{64}$/)
+    expect(await readFile(path.join(dataDir, 'claude-state', stateDirectory, 'prompt-1_skill_tool_review', 'started.json'), 'utf8')).not.toContain(rawSessionId)
+  })
+
   it('observes direct and model-invoked Skills without storing sensitive payloads', async () => {
     const root = await temporaryDirectory('skillops-claude-adapter-')
     const claudeHome = path.join(root, 'claude-home')
@@ -205,6 +250,14 @@ describe('Claude Code lifecycle adapter', () => {
       tool_use_id: 'tool-skill-1',
       tool_input: { skill: 'database-migration', args: 'private database details' },
     }, environment, 'exact')
+    await runHook({
+      ...common,
+      prompt_id: 'prompt-1',
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Skill',
+      tool_use_id: 'tool-skill-generic',
+      tool_input: { skill: 'database-migration' },
+    }, environment, 'generic')
     await runHook({ ...common, prompt_id: 'prompt-1', hook_event_name: 'PostToolUse', tool_name: 'Skill', tool_use_id: 'tool-skill-1', tool_output: 'private output' }, environment)
     await runHook({ ...common, prompt_id: 'prompt-1', hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', tool_use_id: 'tool-failed-1', error: 'private error details' }, environment)
     await runHook({ ...common, prompt_id: 'prompt-1', hook_event_name: 'SubagentStart', agent_id: 'agent-1', agent_type: 'Explore' }, environment)
@@ -230,6 +283,8 @@ describe('Claude Code lifecycle adapter', () => {
     const raw = await readFile(path.join(dataDir, 'events.jsonl'), 'utf8')
     const events = raw.trim().split('\n').map((line) => JSON.parse(line))
     expect(raw).not.toContain('private customer request')
+    expect(raw).not.toContain(common.session_id)
+    expect(events.filter((event) => event.sessionId).every((event) => /^hmac-sha256:[a-f0-9]{64}$/.test(event.sessionId))).toBe(true)
     expect(raw).not.toContain('private arguments')
     expect(raw).not.toContain('private database details')
     expect(raw).not.toContain('private output')
@@ -241,6 +296,7 @@ describe('Claude Code lifecycle adapter', () => {
     expect(events.some((event) => event.event === 'skill.discovered' && event.skillId === 'deploy-preview')).toBe(true)
     expect(events.some((event) => event.event === 'skill.started' && event.skillId === 'code-review' && event.skillVersion === '2.0.0' && event.detectionMethod === 'slash_command' && event.confidence === 1)).toBe(true)
     expect(events.some((event) => event.event === 'skill.started' && event.skillId === 'database-migration' && event.detectionMethod === 'skill_tool' && event.toolUseId === 'tool-skill-1')).toBe(true)
+    expect(events.some((event) => event.toolUseId === 'tool-skill-generic')).toBe(false)
     expect(events.filter((event) => event.event === 'skill.started' && event.skillId === 'database-migration' && event.detectionMethod === 'skill_path')).toHaveLength(1)
     expect(events.filter((event) => event.event === 'skill.started' && event.skillId === 'code-review' && event.detectionMethod === 'skill_path')).toHaveLength(1)
     expect(events.filter((event) => event.event === 'skill.completed')).toHaveLength(4)
@@ -252,4 +308,36 @@ describe('Claude Code lifecycle adapter', () => {
     expect(events.some((event) => event.event === 'session.completed' && event.reason === 'prompt_input_exit')).toBe(true)
     await expect(access(path.join(dataDir, 'claude-state', 'session-claude-1'))).rejects.toMatchObject({ code: 'ENOENT' })
   }, 15_000)
+
+  it('records Workflow and Agent lifecycles while keeping Rules discovery-only', async () => {
+    const root = await temporaryDirectory('skillops-claude-artifacts-')
+    const claudeHome = path.join(root, 'claude-home')
+    const dataDir = path.join(root, 'data')
+    const project = path.join(root, 'project')
+    const workflow = path.join(claudeHome, 'commands/review.md')
+    const agent = path.join(project, '.claude/agents/Explore.md')
+    const scopedRules = path.join(project, '.claude/CLAUDE.md')
+    await mkdir(path.dirname(workflow), { recursive: true })
+    await mkdir(path.dirname(agent), { recursive: true })
+    await mkdir(path.dirname(scopedRules), { recursive: true })
+    await writeFile(workflow, '---\ndescription: Review changes\n---\nReview carefully.\n')
+    await writeFile(agent, '---\nname: Explore\ndescription: Explore the codebase\n---\nExplore carefully.\n')
+    await writeFile(path.join(project, 'CLAUDE.md'), '# Project rules\n')
+    await writeFile(scopedRules, '# Scoped project rules\n')
+    const environment = { CLAUDE_CONFIG_DIR: claudeHome, SKILLOPS_DATA_DIR: dataDir }
+    const common = { session_id: 'artifact-session', prompt_id: 'artifact-prompt', cwd: project }
+
+    await runHook({ ...common, hook_event_name: 'SessionStart', source: 'startup' }, environment)
+    await runHook({ ...common, hook_event_name: 'UserPromptExpansion', expansion_type: 'slash_command', command_name: 'review' }, environment, 'exact')
+    await runHook({ ...common, hook_event_name: 'SubagentStart', agent_id: 'agent-1', agent_type: 'Explore' }, environment)
+    await runHook({ ...common, hook_event_name: 'Stop' }, environment)
+
+    const events = (await readFile(path.join(dataDir, 'events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line))
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: 'skill.started', skillId: 'review', kind: 'command', detectionMethod: 'slash_command' }),
+      expect.objectContaining({ event: 'skill.started', skillId: 'Explore', kind: 'agent', detectionMethod: 'hook' }),
+    ]))
+    expect(events.filter((event) => event.event === 'skill.discovered' && event.skillId === 'CLAUDE' && event.kind === 'rules')).toHaveLength(2)
+    expect(events.some((event) => ['skill.matched', 'skill.started', 'skill.completed', 'skill.failed'].includes(event.event) && event.kind === 'rules')).toBe(false)
+  })
 })

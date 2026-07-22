@@ -36,9 +36,8 @@ function quoteWindows(value) {
 
 function skillOpsHandler(definition) {
   const mode = definition.mode || 'default'
-  const command = process.platform === 'win32'
-    ? `set "SKILLOPS_ADAPTER=${marker}" && set "SKILLOPS_HOOK_MODE=${mode}" && ${quoteWindows(process.execPath)} ${quoteWindows(hookPath)}`
-    : `SKILLOPS_ADAPTER=${marker} SKILLOPS_HOOK_MODE=${mode} ${quotePosix(process.execPath)} ${quotePosix(hookPath)}`
+  const quote = process.platform === 'win32' ? quoteWindows : quotePosix
+  const command = `${quote(process.execPath)} ${quote(hookPath)} --adapter=${marker} --hook-mode=${mode}`
   return {
     type: 'command',
     command,

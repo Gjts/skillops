@@ -37,24 +37,33 @@ npm run dev
 | Claude Code signal | SkillOps event | Detection |
 | --- | --- | --- |
 | `SessionStart` / `SessionEnd` | `session.started` / `session.completed` | Exact |
+| `SessionStart` inventory scan finds `CLAUDE.md` / `.claude/rules/*.md` | Rules discovery only | Definition presence; Claude Code exposes no Rule-load lifecycle signal |
 | `UserPromptSubmit` | `prompt.submitted` | Exact; length only |
 | `UserPromptExpansion` for `/skill-name` | `skill.matched`, `skill.started` | Exact |
 | `PreToolUse` with the `Skill` tool | `skill.matched`, `skill.started` | Exact |
 | A tool input references `skills/<name>/SKILL.md` | `skill.matched`, `skill.started` | Heuristic, confidence `0.92` |
 | `PostToolUse` / `PostToolUseFailure` | `tool.completed` | Exact lifecycle outcome |
 | `SubagentStart` / `SubagentStop` | `subagent.started` / `subagent.completed` | Exact |
+| `SubagentStart` matching `.claude/agents/*.md` | Agent match + start | Exact definition match |
 | `Stop` / `StopFailure` | terminal Skill and turn events | Exact lifecycle boundary |
 
 Normal `Stop` events produce `skill.completed` with `outcome: "unknown"`. This means the Skill finished running, not that its output passed an evaluation. `StopFailure` produces `skill.failed`. Keep task acceptance tests and A/B evaluations separate from lifecycle telemetry.
 
-The scanner covers both current Skill directories and legacy custom commands:
+Rules remain discovery-only. Inventory presence does not prove that Claude Code loaded or applied a particular Rules file.
 
-- `~/.claude/skills/<name>/SKILL.md`
-- `.claude/skills/<name>/SKILL.md`
-- `~/.claude/commands/<name>.md`
-- `.claude/commands/<name>.md`
+The scanner covers Skills, legacy custom-command Workflows, Rules, and Agents:
 
-When `CLAUDE_CONFIG_DIR` or CC Switch's `claude_config_dir` is set, global Skills, legacy commands, and `settings.json` are resolved beneath that directory. CC Switch-managed Skills are scanned from Claude Code's effective `skills` directory, including the links produced by CC Switch's `auto` and `symlink` synchronization modes. This avoids reporting an SSOT Skill as Claude-enabled before CC Switch has actually synchronized it.
+- `~/.claude/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md`
+- `~/.claude/commands/<name>.md` and `.claude/commands/<name>.md`
+- `~/.claude/CLAUDE.md`, `CLAUDE.md`, `.claude/CLAUDE.md`, and `.claude/rules/*.md`
+- `~/.claude/agents/<name>.md` and `.claude/agents/<name>.md`
+
+When `CLAUDE_CONFIG_DIR` or CC Switch's `claude_config_dir` is set, global
+assets and `settings.json` are resolved beneath that directory. CC
+Switch-managed Skills are scanned from Claude Code's effective `skills`
+directory, including the links produced by CC Switch's `auto` and `symlink`
+synchronization modes. This avoids reporting an SSOT Skill as Claude-enabled
+before CC Switch has actually synchronized it.
 
 Plugin enablement follows Claude Code's file precedence: user
 `settings.json`, shared project `settings.json`, project
@@ -66,7 +75,7 @@ runtime disagree.
 
 ## Privacy and performance
 
-SkillOps does not store prompt text, command arguments, tool inputs, tool outputs, transcripts, last assistant messages, or raw error details. It stores identifiers, timestamps, runtime metadata, lengths, lifecycle outcomes, and discovered Skill paths.
+SkillOps does not store prompt text, command arguments, tool inputs, tool outputs, transcripts, last assistant messages, raw host session IDs, or raw error details. It stores per-install HMAC session pseudonyms, timestamps, runtime metadata, lengths, lifecycle outcomes, and discovered Skill paths.
 
 High-frequency generic hooks run asynchronously. The hooks that must establish or close exact Skill state run synchronously to prevent lifecycle races. Adapter errors are written locally and never block Claude Code.
 

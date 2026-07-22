@@ -23,6 +23,14 @@ export function promptVariableNames(...contents) {
 export function renderPromptVariables(record, supplied = {}) {
   if (!supplied || typeof supplied !== 'object' || Array.isArray(supplied)) throw new EvaluationError('Prompt variables must be an object.', 422)
   const normalized = Object.create(null)
+  for (const [key, value] of Object.entries(record.prompt.variableDefaults || {})) {
+    const name = normalizePromptVariableName(key)
+    if (value === null) continue
+    if (!['string', 'number', 'boolean'].includes(typeof value) || typeof value === 'number' && !Number.isFinite(value)) {
+      throw new EvaluationError(`Prompt variable default ${name} must be a scalar value.`, 422)
+    }
+    normalized[name] = String(value)
+  }
   for (const [key, value] of Object.entries(supplied)) {
     const name = normalizePromptVariableName(key)
     if (!['string', 'number', 'boolean'].includes(typeof value) || typeof value === 'number' && !Number.isFinite(value)) {

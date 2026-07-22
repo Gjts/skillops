@@ -6,18 +6,18 @@ const eventNames = new Set([
 const runtimes = new Set(['codex', 'claude-code', 'cursor'])
 const outcomes = new Set(['success', 'failed', 'unknown'])
 const sources = new Set(['global', 'project', 'plugin'])
-const kinds = new Set(['skill', 'command'])
+const kinds = new Set(['skill', 'command', 'rules', 'agent'])
 const detectionMethods = new Set(['explicit_prompt', 'slash_command', 'skill_tool', 'skill_path', 'manual', 'hook'])
 const allowedFields = new Set([
   'id', 'event', 'skillId', 'skillVersion', 'runtime', 'timestamp', 'durationMs', 'costUsd', 'tokens',
-  'sessionId', 'project', 'sourcePath', 'source', 'error', 'turnId', 'promptId', 'model', 'toolName',
+  'sessionId', 'project', 'sourcePath', 'source', 'turnId', 'promptId', 'model', 'toolName',
   'toolUseId', 'subagentType', 'subagentId', 'permissionMode', 'outcome', 'detectionMethod', 'confidence',
   'promptLength', 'skillArgsLength', 'commandSource', 'reason', 'startSource', 'provider', 'kind', 'enabled',
   'description', 'tags',
 ])
 const numericFields = ['durationMs', 'costUsd', 'tokens', 'confidence', 'promptLength', 'skillArgsLength']
 const stringFields = [
-  'skillId', 'skillVersion', 'sessionId', 'project', 'sourcePath', 'error', 'turnId', 'promptId', 'model',
+  'skillId', 'skillVersion', 'sessionId', 'project', 'sourcePath', 'turnId', 'promptId', 'model',
   'toolName', 'toolUseId', 'subagentType', 'subagentId', 'permissionMode', 'commandSource', 'reason',
   'startSource', 'provider', 'description',
 ]

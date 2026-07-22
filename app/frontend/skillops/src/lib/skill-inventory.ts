@@ -34,7 +34,8 @@ export function definitionKey(row: InstalledSkill) {
 }
 
 export function inventoryGroupKey(row: InstalledSkill) {
-  return `${row.runtime}:${normalizedSkillId(row.skillId)}`
+  const kind = ['skill', 'command'].includes(row.kind) ? 'invocable' : row.kind
+  return `${row.runtime}:${kind}:${normalizedSkillId(row.skillId)}`
 }
 
 function hasMissingMetadata(row: InstalledSkill) {

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { spawn } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -118,6 +118,44 @@ describe('Codex lifecycle adapter', () => {
     expect(events.some((event) => event.event === 'skill.started' && event.skillId === 'diagnosing-bugs')).toBe(true)
   })
 
+  it('migrates legacy raw-session state before completing active Skills', async () => {
+    const root = await temporaryDirectory('skillops-codex-state-migration-')
+    const dataDir = path.join(root, 'data')
+    const project = path.join(root, 'project')
+    const rawSessionId = 'legacy-codex-session'
+    const legacyFile = path.join(dataDir, 'codex-state', `${rawSessionId}.json`)
+    await mkdir(path.dirname(legacyFile), { recursive: true })
+    await mkdir(project, { recursive: true })
+    await writeFile(legacyFile, JSON.stringify({
+      knownSkills: [],
+      active: {
+        'turn-1:review': {
+          runtime: 'codex',
+          sessionId: rawSessionId,
+          turnId: 'turn-1',
+          skillId: 'review',
+          skillVersion: '1.0.0',
+          startedAt: '2026-07-22T00:00:00.000Z',
+        },
+      },
+    }))
+
+    await runHook({
+      session_id: rawSessionId,
+      turn_id: 'turn-1',
+      cwd: project,
+      hook_event_name: 'Stop',
+    }, { SKILLOPS_DATA_DIR: dataDir })
+
+    const events = await readFile(path.join(dataDir, 'events.jsonl'), 'utf8')
+    expect(events).not.toContain(rawSessionId)
+    expect(events).toContain('"event":"skill.completed"')
+    await expect(access(legacyFile)).rejects.toMatchObject({ code: 'ENOENT' })
+    const [stateFile] = await readdir(path.join(dataDir, 'codex-state'))
+    expect(stateFile).toMatch(/^hmac-sha256_[a-f0-9]{64}\.json$/)
+    expect(await readFile(path.join(dataDir, 'codex-state', stateFile), 'utf8')).not.toContain(rawSessionId)
+  })
+
   it('observes explicit and path-based Skill invocation without storing prompt content', async () => {
     const root = await temporaryDirectory('skillops-codex-adapter-')
     const codexHome = path.join(root, 'codex-home')
@@ -145,6 +183,8 @@ describe('Codex lifecycle adapter', () => {
     const raw = await readFile(path.join(dataDir, 'events.jsonl'), 'utf8')
     const events = raw.trim().split('\n').map((line) => JSON.parse(line))
     expect(raw).not.toContain('Use $database-migration for this change')
+    expect(raw).not.toContain(common.session_id)
+    expect(events.filter((event) => event.sessionId).every((event) => /^hmac-sha256:[a-f0-9]{64}$/.test(event.sessionId))).toBe(true)
     expect(events.filter((event) => event.event === 'skill.discovered' && event.sourcePath.startsWith(root))).toHaveLength(2)
     expect(events.some((event) => event.event === 'skill.started' && event.skillId === 'database-migration' && event.detectionMethod === 'explicit_prompt' && event.confidence === 1)).toBe(true)
     expect(events.some((event) => event.event === 'skill.started' && event.skillId === 'test-generator' && event.detectionMethod === 'skill_path')).toBe(true)
@@ -152,5 +192,37 @@ describe('Codex lifecycle adapter', () => {
     expect(events.some((event) => event.event === 'tool.completed' && event.outcome === 'success')).toBe(true)
     expect(events.some((event) => event.event === 'subagent.started' && event.subagentType === 'reviewer')).toBe(true)
     expect(events.some((event) => event.event === 'subagent.completed' && event.subagentType === 'reviewer')).toBe(true)
+  })
+
+  it('records Workflow and Agent lifecycles while keeping Rules discovery-only', async () => {
+    const root = await temporaryDirectory('skillops-codex-artifacts-')
+    const codexHome = path.join(root, 'codex-home')
+    const dataDir = path.join(root, 'data')
+    const project = path.join(root, 'project')
+    const workflow = path.join(codexHome, 'prompts/review.md')
+    const agent = path.join(project, '.codex/agents/reviewer.toml')
+    const globalRules = path.join(codexHome, 'AGENTS.md')
+    await mkdir(path.dirname(workflow), { recursive: true })
+    await mkdir(path.dirname(agent), { recursive: true })
+    await mkdir(path.dirname(globalRules), { recursive: true })
+    await writeFile(workflow, '---\ndescription: Review changes\n---\nReview carefully.\n')
+    await writeFile(agent, 'name = "reviewer"\ndescription = "Review changes."\ndeveloper_instructions = """Review carefully."""\n')
+    await writeFile(path.join(project, 'AGENTS.md'), '# Project rules\n')
+    await writeFile(globalRules, '# Global rules\n')
+    const environment = { CODEX_HOME: codexHome, SKILLOPS_DATA_DIR: dataDir }
+    const common = { session_id: 'artifact-session', turn_id: 'artifact-turn', cwd: project }
+
+    await runHook({ ...common, hook_event_name: 'SessionStart', source: 'startup' }, environment)
+    await runHook({ ...common, hook_event_name: 'UserPromptSubmit', prompt: '/prompts:review' }, environment)
+    await runHook({ ...common, hook_event_name: 'SubagentStart', agent_type: 'reviewer' }, environment)
+    await runHook({ ...common, hook_event_name: 'Stop' }, environment)
+
+    const events = (await readFile(path.join(dataDir, 'events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line))
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: 'skill.started', skillId: 'review', kind: 'command', detectionMethod: 'explicit_prompt' }),
+      expect.objectContaining({ event: 'skill.started', skillId: 'reviewer', kind: 'agent', detectionMethod: 'hook' }),
+    ]))
+    expect(events.filter((event) => event.event === 'skill.discovered' && event.skillId === 'AGENTS' && event.kind === 'rules')).toHaveLength(2)
+    expect(events.some((event) => ['skill.matched', 'skill.started', 'skill.completed', 'skill.failed'].includes(event.event) && event.kind === 'rules')).toBe(false)
   })
 })

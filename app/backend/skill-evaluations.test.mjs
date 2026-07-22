@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
+import { artifactPackageHash } from './evaluations/artifact-package.mjs'
+import { createArtifactResolver } from './evaluations/artifact-resolver.mjs'
 import {
   analyzeCandidateSkill,
   callLlmProvider,
@@ -30,7 +32,8 @@ description: Scan code for security vulnerabilities.
 Find vulnerabilities and trace attacks through the application.
 `
 
-const candidateHash = createHash('sha256').update(candidateText).digest('hex')
+const candidateHash = artifactPackageHash([{ relativePath: 'SKILL.md', mode: 0o644, contents: candidateText }])
+const githubCommit = 'c'.repeat(40)
 
 const localSkill = {
   skillId: 'security-scan',
@@ -44,11 +47,31 @@ const localSkill = {
   description: 'Scan code for security vulnerabilities.',
 }
 
+function treeResponse(sourcePath = 'skills/security-review/SKILL.md', size = Buffer.byteLength(candidateText)) {
+  return new Response(JSON.stringify({
+    tree: [{ type: 'blob', mode: '100644', path: sourcePath, sha: 'skill', size }],
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+}
+
 function rawCandidateFetch() {
-  return vi.fn().mockResolvedValue(new Response(candidateText, {
-    status: 200,
-    headers: { 'Content-Type': 'text/plain', 'Content-Length': String(candidateText.length) },
-  }))
+  return vi.fn(async (url) => {
+    const href = String(url)
+    if (href.includes('/commits/')) {
+      return new Response(JSON.stringify({ sha: githubCommit }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    if (href.includes('/git/trees/')) {
+      return new Response(JSON.stringify({
+        tree: [
+          { type: 'blob', mode: '100644', path: 'SKILL.md', sha: 'root-skill', size: Buffer.byteLength(candidateText) },
+          { type: 'blob', mode: '100644', path: 'skills/security-review/SKILL.md', sha: 'skill', size: Buffer.byteLength(candidateText) },
+        ],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    return new Response(candidateText, {
+      status: 200,
+      headers: { 'Content-Type': 'text/plain', 'Content-Length': String(candidateText.length) },
+    })
+  })
 }
 
 function fakeRequest({ method = 'POST', body, headers = {}, remoteAddress = '127.0.0.1' } = {}) {
@@ -116,6 +139,127 @@ describe('Skill candidate comparison', () => {
       expect.objectContaining({ sourcePath: 'skills/security-review/SKILL.md', label: 'security-review' }),
     ])
   })
+  it('loads the complete immutable GitHub Skill package', async () => {
+    const script = Buffer.from('export const check = true\n')
+    const fetchImpl = vi.fn(async (url) => {
+      const href = String(url)
+      if (href.includes('/commits/')) {
+        return new Response(JSON.stringify({ sha: githubCommit }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (href.includes(`/git/trees/${githubCommit}?recursive=1`)) {
+        return new Response(JSON.stringify({
+          tree: [
+            { type: 'blob', mode: '100644', path: 'skills/security-review/SKILL.md', sha: 'skill', size: Buffer.byteLength(candidateText) },
+            { type: 'blob', mode: '100755', path: 'skills/security-review/scripts/check.mjs', sha: 'script', size: script.byteLength },
+          ],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (href.endsWith('/skills/security-review/SKILL.md')) return new Response(candidateText, { status: 200 })
+      if (href.endsWith('/skills/security-review/scripts/check.mjs')) return new Response(script, { status: 200 })
+      throw new Error(`Unexpected request: ${href}`)
+    })
+
+    const result = await discoverGithubSkill(
+      'https://raw.githubusercontent.com/example/repo/main/skills/security-review/SKILL.md',
+      undefined,
+      { fetchImpl },
+    )
+
+    expect(result.definition.packageFiles).toEqual([
+      { relativePath: 'SKILL.md', mode: 0o644, contents: Buffer.from(candidateText) },
+      { relativePath: 'scripts/check.mjs', mode: 0o755, contents: script },
+    ])
+    expect(result.definition.contentHash).toBe(artifactPackageHash(result.definition.packageFiles))
+    expect(result.definition.artifact.contentHash).toBe(result.definition.contentHash)
+  })
+  it('resolves enabled runtime Rules as a first-class local Artifact', async () => {
+    const sourcePath = '/workspace/AGENTS.md'
+    const sourceRef = `local-scan:codex:${sourcePath}`
+    const resolved = await createArtifactResolver({
+      scanInstalledSkills: async () => [{
+        skillId: 'AGENTS',
+        skillVersion: 'unversioned',
+        runtime: 'codex',
+        source: 'project',
+        sourcePath,
+        kind: 'rules',
+        provider: 'Project',
+        enabled: true,
+        status: 'active',
+      }],
+      readFile: async () => '# Project rules\nAlways verify the changed path.\n',
+    }).resolve(sourceRef)
+
+    expect(resolved.artifact).toEqual(expect.objectContaining({
+      kind: 'rules',
+      artifactId: 'AGENTS',
+      source: 'local-scan',
+      sourceRef,
+      runtimeTargets: ['codex'],
+    }))
+  })
+
+
+  it('resolves a branch to a Git commit and pins the GitHub Artifact source', async () => {
+    const commit = githubCommit
+    const fetchImpl = vi.fn(async (url) => {
+      const href = String(url)
+      if (href.includes('/commits/')) {
+        return new Response(JSON.stringify({ sha: commit }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (href.includes('/git/trees/')) return treeResponse()
+      if (href.includes(`raw.githubusercontent.com/example/repo/${commit}/`)) {
+        return new Response(candidateText, {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain', 'Content-Length': String(candidateText.length) },
+        })
+      }
+      throw new Error(`Unexpected request: ${href}`)
+    })
+
+    const result = await discoverGithubSkill(
+      'https://raw.githubusercontent.com/example/repo/main/skills/security-review/SKILL.md',
+      undefined,
+      { fetchImpl },
+    )
+
+    expect(result.definition.artifact).toEqual(expect.objectContaining({
+      gitCommit: commit,
+      repository: 'https://github.com/example/repo',
+      sourceRef: expect.stringContaining(commit),
+    }))
+    expect(result.definition.artifact.sourceRef).toContain('#skills%2Fsecurity-review%2FSKILL.md')
+    const resolved = await createArtifactResolver({ fetchImpl }).resolve(
+      result.definition.artifact.sourceRef,
+      { expectedContentHash: result.definition.artifact.contentHash },
+    )
+    expect(resolved.artifact).toEqual(result.definition.artifact)
+    expect(result.definition.sourceUrl).toContain(commit)
+  })
+
+  it('resolves hash-shaped Git refs instead of trusting them as commits', async () => {
+    const hashShapedRef = 'f'.repeat(40)
+    const fetchImpl = vi.fn(async (url) => {
+      const href = String(url)
+      if (href.includes(`/commits/${hashShapedRef}`)) {
+        return new Response(JSON.stringify({ sha: githubCommit }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (href.includes('/git/trees/')) return treeResponse()
+      return new Response(candidateText, {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain', 'Content-Length': String(candidateText.length) },
+      })
+    })
+
+    const result = await discoverGithubSkill(
+      `https://raw.githubusercontent.com/example/repo/${hashShapedRef}/skills/security-review/SKILL.md`,
+      undefined,
+      { fetchImpl },
+    )
+
+    expect(result.definition.artifact.gitCommit).toBe(githubCommit)
+    expect(fetchImpl).toHaveBeenCalledWith(expect.stringContaining(`/commits/${hashShapedRef}`), expect.any(Object))
+  })
 
   it('loads a repository-root raw GitHub SKILL.md URL', async () => {
     const result = await discoverGithubSkill(
@@ -135,10 +279,17 @@ description: Repository root skill.
 # Root skill
 Run the repository-level workflow.
 `
-    const fetchImpl = vi.fn().mockResolvedValue(new Response(rootSkillText, {
-      status: 200,
-      headers: { 'Content-Type': 'text/plain', 'Content-Length': String(rootSkillText.length) },
-    }))
+    const fetchImpl = vi.fn(async (url) => {
+      const href = String(url)
+      if (href.includes('/commits/main')) {
+        return new Response(JSON.stringify({ sha: githubCommit }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (href.includes('/git/trees/')) return treeResponse('SKILL.md', Buffer.byteLength(rootSkillText))
+      return new Response(rootSkillText, {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain', 'Content-Length': String(rootSkillText.length) },
+      })
+    })
 
     const result = await discoverGithubSkill(
       'https://raw.githubusercontent.com/example/repo/main/SKILL.md',
@@ -166,11 +317,14 @@ Run the repository-level workflow.
   it('ignores repository tree entries whose final file is not exactly SKILL.md', async () => {
     const fetchImpl = vi.fn(async (url) => {
       const href = String(url)
-      if (href.includes('/git/trees/main?recursive=1')) {
+      if (href.includes('/commits/main')) {
+        return new Response(JSON.stringify({ sha: githubCommit }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (href.includes(`/git/trees/${githubCommit}?recursive=1`)) {
         return new Response(JSON.stringify({
           tree: [
-            { type: 'blob', path: 'skills/security-review/NOTSKILL.md', sha: 'bad' },
-            { type: 'blob', path: 'skills/security-review/SKILL.md', sha: 'good' },
+            { type: 'blob', mode: '100644', path: 'skills/security-review/NOTSKILL.md', sha: 'bad', size: Buffer.byteLength(candidateText) },
+            { type: 'blob', mode: '100644', path: 'skills/security-review/SKILL.md', sha: 'good', size: Buffer.byteLength(candidateText) },
           ],
         }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       }
@@ -190,16 +344,24 @@ Run the repository-level workflow.
     expect(result.candidates).toEqual([
       expect.objectContaining({ sourcePath: 'skills/security-review/SKILL.md', sha: 'good' }),
     ])
-    expect(fetchImpl.mock.calls.map(([url]) => String(url)).some((url) => url.includes('NOTSKILL.md'))).toBe(false)
+    expect(result.definition.packageFiles.map((file) => file.relativePath)).toEqual(['NOTSKILL.md', 'SKILL.md'])
   })
 
   it('retries one transient GitHub read failure before giving up', async () => {
-    const fetchImpl = vi.fn()
-      .mockRejectedValueOnce(new TypeError('fetch failed'))
-      .mockResolvedValueOnce(new Response(candidateText, {
+    let rawAttempts = 0
+    const fetchImpl = vi.fn(async (url) => {
+      const href = String(url)
+      if (href.includes('/commits/main')) {
+        return new Response(JSON.stringify({ sha: githubCommit }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (href.includes('/git/trees/')) return treeResponse()
+      rawAttempts += 1
+      if (rawAttempts === 1) throw new TypeError('fetch failed')
+      return new Response(candidateText, {
         status: 200,
         headers: { 'Content-Type': 'text/plain', 'Content-Length': String(candidateText.length) },
-      }))
+      })
+    })
 
     const result = await discoverGithubSkill(
       'https://raw.githubusercontent.com/example/repo/main/skills/security-review/SKILL.md',
@@ -208,7 +370,7 @@ Run the repository-level workflow.
     )
 
     expect(result.definition.skillId).toBe('security-review')
-    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    expect(fetchImpl).toHaveBeenCalledTimes(4)
   })
 
   it('stops reading a candidate stream as soon as the byte limit is crossed', async () => {
@@ -221,7 +383,14 @@ Run the repository-level workflow.
         else throw new Error('reader pulled beyond the configured limit')
       },
     }, { highWaterMark: 0 })
-    const fetchImpl = vi.fn().mockResolvedValue(new Response(stream, { status: 200, headers: { 'Content-Type': 'text/plain' } }))
+    const fetchImpl = vi.fn(async (url) => {
+      const href = String(url)
+      if (href.includes('/commits/main')) {
+        return new Response(JSON.stringify({ sha: githubCommit }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (href.includes('/git/trees/')) return treeResponse('skills/security-review/SKILL.md', undefined)
+      return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/plain' } })
+    })
 
     await expect(discoverGithubSkill(
       'https://raw.githubusercontent.com/example/repo/main/skills/security-review/SKILL.md',
@@ -759,6 +928,74 @@ describe('AI settings HTTP API', () => {
     const get = fakeResponse()
     await handleEvaluationApi(fakeRequest({ method: 'GET' }), get, '/api/ai-settings', { writeAiSettings, readAiSettings })
     expect(JSON.parse(get.body).providers.openai.apiKey).toBe('persist-secret')
+  })
+
+  it('requires the Team Owner role before reading saved provider credentials', async () => {
+    const response = fakeResponse()
+    const readAiSettings = vi.fn()
+    const teamControlPlane = { authorize: vi.fn().mockRejectedValue(Object.assign(new Error('Team role Owner is required.'), { status: 403 })) }
+    const resolveGovernancePrincipal = vi.fn().mockResolvedValue({ id: 'user:viewer', displayName: 'Viewer', assurance: 'test' })
+
+    await handleEvaluationApi(fakeRequest({ method: 'GET' }), response, '/api/ai-settings', {
+      readAiSettings,
+      teamControlPlane,
+      resolveGovernancePrincipal,
+    })
+
+    expect(response.statusCode).toBe(403)
+    expect(response.body).toContain('Owner')
+    expect(readAiSettings).not.toHaveBeenCalled()
+    expect(teamControlPlane.authorize).toHaveBeenCalledWith(expect.objectContaining({ id: 'user:viewer' }), 'Owner')
+  })
+
+  it('requires the Team Owner role for the actual PromptHub credential route', async () => {
+    const response = fakeResponse()
+    const teamControlPlane = { authorize: vi.fn().mockRejectedValue(Object.assign(new Error('Team role Owner is required.'), { status: 403 })) }
+    const resolveGovernancePrincipal = vi.fn().mockResolvedValue({ id: 'user:developer', displayName: 'Developer', assurance: 'test' })
+
+    await handleEvaluationApi(fakeRequest({ method: 'GET' }), response, '/api/connectors/prompthub/credential', {
+      teamControlPlane,
+      resolveGovernancePrincipal,
+    })
+
+    expect(response.statusCode).toBe(403)
+    expect(response.body).toContain('Owner')
+    expect(teamControlPlane.authorize).toHaveBeenCalledWith(expect.objectContaining({ id: 'user:developer' }), 'Owner')
+  })
+
+  it('handles conflict mutations inside the Team-authorized API facade', async () => {
+    const response = fakeResponse()
+    const teamControlPlane = { authorize: vi.fn().mockResolvedValue({ id: 'user:maintainer' }) }
+    const resolveGovernancePrincipal = vi.fn().mockResolvedValue({ id: 'user:maintainer', displayName: 'Maintainer', assurance: 'test' })
+
+    const handled = await handleEvaluationApi(fakeJsonRequest({}), response, '/api/conflicts/not-found', {
+      teamControlPlane,
+      resolveGovernancePrincipal,
+    })
+
+    expect(handled).toBe(true)
+    expect(response.statusCode).toBe(404)
+    expect(teamControlPlane.authorize).toHaveBeenCalledWith(expect.objectContaining({ id: 'user:maintainer' }), 'Maintainer')
+  })
+
+  it('requires Reviewer approval and Maintainer release authority at the shared Team facade', async () => {
+    const teamControlPlane = { authorize: vi.fn().mockRejectedValue(Object.assign(new Error('Team role is required.'), { status: 403 })) }
+    const resolveGovernancePrincipal = vi.fn().mockResolvedValue({ id: 'user:developer', displayName: 'Developer', assurance: 'test' })
+
+    for (const pathname of [
+      '/api/capabilities/cap-1/approve',
+      '/api/capabilities/cap-1/canary',
+      '/api/capabilities/cap-1/promote',
+      '/api/capabilities/cap-1/rollback',
+    ]) {
+      const response = fakeResponse()
+      await handleEvaluationApi(fakeJsonRequest({}), response, pathname, { teamControlPlane, resolveGovernancePrincipal })
+      expect(response.statusCode).toBe(403)
+    }
+
+    expect(teamControlPlane.authorize.mock.calls.map(([, role]) => role)).toEqual([
+      'Reviewer', 'Maintainer', 'Maintainer', 'Maintainer',
+    ])
   })
 
   it('rejects non-loopback AI settings access and oversized PUT bodies', async () => {

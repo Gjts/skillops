@@ -1,6 +1,6 @@
 # Testing and QA strategy
 
-> Version: v0.3.1
+> Version: v0.3.2-rc.1
 > Status: active verification standard
 
 ## 1. Quality risks
@@ -36,9 +36,10 @@ Codex Desktop ingestion/deduplication, candidate bounds/similarity, baseline
 allowlisting, hash pinning, provider HTTPS/loopback normalization, HTTP
 origin/content-type guards, score-consistent blind judging, bounded workspace
 agent tools, chat-context minimization, strict Suite parsing, Promptfoo isolation
-and no-write behavior, sanitized evidence recovery, run scheduling/cancellation,
-governance transitions, recoverable skeleton installation, and Git-backed Prompt
-Registry validation/version handling.
+and no-write behavior, default-deny child processes, nested-Node no-egress,
+session-ID pseudonymization, sanitized evidence recovery, run
+scheduling/cancellation, governance transitions, recoverable skeleton
+installation, and Git-backed Prompt Registry validation/version handling.
 
 ### Adapter tests
 
@@ -68,7 +69,7 @@ Spawns the production server on an isolated loopback port and validates:
 - candidate-comparison HTTP behavior without an external model call;
 - a deterministic Managed Suite through the production HTTP server;
 - a temporary Git Prompt repository with three committed immutable versions;
-- two local Prompt Candidates evaluated through the Promptfoo worker;
+- two local Prompt Candidates evaluated through the isolated Promptfoo process;
 - evidence binding, independent approval, Canary, Stable, supersede, and
   offline rollback through the production governance API;
 - persisted evidence and immutable Stable/rollback behavior after the temporary
@@ -103,6 +104,39 @@ Repository hygiene:
 git diff --check
 git status --short --branch
 ```
+
+### Pull-request Artifact gate
+
+`.github/workflows/evaluation-gate.yml` publishes the stable
+**Required Artifact evaluation** check for `pull_request`, merge queue, and
+manual runs. It runs the deterministic managed baseline and `npm run
+eval:changed` against the exact base/head commits. Every changed Skill, Prompt,
+Workflow, Rules, Agent, Evaluation Suite, or Policy Pack must resolve as an
+immutable Git Artifact, have a matching deterministic Suite, and produce
+hash-valid passing evidence; a missing Suite, unresolved Candidate, failed Gate,
+or stale hash exits nonzero. The workflow does not receive a provider API key.
+The dedicated fixed CI Suite is resolved from the exact base commit and must
+keep its synthetic cases inline. When a mapping first introduces a Suite that
+does not yet exist at the base, the gate uses the base commit's
+`local-prompt-quality` as its trust anchor and rebinds the requested ID and
+Artifact kind in memory. The initial Evaluation Suite mapping uses two built-in
+structural markers after schema-validating the exact head Suite content; no
+Candidate-checkout Suite supplies its own assertions. The dedicated Suite takes
+over automatically after it exists at the base.
+The default score-delta threshold is zero: equal quality passes, while any
+measured regression against a distinct baseline fails. New Artifacts therefore
+remain subject to absolute score and every other blocking gate without requiring
+an impossible improvement over themselves.
+Deleting a governed Artifact is also part of the diff and fails closed because
+no immutable head Candidate can be resolved.
+Native Codex Agent Definitions under `.codex/agents/*.toml` are classified as
+Agent Artifacts, read from the tested commit, and targeted to the Codex runtime.
+
+The `main` branch ruleset must require **Required Artifact evaluation** and the
+platform CI jobs before merge. GitHub stores that ruleset outside the repository;
+administrators select these exact check names after the workflow exists on the
+default branch.
+
 
 ## 4. Narrow test examples
 
@@ -235,6 +269,15 @@ resolution after an unrelated working-tree edit. The automated Registry and
 production smoke tests cover this scenario; the exact contract is in
 [Prompt Registry contract](../integrations/prompt-registry.md).
 
+### Scenario L: PromptHub Git source-of-truth gate
+
+Use the local PromptHub Mock Server to preview a remote Prompt. Confirm import
+without `gitSourceRef`, with a non-Git reference, or with one mismatched component
+hash is rejected. Commit an exact semantic copy under the configured Git
+workspace, pass its resolver-issued immutable `git:` reference, and confirm the
+new capability is Candidate with the Git source/commit while connector state
+retains only remote identity/version/hash and the local content hash.
+
 ## 7. Browser route matrix
 
 Every route must load directly and after refresh:
@@ -267,10 +310,13 @@ For every new hook payload field, test that events do not persist:
 - evaluation tasks/criteria and generated/judge output;
 - assistant chat messages;
 - AI provider API keys outside `data/ai-settings.json`.
+- raw host session IDs rather than stable per-install HMAC pseudonyms.
 
 For read-only evaluation tools, also assert that `.env`, credential/key files,
 `data/`, `.opc`, dependencies, build output, traversal, and symlinks cannot be
 listed, searched, or read, and that no mutation/process/network tool is exposed.
+The process-wide no-egress setup must also reject undeclared child executables
+and remote Git commands, and must inject itself into nested Node processes.
 
 Unknown fields should be absent from the stored JSONL record, not merely hidden
 in the UI.

@@ -1,5 +1,5 @@
-export type ArtifactKind = 'skill' | 'prompt' | 'workflow'
-export type ArtifactSource = 'local-scan' | 'github' | 'prompt-registry'
+export type ArtifactKind = 'skill' | 'prompt' | 'workflow' | 'rules' | 'agent' | 'evaluation-suite' | 'policy-pack'
+export type ArtifactSource = 'local-scan' | 'git' | 'github' | 'prompt-registry' | 'prompthub'
 export type QuickEvaluationMode = 'prompt-only' | 'agent'
 export type QuickEvaluationWinner = 'baseline' | 'candidate' | 'tie'
 export type EvaluationStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
@@ -17,6 +17,74 @@ export interface ArtifactDefinition {
   modelHint?: string
   variables?: string[]
   componentHashes?: Partial<Record<'system' | 'prompt' | 'model' | 'configuration' | 'variables', string>>
+  gitCommit?: string
+  repository?: string
+  dependencies?: string[]
+  runtimeTargets?: RuntimeTarget[]
+  compatibility?: Partial<Record<RuntimeTarget, CompatibilityStatus>>
+  schemaVersion?: number
+  createdAt?: string
+}
+
+export type ArtifactStatus = 'draft' | 'candidate' | 'ready' | 'canary' | 'stable' | 'deprecated' | 'blocked'
+export type RuntimeTarget = 'codex' | 'claude-code' | 'cursor'
+export type CompatibilityStatus = 'supported' | 'preview' | 'unsupported'
+
+export interface ArtifactRecord {
+  id: string
+  artifactId: string
+  kind: ArtifactKind
+  name: string
+  owner: string
+  repository?: string
+  status: ArtifactStatus
+  description?: string
+  createdAt: string | null
+  updatedAt: string | null
+  versionIds: string[]
+}
+
+export interface ArtifactVersionRecord {
+  id: string
+  artifactId: string
+  sourceArtifactId: string
+  kind: ArtifactKind
+  version: string
+  contentHash: string
+  gitCommit: string | null
+  repository?: string
+  schemaVersion: number
+  runtimeTargets: RuntimeTarget[]
+  compatibility: Record<RuntimeTarget, CompatibilityStatus>
+  dependencies: string[]
+  source: ArtifactSource
+  sourceRef: string
+  description?: string
+  componentHashes?: ArtifactDefinition['componentHashes']
+  status: ArtifactStatus
+  createdAt: string | null
+}
+
+export interface ArtifactInstallationRecord {
+  id: string
+  artifactId: string
+  artifactVersionId?: string
+  runtime: RuntimeTarget
+  scope: string
+  targetPath: string
+  desiredState: 'present' | 'absent' | 'unmanaged'
+  observedState: 'present' | 'missing' | 'drifted' | 'unmanaged'
+  observedHash?: string
+}
+
+export interface ArtifactRegistrySnapshot {
+  schemaVersion: 1
+  generatedAt: string
+  artifacts: ArtifactRecord[]
+  versions: ArtifactVersionRecord[]
+  installations: ArtifactInstallationRecord[]
+  compatibility: Record<ArtifactKind, Record<RuntimeTarget, CompatibilityStatus>>
+  warnings: Array<{ source: 'prompt-registry', code: 'PROMPT_SOURCE_UNAVAILABLE' }>
 }
 
 export interface CandidateRef {
@@ -114,10 +182,11 @@ export interface EvaluationRunSummary {
   suiteVersion?: string
   suiteHash: string | null
   datasetHash: string | null
+  casesHash: string | null
   baseline: ArtifactDefinition
   candidate: ArtifactDefinition
   engine: { name: 'skillops-legacy' | 'promptfoo'; version: string }
-  provider: { id: string; model: string }
+  provider: { id: string; model: string; models?: string[]; configurationHash?: string }
   metrics: EvaluationMetrics | null
   policyHash: string | null
   gates: EvaluationGate[]
@@ -138,13 +207,14 @@ export interface EvaluationSuiteMetadata {
   sensitivity: 'synthetic' | 'internal' | 'restricted'
   artifactKind: ArtifactKind
   repeats: number
+  matrix?: { models: Array<{ id: string; model: string }> }
   caseCount: number
   suiteHash: string
   datasetHash: string | null
   datasetId: string | null
 }
 
-export type CapabilityStage = 'candidate' | 'evaluating' | 'blocked' | 'ready' | 'approved' | 'canary' | 'stable' | 'superseded' | 'rolled-back'
+export type CapabilityStage = 'candidate' | 'evaluating' | 'blocked' | 'ready' | 'approved' | 'canary' | 'stable' | 'deprecated' | 'superseded' | 'rolled-back'
 
 export interface CapabilityEvidence {
   qualityRunId: string
@@ -163,7 +233,6 @@ export interface CapabilityEvidence {
 export interface CapabilityApproval {
   reviewer: string
   decision: 'approved' | 'rejected'
-  note?: string
   evidenceHash: string
   decidedAt: string
 }
@@ -174,13 +243,17 @@ export interface Capability {
   baseline: ArtifactDefinition | null
   owner: string
   targetSkeleton: string
+  projectId?: string | null
+  projectRoot?: string | null
+  targetKey?: string | null
   stage: CapabilityStage
+  requalifiesStage?: 'deprecated' | 'superseded' | null
   policyId: string
   latestEvidenceRunId?: string | null
   evidence: CapabilityEvidence | null
   approvals: CapabilityApproval[]
   evidenceStale: boolean
-  reviewerIdentityAssurance: 'locally-declared'
+  reviewerIdentityAssurance: string
   createdAt: string
   updatedAt: string
 }
@@ -190,6 +263,7 @@ export interface SkeletonChangePreview {
   capabilityId: string
   source: string
   target: string
+  projectRoot?: string
   currentHash: string | null
   candidateHash: string
   diff: { beforeLines: number; afterLines: number; changedLines: number }
@@ -201,7 +275,10 @@ export interface SkeletonChangePreview {
 }
 
 export const ARTIFACT_KINDS: readonly ArtifactKind[]
+export const ARTIFACT_REFERENCE_ONLY_KINDS: readonly ArtifactKind[]
 export const ARTIFACT_SOURCES: readonly ArtifactSource[]
+export const ARTIFACT_STATUSES: readonly ArtifactStatus[]
+export const ARTIFACT_RUNTIME_COMPATIBILITY: Readonly<Record<ArtifactKind, Readonly<Record<RuntimeTarget, CompatibilityStatus>>>>
 export const QUICK_EVALUATION_MODES: readonly QuickEvaluationMode[]
 export const QUICK_EVALUATION_WINNERS: readonly QuickEvaluationWinner[]
 export const EVALUATION_STATUSES: readonly EvaluationStatus[]
@@ -246,3 +323,6 @@ export function normalizeManagedEvaluationRunRequest(value: unknown): {
 }
 export function normalizeEvaluationApiBody(pathname: string, value: unknown): unknown
 export function normalizeArtifactDefinition(value: unknown): ArtifactDefinition
+export function normalizeArtifactRecord(value: unknown): Omit<ArtifactRecord, 'versionIds'>
+export function normalizeArtifactVersionRecord(value: unknown): ArtifactVersionRecord
+export function normalizeInstallationRecord(value: unknown): ArtifactInstallationRecord

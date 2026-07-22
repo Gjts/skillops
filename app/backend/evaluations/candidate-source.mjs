@@ -1,9 +1,10 @@
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { scanInstalledSkills } from '../skill-scanner.mjs'
-import { artifactContentHash, createSkillArtifactDefinition, normalizeArtifactContent } from './artifact-definition.mjs'
+import { artifactContentHash, createRuntimeArtifactDefinition, createSkillArtifactDefinition, normalizeArtifactContent } from './artifact-definition.mjs'
+import { artifactPackageHash, MAX_ARTIFACT_PACKAGE_BYTES, MAX_ARTIFACT_PACKAGE_FILES, normalizeArtifactPackage } from './artifact-package.mjs'
 import { EvaluationError, optionalString, requiredString } from './errors.mjs'
-import { boundedResponseText } from './response-limit.mjs'
+import { boundedResponseBytes, boundedResponseText } from './response-limit.mjs'
 
 export const MAX_SKILL_BYTES = 256_000
 const MAX_GITHUB_JSON_BYTES = 8_000_000
@@ -42,7 +43,7 @@ export function parseSkillDefinition(contents, fallbackName, metadata = {}) {
     headings: headingList(contents),
     contents: normalizedContents,
     ...metadata,
-    contentHash: artifactContentHash(normalizedContents),
+    contentHash: metadata.contentHash || artifactContentHash(normalizedContents),
   }
   definition.artifact = createSkillArtifactDefinition(definition, metadata.sourceUrl ? 'github' : 'local-scan')
   return definition
@@ -59,27 +60,29 @@ function githubCoordinates(sourceUrl) {
   const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent)
   if (url.hostname === 'raw.githubusercontent.com') {
     if (parts.length < 4 || parts.at(-1) !== 'SKILL.md') throw new EvaluationError('The raw GitHub URL must point to a SKILL.md file.')
-    return { owner: parts[0], repo: parts[1], branch: parts[2], directPath: parts.slice(3).join('/'), directUrl: url.href }
+    return {
+      owner: parts[0],
+      repo: parts[1],
+      repository: `https://github.com/${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}`,
+      branch: parts[2],
+      directPath: parts.slice(3).join('/'),
+    }
   }
   if (url.hostname !== 'github.com' || parts.length < 2) {
     throw new EvaluationError('Candidate discovery currently supports public github.com repositories and raw SKILL.md URLs.')
   }
   const [owner, repo] = parts
+  const repository = `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
   if (parts[2] === 'blob') {
     const directPath = parts.slice(4).join('/')
     if (!parts[3] || path.posix.basename(directPath) !== 'SKILL.md') throw new EvaluationError('The GitHub file URL must point to a SKILL.md file.')
-    return {
-      owner,
-      repo,
-      branch: parts[3],
-      directPath,
-      directUrl: `https://raw.githubusercontent.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(parts[3])}/${directPath.split('/').map(encodeURIComponent).join('/')}`,
-    }
+    return { owner, repo, repository, branch: parts[3], directPath }
   }
   if (parts[2] === 'tree' && !parts[3]) throw new EvaluationError('The GitHub tree URL is missing a branch.')
   return {
     owner,
     repo,
+    repository,
     branch: parts[2] === 'tree' ? parts[3] : undefined,
     prefix: parts[2] === 'tree' ? parts.slice(4).join('/') : '',
   }
@@ -120,52 +123,98 @@ async function githubJson(url, fetchImpl) {
   })
 }
 
-async function remoteText(url, fetchImpl) {
-  return remoteRequest(url, { headers: { Accept: 'text/plain', 'User-Agent': 'SkillOps-local-evaluator' } }, fetchImpl, 20_000, async (response) => {
-    if (!response.ok) throw new EvaluationError(`GitHub returned ${response.status} while reading the candidate Skill.`, response.status === 404 ? 404 : 502)
-    return boundedResponseText(response, MAX_SKILL_BYTES, 'The selected SKILL.md exceeds the 256 KB evaluation limit.')
-  })
-}
 
 export async function discoverGithubSkill(sourceUrl, candidatePath, options = {}) {
   const fetchImpl = options.fetchImpl || fetch
   const source = requiredString(sourceUrl, 'Candidate URL', 2_000)
   const coordinates = githubCoordinates(source)
   let branch = coordinates.branch
+  if (!branch) {
+    const repository = await githubJson(`https://api.github.com/repos/${encodeURIComponent(coordinates.owner)}/${encodeURIComponent(coordinates.repo)}`, fetchImpl)
+    branch = repository.default_branch
+  }
+  if (typeof branch !== 'string' || !branch) throw new EvaluationError('GitHub did not return a default branch.', 502)
+  const revision = await githubJson(`https://api.github.com/repos/${encodeURIComponent(coordinates.owner)}/${encodeURIComponent(coordinates.repo)}/commits/${encodeURIComponent(branch)}`, fetchImpl)
+  const commit = typeof revision.sha === 'string' ? revision.sha.toLowerCase() : ''
+  if (!/^[a-f0-9]{40,64}$/.test(commit)) throw new EvaluationError('GitHub did not resolve the selected revision to an immutable commit.', 502)
+  const tree = await githubJson(`https://api.github.com/repos/${encodeURIComponent(coordinates.owner)}/${encodeURIComponent(coordinates.repo)}/git/trees/${commit}?recursive=1`, fetchImpl)
+  if (tree.truncated) throw new EvaluationError('This repository tree is too large for safe candidate discovery. Link to a smaller Skill repository.', 422)
+  const entries = Array.isArray(tree.tree) ? tree.tree : []
+  const rawUrl = (sourcePath) => `https://raw.githubusercontent.com/${encodeURIComponent(coordinates.owner)}/${encodeURIComponent(coordinates.repo)}/${commit}/${sourcePath.split('/').map(encodeURIComponent).join('/')}`
+  const safeBlob = (entry) => entry?.type === 'blob'
+    && typeof entry.path === 'string'
+    && ['100644', '100755'].includes(entry.mode)
   let refs
   if (coordinates.directPath) {
-    refs = [{ sourcePath: coordinates.directPath, downloadUrl: coordinates.directUrl }]
+    const entry = entries.find((item) => safeBlob(item) && item.path === coordinates.directPath)
+    refs = entry ? [{ sourcePath: entry.path, sha: entry.sha, downloadUrl: rawUrl(entry.path) }] : []
   } else {
-    if (!branch) {
-      const repository = await githubJson(`https://api.github.com/repos/${encodeURIComponent(coordinates.owner)}/${encodeURIComponent(coordinates.repo)}`, fetchImpl)
-      branch = repository.default_branch
-    }
-    if (typeof branch !== 'string' || !branch) throw new EvaluationError('GitHub did not return a default branch.', 502)
-    const tree = await githubJson(`https://api.github.com/repos/${encodeURIComponent(coordinates.owner)}/${encodeURIComponent(coordinates.repo)}/git/trees/${encodeURIComponent(branch)}?recursive=1`, fetchImpl)
-    if (tree.truncated) throw new EvaluationError('This repository tree is too large for safe candidate discovery. Link directly to a SKILL.md file.', 422)
     const prefix = coordinates.prefix ? `${coordinates.prefix.replace(/\/+$/, '')}/` : ''
-    refs = (Array.isArray(tree.tree) ? tree.tree : [])
-      .filter((entry) => entry?.type === 'blob' && typeof entry.path === 'string' && path.posix.basename(entry.path) === 'SKILL.md' && (!prefix || entry.path.startsWith(prefix)))
-      .map((entry) => ({
-        sourcePath: entry.path,
-        sha: entry.sha,
-        downloadUrl: `https://raw.githubusercontent.com/${encodeURIComponent(coordinates.owner)}/${encodeURIComponent(coordinates.repo)}/${encodeURIComponent(branch)}/${entry.path.split('/').map(encodeURIComponent).join('/')}`,
-      }))
+    refs = entries
+      .filter((entry) => safeBlob(entry) && path.posix.basename(entry.path) === 'SKILL.md' && (!prefix || entry.path.startsWith(prefix)))
+      .map((entry) => ({ sourcePath: entry.path, sha: entry.sha, downloadUrl: rawUrl(entry.path) }))
       .sort((left, right) => left.sourcePath.split('/').length - right.sourcePath.split('/').length || left.sourcePath.localeCompare(right.sourcePath))
       .slice(0, 40)
   }
   if (!refs.length) throw new EvaluationError('No SKILL.md files were found at this GitHub location.', 404)
   const selected = candidatePath ? refs.find((item) => item.sourcePath === candidatePath) : refs[0]
   if (!selected) throw new EvaluationError('The selected candidate is not present at this GitHub location.', 404)
-  const contents = await remoteText(selected.downloadUrl, fetchImpl)
+  const packageDirectory = path.posix.dirname(selected.sourcePath)
+  const packagePrefix = packageDirectory === '.' ? '' : `${packageDirectory}/`
+  const packageEntries = entries.filter((entry) => typeof entry?.path === 'string' && (!packagePrefix || entry.path.startsWith(packagePrefix)))
+  if (packageEntries.some((entry) => entry.type !== 'tree' && !safeBlob(entry))) {
+    throw new EvaluationError('Artifact packages may contain only regular files.', 422)
+  }
+  const blobs = packageEntries.filter(safeBlob)
+  if (blobs.length > MAX_ARTIFACT_PACKAGE_FILES) {
+    throw new EvaluationError(`Artifact packages may contain at most ${MAX_ARTIFACT_PACKAGE_FILES} files.`, 413)
+  }
+  const declaredBytes = blobs.reduce((total, entry) => total + (Number.isFinite(entry.size) ? entry.size : 0), 0)
+  if (declaredBytes > MAX_ARTIFACT_PACKAGE_BYTES) throw new EvaluationError('Artifact package exceeds the 10 MB limit.', 413)
+  const definitionSize = blobs.find((entry) => entry.path === selected.sourcePath)?.size
+  if (Number.isFinite(definitionSize) && definitionSize > MAX_SKILL_BYTES) {
+    throw new EvaluationError('The selected SKILL.md exceeds the 256 KB evaluation limit.', 413)
+  }
+  const files = []
+  let downloadedBytes = 0
+  for (const entry of blobs) {
+    const definitionEntry = entry.path === selected.sourcePath
+    const remainingBytes = MAX_ARTIFACT_PACKAGE_BYTES - downloadedBytes
+    const contents = await remoteRequest(rawUrl(entry.path), {
+      headers: { Accept: 'application/octet-stream', 'User-Agent': 'SkillOps-local-evaluator' },
+    }, fetchImpl, 20_000, async (response) => {
+      if (!response.ok) throw new EvaluationError(`GitHub returned ${response.status} while reading the candidate Skill package.`, response.status === 404 ? 404 : 502)
+      return boundedResponseBytes(
+        response,
+        definitionEntry ? Math.min(MAX_SKILL_BYTES, remainingBytes) : remainingBytes,
+        definitionEntry ? 'The selected SKILL.md exceeds the 256 KB evaluation limit.' : 'Artifact package exceeds the 10 MB limit.',
+      )
+    })
+    downloadedBytes += contents.byteLength
+    files.push({
+      relativePath: packagePrefix ? entry.path.slice(packagePrefix.length) : entry.path,
+      mode: entry.mode === '100755' ? 0o755 : 0o644,
+      contents,
+    })
+  }
+  const packageFiles = normalizeArtifactPackage(files)
+  const definitionFile = packageFiles.find((file) => file.relativePath === (packagePrefix ? selected.sourcePath.slice(packagePrefix.length) : selected.sourcePath))
+  if (!definitionFile) throw new EvaluationError('The selected SKILL.md is missing from its immutable package.', 404)
+  const contents = new TextDecoder().decode(definitionFile.contents)
   const skillLabel = (sourcePath) => {
     const directory = path.posix.dirname(sourcePath)
     return directory === '.' ? coordinates.repo : path.posix.basename(directory)
   }
+  const immutableSourceUrl = `${coordinates.repository}/blob/${commit}/${selected.sourcePath.split('/').map(encodeURIComponent).join('/')}`
   const definition = parseSkillDefinition(contents, skillLabel(selected.sourcePath), {
-    sourceUrl: source,
+    sourceUrl: immutableSourceUrl,
     sourcePath: selected.sourcePath,
     sha: selected.sha,
+    gitCommit: commit,
+    repository: coordinates.repository,
+    packageFiles,
+    packageFileCount: packageFiles.length,
+    contentHash: artifactPackageHash(packageFiles),
   })
   return {
     definition,
@@ -246,6 +295,26 @@ export async function installedDefinitions(options = {}) {
     try {
       const contents = await read(skill.sourcePath, 'utf8')
       return parseSkillDefinition(contents, skill.skillId, skill)
+    } catch (error) {
+      if (error?.code === 'ENOENT' || error?.code === 'EACCES' || error?.status === 413) return null
+      throw error
+    }
+  }))).filter(Boolean)
+}
+
+export async function installedArtifactDefinitions(options = {}) {
+  const scan = options.scanInstalledSkills || scanInstalledSkills
+  const read = options.readFile || readFile
+  const artifacts = (await scan()).filter((item) => ['skill', 'command', 'rules', 'agent'].includes(item.kind) && item.enabled !== false)
+  return (await Promise.all(artifacts.map(async (item) => {
+    try {
+      if (item.kind === 'skill') return parseSkillDefinition(await read(item.sourcePath, 'utf8'), item.skillId, item)
+      const contents = normalizeArtifactContent(await read(item.sourcePath, 'utf8'))
+      if (!contents.trim()) return null
+      if (Buffer.byteLength(contents, 'utf8') > MAX_SKILL_BYTES) throw new EvaluationError('The selected runtime Artifact exceeds the 256 KB evaluation limit.', 413)
+      const definition = { ...item, contents, headings: headingList(contents), contentHash: artifactContentHash(contents) }
+      definition.artifact = createRuntimeArtifactDefinition(definition)
+      return definition
     } catch (error) {
       if (error?.code === 'ENOENT' || error?.code === 'EACCES' || error?.status === 413) return null
       throw error

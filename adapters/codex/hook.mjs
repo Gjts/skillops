@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { appendFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { scanInstalledSkills } from '../../app/backend/skill-scanner.mjs'
@@ -8,11 +9,21 @@ const adapterDir = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(adapterDir, '../..')
 process.env.SKILLOPS_DATA_DIR ||= path.join(projectRoot, 'data')
 
-const { appendEvent, appendUniqueDiscoveries, dataDir } = await import('../../app/backend/event-store.mjs')
+const { anonymizeSessionId, appendEvent, appendUniqueDiscoveries, dataDir } = await import('../../app/backend/event-store.mjs')
 const stateDir = path.join(dataDir, 'codex-state')
 
 function safeId(value) {
   return String(value || 'unknown').replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 160)
+}
+
+function definitionIdentity(skill) {
+  return createHash('sha256').update(JSON.stringify([
+    skill.kind || 'skill',
+    skill.skillId,
+    skill.sourcePath || '',
+    skill.source || '',
+    skill.provider || '',
+  ])).digest('hex')
 }
 
 async function readStdin() {
@@ -37,6 +48,28 @@ async function writeState(sessionId, state) {
   const temporary = `${file}.${process.pid}.tmp`
   await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, 'utf8')
   await rename(temporary, file)
+}
+
+async function migrateLegacyState(rawSessionId, sessionId) {
+  if (rawSessionId === sessionId) return
+  const legacyFile = path.join(stateDir, `${safeId(rawSessionId)}.json`)
+  let legacy
+  try {
+    legacy = JSON.parse(await readFile(legacyFile, 'utf8'))
+  } catch (error) {
+    if (error?.code === 'ENOENT') return
+    throw error
+  }
+  const current = await readState(sessionId)
+  const active = { ...(legacy.active || {}), ...(current.active || {}) }
+  for (const invocation of Object.values(active)) {
+    if (invocation && typeof invocation === 'object') invocation.sessionId = sessionId
+  }
+  await writeState(sessionId, {
+    knownSkills: current.knownSkills?.length ? current.knownSkills : (legacy.knownSkills || []),
+    active,
+  })
+  await rm(legacyFile, { force: true })
 }
 
 function commonFields(input) {
@@ -72,9 +105,9 @@ function collectStrings(value, output = []) {
   return output
 }
 
-function findKnownSkill(name, knownSkills) {
+function findKnownSkill(name, knownSkills, kinds) {
   const normalized = name.toLowerCase()
-  const available = knownSkills.filter((skill) => skill.enabled !== false)
+  const available = knownSkills.filter((skill) => skill.enabled !== false && (!kinds || kinds.includes(skill.kind)))
   const exact = available.find((skill) => skill.skillId.toLowerCase() === normalized)
   if (exact || !normalized.includes(':')) return exact
   const [provider, ...parts] = normalized.split(':')
@@ -83,11 +116,13 @@ function findKnownSkill(name, knownSkills) {
 }
 
 function explicitSkillNames(prompt, knownSkills) {
-  const matches = [...prompt.matchAll(/\$([a-zA-Z0-9](?:[a-zA-Z0-9_.:-]*[a-zA-Z0-9_-])?)/g)]
-  return [...new Map(matches
-    .map((match) => findKnownSkill(match[1], knownSkills))
-    .filter(Boolean)
-    .map((skill) => [skill.skillId, skill])).values()]
+  const matches = [
+    ...[...prompt.matchAll(/\$([a-zA-Z0-9](?:[a-zA-Z0-9_.:-]*[a-zA-Z0-9_-])?)/g)]
+      .map((match) => findKnownSkill(match[1], knownSkills)),
+    ...[...prompt.matchAll(/(?:^|\s)\/prompts:([a-zA-Z0-9][a-zA-Z0-9_.-]*)\b/g)]
+      .map((match) => findKnownSkill(match[1], knownSkills, ['command'])),
+  ]
+  return [...new Map(matches.filter(Boolean).map((skill) => [`${skill.kind}:${skill.skillId}`, skill])).values()]
 }
 
 function skillsFromPaths(input, knownSkills) {
@@ -111,21 +146,24 @@ function toolFailed(input) {
 }
 
 async function recordDiscoveries(input, state) {
-  const skills = await scanInstalledSkills({ project: input.cwd || process.cwd(), runtime: 'codex' })
+  const skills = (await scanInstalledSkills({ project: input.cwd || process.cwd(), runtime: 'codex' }))
+    .filter((skill) => ['skill', 'command', 'rules', 'agent'].includes(skill.kind))
   await appendUniqueDiscoveries(skills, commonFields(input))
   state.knownSkills = skills.filter((skill) => skill.enabled !== false)
+  return state.knownSkills
 }
 
 async function activateSkill(skill, input, state, detectionMethod, confidence) {
   if (!skill || skill.enabled === false) return
   const common = commonFields(input)
-  const activeKey = `${common.turnId || 'session'}:${skill.skillId}`
+  const activeKey = `${common.turnId || 'session'}:${definitionIdentity(skill)}`
   if (state.active[activeKey]) return
   const startedAt = new Date().toISOString()
   const fields = {
     ...common,
     skillId: skill.skillId,
     skillVersion: skill.skillVersion || 'unversioned',
+    kind: skill.kind,
     sourcePath: skill.sourcePath,
     source: skill.source,
     provider: skill.provider,
@@ -138,6 +176,9 @@ async function activateSkill(skill, input, state, detectionMethod, confidence) {
 }
 
 async function handle(input) {
+  const rawSessionId = String(input.session_id || 'unknown')
+  input.session_id = await anonymizeSessionId(rawSessionId)
+  await migrateLegacyState(rawSessionId, input.session_id)
   const eventName = input.hook_event_name
   const common = commonFields(input)
   const state = await readState(common.sessionId)
@@ -166,7 +207,9 @@ async function handle(input) {
     const toolName = input.tool_name || input.tool?.name || 'unknown'
     await appendEvent({ event: 'tool.completed', ...common, toolName, outcome: toolFailed(input) ? 'failed' : 'success' })
   } else if (eventName === 'SubagentStart') {
-    await appendEvent({ event: 'subagent.started', ...common, subagentType: input.agent_type || input.subagent_type || input.agent_name || 'unknown' })
+    const subagentType = input.agent_type || input.subagent_type || input.agent_name || 'unknown'
+    await appendEvent({ event: 'subagent.started', ...common, subagentType })
+    await activateSkill(findKnownSkill(subagentType, state.knownSkills, ['agent']), input, state, 'hook', 1)
   } else if (eventName === 'SubagentStop') {
     await appendEvent({ event: 'subagent.completed', ...common, subagentType: input.agent_type || input.subagent_type || input.agent_name || 'unknown', outcome: 'unknown' })
   } else if (eventName === 'Stop') {

@@ -35,7 +35,7 @@ function outcomeMetrics(runs: SkillEvent[]) {
   return {
     successes,
     knownOutcomes,
-    evaluatedRuns: knownOutcomes,
+    reportedOutcomeRuns: knownOutcomes,
     outcomeCoverage: runs.length ? (knownOutcomes / runs.length) * 100 : 0,
     lifecycleOnly,
     successRate: knownOutcomes ? (successes / knownOutcomes) * 100 : null,
@@ -49,7 +49,7 @@ export function summarize(events: SkillEvent[]) {
     runs: runs.length,
     successRate: outcomes.successRate,
     lifecycleOnly: outcomes.lifecycleOnly,
-    evaluatedRuns: outcomes.evaluatedRuns,
+    reportedOutcomeRuns: outcomes.reportedOutcomeRuns,
     outcomeCoverage: outcomes.outcomeCoverage,
     activeSkills: new Set(runs.map((event) => event.skillId).filter(Boolean)).size,
     cost: runs.reduce((sum, event) => sum + (event.costUsd ?? 0), 0),

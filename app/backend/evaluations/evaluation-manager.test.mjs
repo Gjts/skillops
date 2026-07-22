@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createEvaluationManager } from './evaluation-manager.mjs'
-import { createEvaluationStore } from './evaluation-store.mjs'
+import { computeEvaluationEvidenceHash, createEvaluationStore } from './evaluation-store.mjs'
 
 const temporaryDirectories = []
 const managers = []
@@ -18,7 +18,7 @@ afterEach(async () => {
 
 const provider = { provider: 'openai', model: 'gpt-test', apiKey: 'sentinel-provider-key' }
 const artifact = (artifactId, hash) => ({
-  artifact: { kind: 'skill', artifactId, version: '1.0.0', source: 'github', sourceRef: `github:${artifactId}`, contentHash: hash.repeat(64) },
+  artifact: { kind: 'skill', artifactId, version: '1.0.0', source: 'github', sourceRef: `github:https://github.com/acme/${artifactId}/blob/${hash.repeat(40)}/SKILL.md#SKILL.md`, contentHash: hash.repeat(64), gitCommit: hash.repeat(40) },
   contents: `sentinel-${artifactId}-contents`,
 })
 const suite = {
@@ -141,6 +141,17 @@ describe('evaluation manager', () => {
     expect(maximum).toBe(1)
   })
 
+  it('binds completed evidence to an immutable subject hash', async () => {
+    const subjectHash = 'f'.repeat(64)
+    const { store, manager } = await setup(async (input) => completed(input))
+    const created = await manager.enqueue(request(1, { subjectHash }))
+    const run = await waitFor(store, created.summary.id, 'completed')
+
+    expect(run.subjectHash).toBe(subjectHash)
+    expect(run.evidenceHash).toBe(computeEvaluationEvidenceHash({ ...run, evidenceHash: null }))
+    expect(computeEvaluationEvidenceHash({ ...run, subjectHash: 'e'.repeat(64), evidenceHash: null })).not.toBe(run.evidenceHash)
+  })
+
   it('supports request idempotency and rejects duplicate active candidate evidence', async () => {
     const runner = async (input, { signal }) => new Promise((_resolve, reject) => {
       if (signal.aborted) return reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
@@ -151,6 +162,27 @@ describe('evaluation manager', () => {
     const replay = await manager.enqueue(request(1))
     expect(replay).toEqual({ summary: expect.objectContaining({ id: first.summary.id }), reused: true })
     await expect(manager.enqueue(request(1, { clientRequestId: 'another-request' }))).rejects.toMatchObject({ status: 409 })
+    await manager.shutdown()
+  })
+
+  it('keys active work and idempotency to credential-free provider settings', async () => {
+    const runner = async (_input, { signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true })
+    })
+    const { manager } = await setup(runner)
+    const first = await manager.enqueue(request(1, {
+      provider: { ...provider, baseUrl: 'https://one.example/v1', reasoningEffort: 'low' },
+    }))
+    const second = await manager.enqueue(request(1, {
+      clientRequestId: 'different-settings',
+      provider: { ...provider, baseUrl: 'https://two.example/v1', reasoningEffort: 'high' },
+    }))
+    expect(first.summary.provider.configurationHash).toMatch(/^[a-f0-9]{64}$/)
+    expect(second.summary.provider.configurationHash).not.toBe(first.summary.provider.configurationHash)
+    expect(JSON.stringify([first.summary, second.summary])).not.toContain('example')
+    await expect(manager.enqueue(request(1, {
+      provider: { ...provider, baseUrl: 'https://two.example/v1', reasoningEffort: 'high' },
+    }))).rejects.toThrow('Client request ID')
     await manager.shutdown()
   })
 
@@ -193,6 +225,17 @@ describe('evaluation manager', () => {
     expect(allContents).not.toContain(provider.apiKey)
     expect(allContents).not.toContain('sentinel-baseline-1-contents')
     expect(allContents).not.toContain('sentinel-candidate-1-contents')
+  })
+
+  it('times out running work and releases the concurrency slot', async () => {
+    const runner = async (_input, { signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true })
+    })
+    const { store, manager } = await setup(runner, { timeoutMs: 20 })
+    const created = await manager.enqueue(request(1))
+    const run = await waitFor(store, created.summary.id, 'failed')
+    expect(run).toEqual(expect.objectContaining({ errorCode: 'RUN_TIMEOUT', evidenceHash: null, gateResult: 'not-evaluated' }))
+    await waitForIdle(manager)
   })
 
   it('enforces the concurrency hard limit', async () => {

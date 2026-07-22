@@ -9,7 +9,7 @@ const suite = {
   cases: [{ id: 'case-1', input: 'private test input', weight: 1, assertions: [{ label: 'required', type: 'contains', value: 'private value', blocking: true }] }],
 }
 const artifact = (id, hash) => ({
-  artifact: { kind: 'skill', artifactId: id, version: '1.0.0', source: 'github', sourceRef: `github:${id}`, contentHash: hash.repeat(64) },
+  artifact: { kind: 'skill', artifactId: id, version: '1.0.0', source: 'github', sourceRef: `github:https://github.com/acme/${id}/blob/${hash.repeat(40)}/SKILL.md#SKILL.md`, contentHash: hash.repeat(64), gitCommit: hash.repeat(40) },
   contents: `private ${id} content`,
 })
 const summary = {
@@ -58,10 +58,10 @@ function services(overrides = {}) {
   }
 }
 
-async function call(method, url, body, service = services(), headers) {
+async function call(method, url, body, service = services(), headers, options = {}) {
   const res = response()
   const pathname = new URL(url, 'http://127.0.0.1').pathname
-  const handled = await handleManagedEvaluationApi(request(method, url, body, headers), res, pathname, { managedEvaluationServices: service })
+  const handled = await handleManagedEvaluationApi(request(method, url, body, headers), res, pathname, { managedEvaluationServices: service, ...options })
   return { handled, response: res, json: res.body ? JSON.parse(res.body) : null, service }
 }
 
@@ -81,8 +81,8 @@ describe('managed evaluation API', () => {
     const result = await call('POST', '/api/evaluation-runs', {
       suiteId: 'suite-1', baselineRef: 'local-scan:baseline', candidateRef: 'github:candidate',
       provider: { provider: 'openai', model: 'gpt-test', apiKey: 'sentinel-key' },
-      requestedBy: 'qa', clientRequestId: 'request-1',
-    }, service)
+      requestedBy: 'qa', clientRequestId: 'request-1', timeoutMs: 45_000,
+    }, service, undefined, { teamPrincipal: { id: 'user:developer' } })
     expect(result.response.statusCode).toBe(202)
     expect(result.json).toEqual({ run: summary, reused: false })
     expect(result.response.body).not.toContain('sentinel-key')
@@ -91,6 +91,8 @@ describe('managed evaluation API', () => {
       suite, baseline: expect.objectContaining({ artifact: expect.objectContaining({ artifactId: 'baseline' }) }),
       candidate: expect.objectContaining({ artifact: expect.objectContaining({ artifactId: 'candidate' }) }),
       provider: expect.objectContaining({ provider: 'openai', model: 'gpt-test' }),
+      requestedBy: 'user:developer',
+      timeoutMs: 45_000,
     }))
   })
 
@@ -119,6 +121,32 @@ describe('managed evaluation API', () => {
     const cancelled = await call('POST', '/api/evaluation-runs/run-1/cancel', {}, service)
     expect(cancelled.json.cancelled).toBe(true)
   })
+  it('exports sanitized JSON and inert HTML reports', async () => {
+    const service = services()
+    const reportSummary = {
+      id: 'run-1', mode: 'suite', status: 'completed', suiteId: 'suite-1', suiteVersion: '1.0.0',
+      suiteHash: 'c'.repeat(64), datasetHash: null, baseline: artifact('baseline', 'a').artifact,
+      candidate: artifact('candidate', 'b').artifact, engine: { name: 'promptfoo', version: '0.121.19' },
+      provider: { id: 'openai', model: '<script>alert(1)</script>' }, metrics: null, policyHash: null, gates: [],
+      evidenceHash: 'd'.repeat(64), gateResult: 'passed', requestedBy: 'qa',
+      requestedAt: '2026-07-22T00:00:00.000Z', startedAt: '2026-07-22T00:00:01.000Z',
+      completedAt: '2026-07-22T00:00:02.000Z', errorCode: null,
+    }
+    service.store.getRun.mockResolvedValue(reportSummary)
+    const json = await call('GET', '/api/evaluation-runs/run-1/report?format=json', undefined, service)
+    expect(json.json).toEqual({ schemaVersion: 1, summary: expect.objectContaining({ id: 'run-1' }), cases: expect.any(Array) })
+    expect(json.response.body).not.toContain('private test input')
+
+    const res = response()
+    await handleManagedEvaluationApi(request('GET', '/api/evaluation-runs/run-1/report?format=html'), res, '/api/evaluation-runs/run-1/report', { managedEvaluationServices: service })
+    expect(res.statusCode).toBe(200)
+    expect(res.headers['content-type']).toBe('text/html; charset=utf-8')
+    expect(res.headers['content-security-policy']).toContain("default-src 'none'")
+    expect(res.body).toContain('SkillOps Evaluation Report')
+    expect(res.body).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
+    expect(res.body).not.toContain('<script>alert(1)</script>')
+  })
+
 
   it('returns a conflict for duplicates and hides unexpected exception details', async () => {
     const duplicate = services({ manager: { enqueue: vi.fn().mockRejectedValue(new EvaluationError('An active evaluation already exists.', 409)), cancel: vi.fn() } })

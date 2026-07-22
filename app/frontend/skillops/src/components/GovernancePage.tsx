@@ -13,6 +13,16 @@ const pipeline: Array<{ stage: CapabilityStage | 'monitor'; label: MessageKey }>
   { stage: 'monitor', label: 'governance.pipelineMonitor' },
 ]
 
+type ReleaseKind = 'canary' | 'install' | 'promote' | 'deprecate' | 'rollback'
+
+const releaseLabels: Record<ReleaseKind, { confirm: MessageKey; apply: MessageKey; danger: boolean }> = {
+  canary: { confirm: 'governance.confirmCanary', apply: 'governance.applyCanary', danger: false },
+  install: { confirm: 'governance.confirmInstall', apply: 'governance.applyInstall', danger: false },
+  promote: { confirm: 'governance.confirmStable', apply: 'governance.applyStable', danger: false },
+  deprecate: { confirm: 'governance.confirmDeprecation', apply: 'governance.applyDeprecation', danger: true },
+  rollback: { confirm: 'governance.confirmRollback', apply: 'governance.applyRollback', danger: true },
+}
+
 const stageOrder: Record<CapabilityStage, number> = {
   candidate: 0,
   evaluating: 1,
@@ -21,6 +31,7 @@ const stageOrder: Record<CapabilityStage, number> = {
   approved: 3,
   canary: 3,
   stable: 5,
+  deprecated: 5,
   superseded: 5,
   'rolled-back': 5,
 }
@@ -33,6 +44,7 @@ const stageKeys: Record<CapabilityStage, MessageKey> = {
   approved: 'governance.stage.approved',
   canary: 'governance.stage.canary',
   stable: 'governance.stage.stable',
+  deprecated: 'governance.stage.deprecated',
   superseded: 'governance.stage.superseded',
   'rolled-back': 'governance.stage.rolledBack',
 }
@@ -41,6 +53,10 @@ const kindKeys = {
   skill: 'governance.kind.skill',
   prompt: 'governance.kind.prompt',
   workflow: 'governance.kind.workflow',
+  rules: 'governance.kind.rules',
+  agent: 'governance.kind.agent',
+  'evaluation-suite': 'governance.kind.evaluationSuite',
+  'policy-pack': 'governance.kind.policyPack',
 } as const satisfies Record<Capability['artifact']['kind'], MessageKey>
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
@@ -62,12 +78,13 @@ export function GovernancePage() {
   const [error, setError] = useState<string | null>(null)
   const [sourceRef, setSourceRef] = useState('')
   const [targetSkeleton, setTargetSkeleton] = useState('')
-  const [owner, setOwner] = useState('local-owner')
+  const [projectId, setProjectId] = useState('')
+  const [canaryTarget, setCanaryTarget] = useState('')
+  const [canaryProjectRoot, setCanaryProjectRoot] = useState('')
   const [runId, setRunId] = useState('')
   const [redteamRunId, setRedteamRunId] = useState('')
-  const [reviewer, setReviewer] = useState('local-reviewer')
-  const [approvalNote, setApprovalNote] = useState('')
-  const [preview, setPreview] = useState<{ kind: 'promote' | 'rollback'; value: SkeletonChangePreview } | null>(null)
+  const [reviewerToken, setReviewerToken] = useState('')
+  const [preview, setPreview] = useState<{ kind: ReleaseKind; capabilityId: string; value: SkeletonChangePreview } | null>(null)
   const [confirmed, setConfirmed] = useState(false)
 
   const load = useCallback(async () => {
@@ -83,6 +100,9 @@ export function GovernancePage() {
 
   useEffect(() => { void load() }, [load])
   const selected = useMemo(() => items.find((item) => item.id === selectedId) ?? null, [items, selectedId])
+  const rollbackStableId = selected?.stage === 'approved' && selected.requalifiesStage === 'superseded'
+    ? items.find((item) => item.stage === 'stable' && item.targetSkeleton === selected.targetSkeleton)?.id
+    : undefined
 
   const mutate = async (operation: () => Promise<unknown>) => {
     setBusy(true)
@@ -97,43 +117,51 @@ export function GovernancePage() {
     } finally { setBusy(false) }
   }
 
-  function post<T = unknown>(path: string, body: object) {
+  function post<T = unknown>(path: string, body: object, token?: string) {
     return api<T>(path, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(body),
     })
   }
 
   const nominate = () => mutate(() => post('/api/capabilities', {
     sourceRef: sourceRef.trim(),
-    targetSkeleton: targetSkeleton.trim() || undefined,
-    owner: owner.trim(),
+    targetSkeleton: targetSkeleton.trim(),
+    ...(projectId.trim() ? { projectId: projectId.trim() } : {}),
   }))
   const bindEvidence = () => selected && mutate(() => post(`/api/capabilities/${encodeURIComponent(selected.id)}/evaluate`, {
     runId: runId.trim(),
     redteamRunId: redteamRunId.trim() || undefined,
   }))
-  const approve = () => selected && mutate(() => post(`/api/capabilities/${encodeURIComponent(selected.id)}/approve`, {
-    reviewer: reviewer.trim(),
-    decision: 'approved',
-    note: approvalNote.trim() || undefined,
-  }))
-  const canary = () => selected && mutate(() => post(`/api/capabilities/${encodeURIComponent(selected.id)}/canary`, {}))
-  const requestPreview = async (kind: 'promote' | 'rollback') => {
+  const approve = () => {
     if (!selected) return
+    const token = reviewerToken.trim()
+    setReviewerToken('')
+    return mutate(() => post(`/api/capabilities/${encodeURIComponent(selected.id)}/approve`, {
+      decision: 'approved',
+    }, token || undefined))
+  }
+  const requestPreview = async (kind: ReleaseKind, capabilityId = selected?.id) => {
+    if (!capabilityId) return
     setBusy(true)
     setError(null)
     try {
-      const value = await post<SkeletonChangePreview>(`/api/capabilities/${encodeURIComponent(selected.id)}/${kind}`, { action: 'preview' })
-      setPreview({ kind, value })
+      const value = await post<SkeletonChangePreview>(`/api/capabilities/${encodeURIComponent(capabilityId)}/${kind}`, {
+        action: 'preview',
+        ...(kind === 'canary' ? { targetSkeleton: canaryTarget.trim(), projectRoot: canaryProjectRoot.trim() } : {}),
+      })
+      setPreview({ kind, capabilityId, value })
       setConfirmed(false)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t('governance.requestFailed'))
     } finally { setBusy(false) }
   }
-  const applyPreview = () => selected && preview && mutate(() => post(`/api/capabilities/${encodeURIComponent(selected.id)}/${preview.kind}`, {
-    action: 'apply', previewToken: preview.value.previewToken, confirm: true,
+  const applyPreview = () => preview && mutate(() => post(`/api/capabilities/${encodeURIComponent(preview.capabilityId)}/${preview.kind}`, {
+    action: 'apply',
+    previewToken: preview.value.previewToken,
+    confirm: true,
+    ...(preview.kind === 'canary' ? { targetSkeleton: preview.value.target, projectRoot: preview.value.projectRoot } : {}),
   }))
 
   return (
@@ -155,9 +183,9 @@ export function GovernancePage() {
         <header><GitPullRequest size={18} /><div><h3>{t('governance.nominateTitle')}</h3><p>{t('governance.nominateDescription')}</p></div></header>
         <div className="governance-form-grid">
           <label><span>{t('governance.sourceRef')}</span><input value={sourceRef} onChange={(event) => setSourceRef(event.target.value)} placeholder="github:https://github.com/org/repo#path/SKILL.md" /></label>
-          <label><span>{t('governance.targetSkeleton')}</span><input value={targetSkeleton} onChange={(event) => setTargetSkeleton(event.target.value)} placeholder="local-scan:codex:…" /></label>
-          <label><span>{t('governance.owner')}</span><input value={owner} onChange={(event) => setOwner(event.target.value)} /></label>
-          <button className="button primary" type="button" disabled={busy || !sourceRef.trim() || !owner.trim()} onClick={() => void nominate()}>{t('governance.nominate')}</button>
+          <label><span>{t('governance.targetSkeleton')}</span><input value={targetSkeleton} onChange={(event) => setTargetSkeleton(event.target.value)} placeholder=".codex/skills/review/SKILL.md" /></label>
+          <label><span>{t('governance.projectId')}</span><input value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder="project-a" /></label>
+          <button className="button primary" type="button" disabled={busy || !sourceRef.trim() || !targetSkeleton.trim()} onClick={() => void nominate()}>{t('governance.nominate')}</button>
         </div>
       </section>
 
@@ -187,30 +215,33 @@ export function GovernancePage() {
               <div><strong>{t(selected.evidenceStale ? 'governance.evidenceStale' : selected.evidence ? 'governance.evidenceFresh' : 'governance.evidenceMissing')}</strong>{selected.evidence && <span>{t('governance.boundAt', { time: formatDateTime(selected.evidence.boundAt) })}</span>}</div>
             </div>
 
-            {['candidate', 'evaluating', 'blocked'].includes(selected.stage) && <div className="governance-action">
+            {(['candidate', 'evaluating', 'blocked'].includes(selected.stage) || (selected.evidenceStale && ['ready', 'canary', 'deprecated', 'superseded'].includes(selected.stage))) && <div className="governance-action">
               <h4>{t('governance.bindEvidence')}</h4>
               <label><span>{t('governance.managedRunId')}</span><input value={runId} onChange={(event) => setRunId(event.target.value)} /></label>
               <label><span>{t('governance.redteamRunId')}</span><input value={redteamRunId} onChange={(event) => setRedteamRunId(event.target.value)} /></label>
               <button className="button primary" type="button" disabled={busy || !runId.trim()} onClick={() => void bindEvidence()}>{t('governance.evaluate')}</button>
             </div>}
 
-            {selected.stage === 'ready' && <div className="governance-action">
+            {selected.stage === 'ready' && !selected.evidenceStale && <div className="governance-action">
               <h4>{t('governance.approve')}</h4>
               <div className="identity-warning"><ShieldCheck size={17} /><span>{t('governance.localIdentityWarning')}</span></div>
-              <label><span>{t('governance.reviewer')}</span><input value={reviewer} onChange={(event) => setReviewer(event.target.value)} /></label>
-              <label><span>{t('governance.approvalNote')}</span><input value={approvalNote} onChange={(event) => setApprovalNote(event.target.value)} /></label>
-              <button className="button primary" type="button" disabled={busy || !reviewer.trim()} onClick={() => void approve()}>{t('governance.approve')}</button>
+              <label><span>{t('governance.reviewerToken')}</span><input type="password" autoComplete="off" spellCheck={false} value={reviewerToken} onChange={(event) => setReviewerToken(event.target.value)} /></label>
+              <button className="button primary" type="button" disabled={busy} onClick={() => void approve()}>{t('governance.approve')}</button>
             </div>}
 
-            {selected.stage === 'approved' && <div className="governance-action"><h4>{t('governance.startCanary')}</h4><button className="button primary" type="button" disabled={busy} onClick={() => void canary()}>{t('governance.startCanary')}</button></div>}
-            {selected.stage === 'canary' && <div className="governance-action"><h4>{t('governance.promoteStable')}</h4><button className="button primary" type="button" disabled={busy} onClick={() => void requestPreview('promote')}>{t('governance.previewPromotion')}</button></div>}
-            {selected.stage === 'stable' && <div className="governance-action"><h4>{t('governance.monitorRollback')}</h4><button className="button danger" type="button" disabled={busy} onClick={() => void requestPreview('rollback')}>{t('governance.previewRollback')}</button></div>}
+            {selected.stage === 'approved' && !selected.requalifiesStage && <div className="governance-action"><h4>{t('governance.startCanary')}</h4><label><span>{t('governance.canaryProjectRoot')}</span><input value={canaryProjectRoot} onChange={(event) => setCanaryProjectRoot(event.target.value)} placeholder="/absolute/path/to/canary-project" /></label><label><span>{t('governance.canaryTarget')}</span><input value={canaryTarget} onChange={(event) => setCanaryTarget(event.target.value)} placeholder=".codex/skills/review/SKILL.md" /></label><button className="button primary" type="button" disabled={busy || !canaryProjectRoot.trim() || !canaryTarget.trim()} onClick={() => void requestPreview('canary')}>{t('governance.previewCanary')}</button></div>}
+            {selected.stage === 'approved' && selected.requalifiesStage === 'deprecated' && <div className="governance-action"><h4>{t('governance.restoreStable')}</h4><button className="button primary" type="button" disabled={busy} onClick={() => void requestPreview('rollback')}>{t('governance.previewRestore')}</button></div>}
+            {selected.stage === 'approved' && selected.requalifiesStage === 'superseded' && <div className="governance-action"><h4>{t('governance.monitorRollback')}</h4><button className="button danger" type="button" disabled={busy || !rollbackStableId} onClick={() => void requestPreview('rollback', rollbackStableId)}>{t('governance.previewRollback')}</button></div>}
+            {selected.stage === 'canary' && !selected.evidenceStale && <div className="governance-action"><h4>{t('governance.promoteStable')}</h4><button className="button primary" type="button" disabled={busy} onClick={() => void requestPreview('install')}>{t('governance.previewInstall')}</button><button className="button primary" type="button" disabled={busy} onClick={() => void requestPreview('promote')}>{t('governance.previewPromotion')}</button></div>}
+            {selected.stage === 'stable' && <div className="governance-action"><h4>{t('governance.monitorRollback')}</h4><button className="button danger" type="button" disabled={busy} onClick={() => void requestPreview('deprecate')}>{t('governance.previewDeprecation')}</button><button className="button danger" type="button" disabled={busy} onClick={() => void requestPreview('rollback')}>{t('governance.previewRollback')}</button></div>}
+            {selected.stage === 'deprecated' && !selected.evidenceStale && <div className="governance-action"><h4>{t('governance.restoreStable')}</h4><button className="button primary" type="button" disabled={busy} onClick={() => void requestPreview('rollback')}>{t('governance.previewRestore')}</button></div>}
 
             {preview && <div className="governance-preview" role="region" aria-label={t('governance.changePreview')}>
               <h4>{t('governance.changePreview')}</h4>
               <dl>
                 <div><dt>{t('governance.sourceRef')}</dt><dd title={preview.value.source}>{preview.value.source}</dd></div>
                 <div><dt>{t('governance.targetSkeleton')}</dt><dd title={preview.value.target}>{preview.value.target}</dd></div>
+                {preview.value.projectRoot && <div><dt>{t('governance.canaryProjectRoot')}</dt><dd title={preview.value.projectRoot}>{preview.value.projectRoot}</dd></div>}
                 <div><dt>{t('governance.currentHash')}</dt><dd title={preview.value.currentHash || undefined}>{shortHash(preview.value.currentHash)}</dd></div>
                 <div><dt>{t('governance.candidateHash')}</dt><dd title={preview.value.candidateHash}>{shortHash(preview.value.candidateHash)}</dd></div>
                 <div><dt>{t('governance.beforeLines')}</dt><dd>{preview.value.diff.beforeLines}</dd></div>
@@ -220,8 +251,8 @@ export function GovernancePage() {
                 <div><dt>{t('governance.conflict')}</dt><dd>{t(preview.value.conflict ? 'governance.yes' : 'governance.no')}</dd></div>
               </dl>
               <p>{preview.value.rollbackPlan}</p>
-              <label className="governance-confirm"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>{t(preview.kind === 'promote' ? 'governance.confirmStable' : 'governance.confirmRollback')}</span></label>
-              <button className={preview.kind === 'rollback' ? 'button danger' : 'button primary'} type="button" disabled={busy || !confirmed} onClick={() => void applyPreview()}>{t(preview.kind === 'promote' ? 'governance.applyStable' : 'governance.applyRollback')}</button>
+              <label className="governance-confirm"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>{t(releaseLabels[preview.kind].confirm)}</span></label>
+              <button className={releaseLabels[preview.kind].danger ? 'button danger' : 'button primary'} type="button" disabled={busy || !confirmed} onClick={() => void applyPreview()}>{t(releaseLabels[preview.kind].apply)}</button>
             </div>}
           </>}
         </section>

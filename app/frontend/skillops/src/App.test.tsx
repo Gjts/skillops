@@ -151,13 +151,13 @@ describe('SkillOps primary flow', () => {
     expect(screen.getByText('needle-skill')).toBeTruthy()
   })
 
-  it('opens the live Skill Lab and its memory-only AI settings', () => {
+  it('opens the live Skill Lab and its persisted AI settings', () => {
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: 'Skill Lab' }))
     expect(screen.getByRole('textbox', { name: 'Candidate GitHub URL' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Configure AI' }))
     expect(screen.getByRole('dialog', { name: 'AI settings' })).toBeTruthy()
-    expect(screen.getByText("API keys stay only in this page's memory. Reloading or closing the page clears them.")).toBeTruthy()
+    expect(screen.getByText('Saved API keys are written to the local SkillOps data file.')).toBeTruthy()
   })
 
   it('shows every real Skill row on the unbounded Skills page', async () => {

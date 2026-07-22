@@ -71,16 +71,16 @@ describe('lifecycle-only outcomes', () => {
       event({ runtime: 'claude-code', event: 'skill.failed', outcome: 'failed' }),
     ]
 
-    expect(summarize(events)).toMatchObject({ successRate: 0, lifecycleOnly: false, evaluatedRuns: 1, outcomeCoverage: 50 })
+    expect(summarize(events)).toMatchObject({ successRate: 0, lifecycleOnly: false, reportedOutcomeRuns: 1, outcomeCoverage: 50 })
     expect(bySkill(events)[0]).toMatchObject({ successRate: 0, lifecycleOnly: false, knownOutcomes: 1 })
     expect(byDay(events, 7, new Date('2020-01-31T12:00:00.000Z').getTime()).at(-1)?.observed).toBe(1)
   })
 
-  it('still computes evaluated success rates when a known completion exists', () => {
+  it('computes only runtime-reported outcome rates when known lifecycle outcomes exist', () => {
     const events = [
       event({ outcome: 'success' }),
       event({ event: 'skill.failed', outcome: 'failed' }),
     ]
-    expect(summarize(events)).toMatchObject({ successRate: 50, lifecycleOnly: false, evaluatedRuns: 2, outcomeCoverage: 100 })
+    expect(summarize(events)).toMatchObject({ successRate: 50, lifecycleOnly: false, reportedOutcomeRuns: 2, outcomeCoverage: 100 })
   })
 })

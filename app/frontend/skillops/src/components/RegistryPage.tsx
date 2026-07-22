@@ -1,17 +1,29 @@
 import { Bot, CheckCircle2, Code2, GitPullRequest, Layers3, MousePointer2, RefreshCw, Search, XCircle } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { ArtifactRegistry } from './ArtifactRegistry'
+import { ConflictDetailPage } from './ConflictDetailPage'
 import { useI18n } from '../i18n/I18nProvider'
 import type { MessageKey } from '../i18n/messages'
 import { runtimeLabel } from '../lib/analytics'
 import { buildInventoryIssues, countInventoryIssues, definitionKey, issuesForDefinition, normalizedSkillId } from '../lib/skill-inventory'
-import type { InstalledSkill, Runtime, SkillEvent } from '../types'
+import type { ConfigurationSource, DefinitionStatus, InstalledSkill, Runtime, SkillEvent, SkillScanMetadata, SkillScanResponse } from '../types'
 
 type AttentionFilter = 'all' | 'attention' | 'conflict' | 'duplicate' | 'disabled' | 'missing'
+
+function nominationKey(skill: InstalledSkill) {
+  return `${skill.runtime}:${skill.sourcePath}:${skill.contentHash || skill.skillVersion}`
+}
 
 const sourceLabel: Record<InstalledSkill['source'], MessageKey> = {
   global: 'registry.global',
   project: 'registry.project',
   plugin: 'registry.plugin',
+}
+const kindLabel: Record<InstalledSkill['kind'], MessageKey> = {
+  skill: 'common.skill',
+  command: 'common.command',
+  rules: 'governance.kind.rules',
+  agent: 'governance.kind.agent',
 }
 
 const issueLabel: Record<Exclude<AttentionFilter, 'all' | 'attention'>, MessageKey> = {
@@ -27,6 +39,23 @@ const disabledReasonLabel: Record<NonNullable<InstalledSkill['disabledReason']>,
   'plugin-and-skill-config': 'registry.disabledByPluginAndSkillConfig',
 }
 
+const configurationSourceLabel: Record<ConfigurationSource, MessageKey> = {
+  user: 'registry.configSource.user',
+  project: 'registry.configSource.project',
+  local: 'registry.configSource.local',
+  managed: 'registry.configSource.managed',
+  plugin: 'registry.configSource.plugin',
+  admin: 'registry.configSource.admin',
+}
+
+const definitionStatusLabel: Record<DefinitionStatus, MessageKey> = {
+  active: 'registry.definitionStatus.active',
+  disabled: 'registry.definitionStatus.disabled',
+  shadowed: 'registry.definitionStatus.shadowed',
+  inactive: 'registry.definitionStatus.inactive',
+  missing: 'registry.definitionStatus.missing',
+}
+
 const runtimeOrder: Runtime[] = ['codex', 'claude-code', 'cursor']
 const sourceOrder: InstalledSkill['source'][] = ['global', 'project', 'plugin']
 
@@ -39,6 +68,7 @@ function RuntimeIcon({ runtime }: { runtime: Runtime | 'all' }) {
 
 function fromEvent(event: SkillEvent): InstalledSkill {
   const source = event.source ?? 'global'
+  const enabled = event.enabled ?? true
   return {
     skillId: event.skillId!,
     skillVersion: event.skillVersion ?? 'unversioned',
@@ -47,7 +77,9 @@ function fromEvent(event: SkillEvent): InstalledSkill {
     sourcePath: event.sourcePath ?? 'Unknown location',
     provider: event.provider ?? (source === 'project' ? 'Project' : runtimeLabel[event.runtime]),
     kind: event.kind ?? 'skill',
-    enabled: event.enabled ?? true,
+    enabled,
+    status: enabled ? 'active' : 'disabled',
+    configurationSource: source === 'plugin' ? 'plugin' : source === 'project' ? 'project' : 'user',
     description: event.description,
     tags: event.tags,
   }
@@ -56,6 +88,7 @@ function fromEvent(event: SkillEvent): InstalledSkill {
 function normalizeInstalledSkill(skill: Partial<InstalledSkill>): InstalledSkill {
   const runtime = skill.runtime ?? 'codex'
   const source = skill.source ?? 'global'
+  const enabled = skill.enabled ?? true
   return {
     skillId: skill.skillId ?? 'unknown-skill',
     skillVersion: skill.skillVersion ?? 'unversioned',
@@ -64,8 +97,14 @@ function normalizeInstalledSkill(skill: Partial<InstalledSkill>): InstalledSkill
     sourcePath: skill.sourcePath ?? 'Unknown location',
     provider: skill.provider ?? (source === 'project' ? 'Project' : runtimeLabel[runtime]),
     kind: skill.kind ?? 'skill',
-    enabled: skill.enabled ?? true,
+    enabled,
     disabledReason: skill.disabledReason,
+    status: skill.status ?? (enabled ? 'active' : 'disabled'),
+    shadowedBy: skill.shadowedBy,
+    configurationSource: skill.configurationSource ?? (source === 'plugin' ? 'plugin' : source === 'project' ? 'project' : 'user'),
+    scope: skill.scope,
+    originConfigs: skill.originConfigs,
+    projectRoot: skill.projectRoot,
     contentHash: skill.contentHash,
     description: skill.description,
     tags: skill.tags,
@@ -107,6 +146,7 @@ export function RegistryPage({ events }: { events: SkillEvent[] }) {
   const displayProvider = useCallback((provider: string) => provider === 'Project' ? t('registry.project') : provider, [t])
   const [scannedSkills, setScannedSkills] = useState<InstalledSkill[] | null>(null)
   const [scanStatus, setScanStatus] = useState<'scanning' | 'complete' | 'failed'>('scanning')
+  const [scanMetadata, setScanMetadata] = useState<SkillScanMetadata | null>(null)
   const [query, setQuery] = useState('')
   const [runtimeFilter, setRuntimeFilter] = useState<Runtime | 'all'>('all')
   const [sourceFilter, setSourceFilter] = useState<InstalledSkill['source'] | 'all'>('all')
@@ -114,20 +154,22 @@ export function RegistryPage({ events }: { events: SkillEvent[] }) {
   const [statusFilter, setStatusFilter] = useState<'enabled' | 'disabled' | 'all'>('enabled')
   const [attentionFilter, setAttentionFilter] = useState<AttentionFilter>('all')
   const [nominationStatus, setNominationStatus] = useState<Record<string, 'busy' | 'done' | 'failed'>>({})
+  const [selectedConflict, setSelectedConflict] = useState<InstalledSkill | null>(null)
 
   const nominate = async (skill: InstalledSkill) => {
     const sourceRef = `local-scan:${skill.runtime}:${skill.sourcePath}`
-    setNominationStatus((current) => ({ ...current, [sourceRef]: 'busy' }))
+    const key = nominationKey(skill)
+    setNominationStatus((current) => ({ ...current, [key]: 'busy' }))
     try {
       const response = await fetch('/api/capabilities', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sourceRef, owner: 'local-owner' }),
+        body: JSON.stringify({ sourceRef }),
       })
       if (!response.ok) throw new Error('Nomination failed')
-      setNominationStatus((current) => ({ ...current, [sourceRef]: 'done' }))
+      setNominationStatus((current) => ({ ...current, [key]: 'done' }))
     } catch {
-      setNominationStatus((current) => ({ ...current, [sourceRef]: 'failed' }))
+      setNominationStatus((current) => ({ ...current, [key]: 'failed' }))
     }
   }
 
@@ -136,9 +178,11 @@ export function RegistryPage({ events }: { events: SkillEvent[] }) {
     try {
       const response = await fetch('/api/scan', { method: 'POST' })
       if (!response.ok) throw new Error('Scan failed')
-      const result = await response.json() as Array<Partial<InstalledSkill>>
-      if (!Array.isArray(result)) throw new Error('Scan returned an invalid response')
-      setScannedSkills(result.map(normalizeInstalledSkill))
+      const result = await response.json() as SkillScanResponse | Array<Partial<InstalledSkill>>
+      const definitions = Array.isArray(result) ? result : result.definitions
+      if (!Array.isArray(definitions)) throw new Error('Scan returned an invalid response')
+      setScannedSkills(definitions.map(normalizeInstalledSkill))
+      setScanMetadata(Array.isArray(result) ? null : result.scan)
       setScanStatus('complete')
     } catch {
       setScanStatus('failed')
@@ -234,6 +278,8 @@ export function RegistryPage({ events }: { events: SkillEvent[] }) {
     { value: 'missing', label: t('registry.missingMetadata'), count: attentionCounts.missing, note: t('registry.missingNote') },
   ]
 
+  if (selectedConflict) return <ConflictDetailPage skill={selectedConflict} onBack={() => setSelectedConflict(null)} onChanged={() => void scan()} />
+
   return (
     <div className="single-page registry-page">
       <div className="page-intro">
@@ -243,6 +289,22 @@ export function RegistryPage({ events }: { events: SkillEvent[] }) {
           {scanStatus === 'scanning' ? t('registry.scanning') : scanStatus === 'failed' ? t('registry.retry') : t('registry.scanAgain')}
         </button>
       </div>
+
+      <ArtifactRegistry inventory={rows} inventoryIssues={issueByDefinition} refreshToken={scanMetadata?.id} />
+
+      {scanMetadata ? (
+        <section className="panel registry-scan-summary" aria-label={t('registry.scanSummary')}>
+          <header>
+            <div><span>{t('registry.scanSummary')}</span><strong className="mono">{scanMetadata.id}</strong></div>
+            <b>{t('registry.scanDuration', { duration: formatNumber(scanMetadata.durationMs) })}</b>
+          </header>
+          <div><span>{t('registry.projectRoot')}</span><code>{scanMetadata.projectRoot}</code></div>
+          <footer>
+            {scanMetadata.observability.some((item) => item.state === 'partial') ? <span title={scanMetadata.observability.find((item) => item.state === 'partial')?.reason}>{t('registry.partiallyObservable')}</span> : null}
+            {scanMetadata.errors.length ? <span>{t('registry.scanErrors', { count: formatNumber(scanMetadata.errors.length) })}</span> : null}
+          </footer>
+        </section>
+      ) : null}
 
       <section className="registry-runtime-workspaces" aria-label={t('registry.workspaces')}>
         <header>
@@ -311,16 +373,29 @@ export function RegistryPage({ events }: { events: SkillEvent[] }) {
         </header>
         <div className="registry-table-scroll">
           <table className="registry-table">
-            <thead><tr><th>Skill</th><th>{t('common.type')}</th><th>{t('common.version')}</th><th>{t('common.runtime')}</th><th>{t('common.category')}</th><th>{t('common.provider')}</th><th>{t('common.location')}</th><th>{t('common.status')}</th><th>{t('registry.governance')}</th></tr></thead>
+            <thead><tr><th>Skill</th><th>{t('common.type')}</th><th>{t('common.version')}</th><th>{t('common.runtime')}</th><th>{t('common.category')}</th><th>{t('registry.configurationSource')}</th><th>{t('common.provider')}</th><th>{t('common.location')}</th><th>{t('common.status')}</th><th>{t('registry.governance')}</th></tr></thead>
             <tbody>
               {filteredRows.map((skill, index) => {
-                const nomination = nominationStatus[`local-scan:${skill.runtime}:${skill.sourcePath}`]
+                const nomination = nominationStatus[nominationKey(skill)]
+                const definitionStatus = skill.status ?? (skill.enabled ? 'active' : 'disabled')
+                const configurationSource = skill.configurationSource ?? (skill.source === 'plugin' ? 'plugin' : skill.source === 'project' ? 'project' : 'user')
                 return <Fragment key={definitionKey(skill)}>
-                  {runtimeFilter === 'all' && filteredRows[index - 1]?.runtime !== skill.runtime ? <tr className={`registry-runtime-group runtime-${skill.runtime}`}><th scope="rowgroup" colSpan={9}><span className="registry-runtime-badge"><RuntimeIcon runtime={skill.runtime} />{runtimeLabel[skill.runtime]}</span><strong>{t('registry.runtimeGroup', { runtime: runtimeLabel[skill.runtime], count: formatNumber(visibleRuntimeCounts.get(skill.runtime) ?? 0) })}</strong></th></tr> : null}
-                  <tr className={skill.enabled ? '' : 'is-disabled'}><td><span className="registry-skill-name"><strong>{skill.skillId}</strong>{runtimeFilter === 'all' && sharedSkillIds.has(normalizedSkillId(skill.skillId)) ? <span className="shared-skill">{t('registry.shared')}</span> : null}{[...issuesFor(skill)].map((issue) => <span className={`registry-issue ${issue}`} key={issue}>{t(issueLabel[issue])}</span>)}</span></td><td>{t(skill.kind === 'command' ? 'common.command' : 'common.skill')}</td><td><span className="version">{skill.skillVersion === 'unversioned' ? t('common.unversioned') : skill.skillVersion}</span></td><td><span className={`registry-runtime-badge runtime-${skill.runtime}`}><RuntimeIcon runtime={skill.runtime} />{runtimeLabel[skill.runtime]}</span></td><td>{t(sourceLabel[skill.source])}</td><td>{displayProvider(skill.provider)}</td><td className="mono source-path" title={skill.sourcePath}>{skill.sourcePath === 'Unknown location' ? t('common.unknownLocation') : skill.sourcePath}</td><td><span className={`registry-status ${skill.enabled ? '' : 'disabled'}`} title={!skill.enabled && skill.disabledReason ? t(disabledReasonLabel[skill.disabledReason]) : undefined}>{skill.enabled ? <CheckCircle2 size={14} /> : <XCircle size={14} />}{t(skill.enabled ? 'common.enabled' : 'common.disabled')}{!skill.enabled && skill.disabledReason ? <small>{t(disabledReasonLabel[skill.disabledReason])}</small> : null}</span></td><td><button className="button secondary registry-nominate" type="button" disabled={!skill.enabled || skill.kind !== 'skill' || skill.sourcePath === 'Unknown location' || nomination === 'busy' || nomination === 'done'} onClick={() => void nominate(skill)}><GitPullRequest size={13} />{t(nomination === 'done' ? 'registry.nominated' : nomination === 'busy' ? 'registry.nominating' : nomination === 'failed' ? 'registry.retryNomination' : 'registry.nominate')}</button></td></tr>
+                  {runtimeFilter === 'all' && filteredRows[index - 1]?.runtime !== skill.runtime ? <tr className={`registry-runtime-group runtime-${skill.runtime}`}><th scope="rowgroup" colSpan={10}><span className="registry-runtime-badge"><RuntimeIcon runtime={skill.runtime} />{runtimeLabel[skill.runtime]}</span><strong>{t('registry.runtimeGroup', { runtime: runtimeLabel[skill.runtime], count: formatNumber(visibleRuntimeCounts.get(skill.runtime) ?? 0) })}</strong></th></tr> : null}
+                  <tr className={definitionStatus === 'active' ? '' : `is-${definitionStatus}`}>
+                    <td><span className="registry-skill-name"><strong>{skill.skillId}</strong>{runtimeFilter === 'all' && sharedSkillIds.has(normalizedSkillId(skill.skillId)) ? <span className="shared-skill">{t('registry.shared')}</span> : null}{[...issuesFor(skill)].map((issue) => <span className={`registry-issue ${issue}`} key={issue}>{t(issueLabel[issue])}</span>)}</span></td>
+                    <td>{t(kindLabel[skill.kind])}</td>
+                    <td><span className="version">{skill.skillVersion === 'unversioned' ? t('common.unversioned') : skill.skillVersion}</span></td>
+                    <td><span className={`registry-runtime-badge runtime-${skill.runtime}`}><RuntimeIcon runtime={skill.runtime} />{runtimeLabel[skill.runtime]}</span></td>
+                    <td>{t(sourceLabel[skill.source])}</td>
+                    <td>{t(configurationSourceLabel[configurationSource])}</td>
+                    <td>{displayProvider(skill.provider)}</td>
+                    <td className="mono source-path" title={skill.sourcePath}>{skill.sourcePath === 'Unknown location' ? t('common.unknownLocation') : skill.sourcePath}</td>
+                    <td><span className={`registry-status ${definitionStatus}`} title={skill.shadowedBy || (!skill.enabled && skill.disabledReason ? t(disabledReasonLabel[skill.disabledReason]) : undefined)}>{definitionStatus === 'active' ? <CheckCircle2 size={14} /> : <XCircle size={14} />}{t(definitionStatusLabel[definitionStatus])}{!skill.enabled && skill.disabledReason ? <small>{t(disabledReasonLabel[skill.disabledReason])}</small> : null}</span></td>
+                    <td><div className="registry-actions"><button className="button secondary registry-nominate" type="button" disabled={definitionStatus !== 'active' || skill.kind !== 'skill' || skill.sourcePath === 'Unknown location' || nomination === 'busy' || nomination === 'done'} onClick={() => void nominate(skill)}><GitPullRequest size={13} />{t(nomination === 'done' ? 'registry.nominated' : nomination === 'busy' ? 'registry.nominating' : nomination === 'failed' ? 'registry.retryNomination' : 'registry.nominate')}</button>{issuesFor(skill).size ? <button className="button secondary registry-conflict-details" type="button" onClick={() => setSelectedConflict(skill)}>{t('registry.conflictDetails')}</button> : null}</div></td>
+                  </tr>
                 </Fragment>
               })}
-              {!filteredRows.length ? <tr><td className="registry-empty" colSpan={9}>{scanStatus === 'scanning' ? t('registry.scanningLocations') : t('registry.noMatches')}</td></tr> : null}
+              {!filteredRows.length ? <tr><td className="registry-empty" colSpan={10}>{scanStatus === 'scanning' ? t('registry.scanningLocations') : t('registry.noMatches')}</td></tr> : null}
             </tbody>
           </table>
         </div>

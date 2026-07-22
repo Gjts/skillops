@@ -1,5 +1,6 @@
 import { Bot, BrainCircuit, LoaderCircle, LockKeyhole, Send, Settings2, Sparkles, User, X } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useI18n } from '../i18n/I18nProvider'
 
 export interface AssistantMessage {
   id: string
@@ -63,6 +64,7 @@ export function SkillOpsAssistantDrawer({
   onClose,
   onWidthChange,
 }: SkillOpsAssistantDrawerProps) {
+  const { t } = useI18n()
   const panel = useRef<HTMLElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
   const previousFocus = useRef<HTMLElement | null>(null)
@@ -149,34 +151,34 @@ export function SkillOpsAssistantDrawer({
       ref={panel}
       className={`assistant-drawer${resizing ? ' resizing' : ''}`}
       role="complementary"
-      aria-label={`SkillOps assistant, ${contextLabel}`}
+      aria-label={t('assistant.label', { context: contextLabel })}
       style={{ ['--assistant-drawer-width' as string]: `${width}px` }}
     >
       <button
         type="button"
         className="assistant-drawer-resize"
-        aria-label="Resize SkillOps assistant"
-        title="Drag to resize"
+        aria-label={t('assistant.resize')}
+        title={t('assistant.dragResize')}
         onPointerDown={startResize}
       />
       <header>
         <span className="assistant-avatar"><BrainCircuit size={18} /></span>
-        <div><h2 id="skillops-assistant-title">SkillOps assistant</h2><span>{configuredProvider || 'AI provider not configured'}</span></div>
-        <button type="button" aria-label="Open AI settings" onClick={onOpenSettings}><Settings2 size={16} /></button>
-        <button ref={closeButton} type="button" aria-label="Close SkillOps assistant" onClick={onClose}><X size={17} /></button>
+        <div><h2 id="skillops-assistant-title">{t('assistant.title')}</h2><span>{configuredProvider || t('assistant.providerNotConfigured')}</span></div>
+        <button type="button" aria-label={t('assistant.openSettings')} onClick={onOpenSettings}><Settings2 size={16} /></button>
+        <button ref={closeButton} type="button" aria-label={t('assistant.close')} onClick={onClose}><X size={17} /></button>
       </header>
       <div className="assistant-context"><Sparkles size={13} /><span>{contextLabel}</span></div>
       <div className="assistant-messages" aria-live="polite">
         {messages.map((message) => <div className={`chat-message ${message.role}`} key={message.id}><span>{message.role === 'assistant' ? <Bot size={14} /> : <User size={14} />}</span><p>{message.content}</p></div>)}
-        {chatting && <div className="chat-message assistant pending"><span><Bot size={14} /></span><p><LoaderCircle className="spin" size={14} />Thinking with current Skill metadata…</p></div>}
+        {chatting && <div className="chat-message assistant pending"><span><Bot size={14} /></span><p><LoaderCircle className="spin" size={14} />{t('assistant.thinking')}</p></div>}
       </div>
       {error && <p className="chat-error" role="alert">{error}</p>}
       <div className="chat-suggestions">
         {suggestions.map((suggestion) => <button key={suggestion} type="button" onClick={() => onSelectSuggestion(suggestion)}>{suggestion}</button>)}
       </div>
       <form className="assistant-composer" onSubmit={submit}>
-        <textarea aria-label="Ask SkillOps" rows={3} placeholder="Ask about the candidate, baseline, or result…" value={input} onChange={(event) => onInputChange(event.target.value)} onKeyDown={handleComposerKeyDown} />
-        <div><span><LockKeyhole size={12} />Not stored</span><button type="submit" aria-label="Send message" disabled={!input.trim() || chatting}>{chatting ? <LoaderCircle className="spin" size={15} /> : <Send size={15} />}</button></div>
+        <textarea aria-label={t('quick.askSkillOps')} rows={3} placeholder={t('assistant.placeholder')} value={input} onChange={(event) => onInputChange(event.target.value)} onKeyDown={handleComposerKeyDown} />
+        <div><span><LockKeyhole size={12} />{t('assistant.notStored')}</span><button type="submit" aria-label={t('assistant.send')} disabled={!input.trim() || chatting}>{chatting ? <LoaderCircle className="spin" size={15} /> : <Send size={15} />}</button></div>
       </form>
     </aside>
   )

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from 'node:crypto'
 import { appendFile, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -8,11 +9,21 @@ const adapterDir = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(adapterDir, '../..')
 process.env.SKILLOPS_DATA_DIR ||= path.join(projectRoot, 'data')
 
-const { appendEvent, appendUniqueDiscoveries, dataDir } = await import('../../app/backend/event-store.mjs')
+const { anonymizeSessionId, appendEvent, appendUniqueDiscoveries, dataDir } = await import('../../app/backend/event-store.mjs')
 const stateDir = path.join(dataDir, 'claude-state')
 
 function safePathId(value) {
   return String(value || 'unknown').replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 180)
+}
+
+function definitionIdentity(skill) {
+  return createHash('sha256').update(JSON.stringify([
+    skill.kind || 'skill',
+    skill.skillId,
+    skill.sourcePath || '',
+    skill.source || '',
+    skill.provider || '',
+  ])).digest('hex')
 }
 
 function normalizeSkillName(value) {
@@ -93,15 +104,16 @@ async function writeKnownSkills(sessionId, skills) {
 }
 
 async function refreshKnownSkills(input) {
-  const skills = await scanInstalledSkills({ project: input.cwd || process.cwd(), runtime: 'claude-code' })
+  const skills = (await scanInstalledSkills({ project: input.cwd || process.cwd(), runtime: 'claude-code' }))
+    .filter((skill) => ['skill', 'command', 'rules', 'agent'].includes(skill.kind))
   const available = skills.filter((skill) => skill.enabled !== false)
   await writeKnownSkills(commonFields(input).sessionId, available)
   return available
 }
 
-function findKnownSkill(skillId, skills = []) {
+function findKnownSkill(skillId, skills = [], kinds) {
   const normalized = skillId.toLowerCase()
-  const available = skills.filter((skill) => skill.enabled !== false)
+  const available = skills.filter((skill) => skill.enabled !== false && (!kinds || kinds.includes(skill.kind)))
   const exact = available.find((skill) => skill.skillId.toLowerCase() === normalized)
   if (exact || !normalized.includes(':')) return exact
   const [provider, ...parts] = normalized.split(':')
@@ -109,19 +121,19 @@ function findKnownSkill(skillId, skills = []) {
   return available.find((skill) => skill.skillId.toLowerCase() === canonicalId && skill.provider?.toLowerCase() === provider)
 }
 
-async function resolveSkill(name, input) {
+async function resolveSkill(name, input, kinds) {
   const skillId = normalizeSkillName(name)
   const sessionId = commonFields(input).sessionId
   let skills = await readKnownSkills(sessionId)
-  let match = findKnownSkill(skillId, skills)
+  let match = findKnownSkill(skillId, skills, kinds)
   if (!match) {
     skills = await refreshKnownSkills(input)
-    match = findKnownSkill(skillId, skills)
+    match = findKnownSkill(skillId, skills, kinds)
   }
+  if (!match && kinds) return null
   return match || {
     skillId,
     skillVersion: 'unversioned',
-    runtime: 'claude-code',
   }
 }
 
@@ -136,22 +148,58 @@ async function claim(file, contents) {
   }
 }
 
+async function migrateLegacyState(rawSessionId, sessionId) {
+  if (rawSessionId === sessionId) return
+  const legacyDirectory = sessionStateDirectory(rawSessionId)
+  let entries
+  try {
+    entries = await readdir(legacyDirectory, { withFileTypes: true })
+  } catch (error) {
+    if (error?.code === 'ENOENT') return
+    throw error
+  }
+  const legacySkills = await readKnownSkills(rawSessionId)
+  if (legacySkills && !await readKnownSkills(sessionId)) await writeKnownSkills(sessionId, legacySkills)
+  for (const entry of entries.filter((item) => item.isDirectory())) {
+    const source = path.join(legacyDirectory, entry.name)
+    try {
+      await stat(path.join(source, 'completed.json'))
+      continue
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+    }
+    let active
+    try {
+      active = JSON.parse(await readFile(path.join(source, 'started.json'), 'utf8'))
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue
+      throw error
+    }
+    await claim(path.join(sessionStateDirectory(sessionId), entry.name, 'started.json'), {
+      ...active,
+      sessionId,
+    })
+  }
+  await rm(legacyDirectory, { recursive: true, force: true })
+}
+
 function invocationDirectory(input, skill, detectionMethod) {
   const common = commonFields(input)
   const stableInvocation = detectionMethod === 'skill_tool' && input.tool_use_id
     ? input.tool_use_id
-    : `${common.promptId || 'session'}:${detectionMethod}:${skill.skillId}`
+    : `${common.promptId || 'session'}:${detectionMethod}:${definitionIdentity(skill)}`
   return path.join(sessionStateDirectory(common.sessionId), safePathId(stableInvocation))
 }
 
 async function activateSkill(skill, input, detectionMethod, confidence, extra = {}) {
-  if (!skill.skillId || skill.skillId === 'unknown' || skill.enabled === false) return
+  if (!skill?.skillId || skill.skillId === 'unknown' || skill.enabled === false) return
   const common = commonFields(input)
   const startedAt = new Date().toISOString()
   const fields = {
     ...common,
     skillId: skill.skillId,
     skillVersion: skill.skillVersion || 'unversioned',
+    kind: skill.kind,
     sourcePath: skill.sourcePath,
     source: skill.source,
     provider: skill.provider,
@@ -208,9 +256,12 @@ async function completeActiveSkills(input, outcome, onlyCurrentPrompt = true) {
 }
 
 async function recordDiscoveries(input) {
-  const skills = await scanInstalledSkills({ project: input.cwd || process.cwd(), runtime: 'claude-code' })
-  await writeKnownSkills(commonFields(input).sessionId, skills.filter((skill) => skill.enabled !== false))
+  const skills = (await scanInstalledSkills({ project: input.cwd || process.cwd(), runtime: 'claude-code' }))
+    .filter((skill) => ['skill', 'command', 'rules', 'agent'].includes(skill.kind))
+  const available = skills.filter((skill) => skill.enabled !== false)
+  await writeKnownSkills(commonFields(input).sessionId, available)
   await appendUniqueDiscoveries(skills, commonFields(input))
+  return available
 }
 
 function toolFailed(input) {
@@ -221,9 +272,12 @@ function toolFailed(input) {
 }
 
 async function handle(input) {
+  const rawSessionId = String(input.session_id || 'unknown')
+  input.session_id = await anonymizeSessionId(rawSessionId)
+  await migrateLegacyState(rawSessionId, input.session_id)
   const eventName = input.hook_event_name
   const common = commonFields(input)
-  const hookMode = process.env.SKILLOPS_HOOK_MODE || 'default'
+  const hookMode = process.argv.find((argument) => argument.startsWith('--hook-mode='))?.slice(12) || process.env.SKILLOPS_HOOK_MODE || 'default'
 
   if (eventName === 'SessionStart') {
     await appendEvent({ event: 'session.started', ...common, startSource: input.source })
@@ -254,7 +308,9 @@ async function handle(input) {
   } else if (eventName === 'PostToolUseFailure') {
     await appendEvent({ event: 'tool.completed', ...common, toolName: input.tool_name || 'unknown', toolUseId: input.tool_use_id, outcome: 'failed' })
   } else if (eventName === 'SubagentStart') {
-    await appendEvent({ event: 'subagent.started', ...common, subagentId: input.agent_id, subagentType: input.agent_type || 'unknown' })
+    const subagentType = input.agent_type || 'unknown'
+    await appendEvent({ event: 'subagent.started', ...common, subagentId: input.agent_id, subagentType })
+    await activateSkill(await resolveSkill(subagentType, input, ['agent']), input, 'hook', 1)
   } else if (eventName === 'SubagentStop') {
     await appendEvent({ event: 'subagent.completed', ...common, subagentId: input.agent_id, subagentType: input.agent_type || 'unknown', outcome: 'unknown' })
   } else if (eventName === 'Stop') {

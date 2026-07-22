@@ -1,6 +1,6 @@
 # System architecture: SkillOps
 
-> Version: v0.3.1
+> Version: v0.3.2-rc.1
 > Status: implemented architecture
 
 ## 1. Architectural goal
@@ -20,7 +20,7 @@ flowchart LR
     CS[Codex Desktop sessions] --> ING[Desktop ingest]
     FS[Skill folders and plugin registries] --> SCAN[Skill scanner]
     FS --> AGENT[Bounded read-only evaluation tools]
-    GH[Public GitHub SKILL.md] --> EVAL[Candidate comparison]
+    GH[Public GitHub Skill package] --> EVAL[Candidate comparison]
     GP[Committed local Prompt files] --> EVAL
     EVAL --> LLM[Selected LLM provider]
     AGENT --> EVAL
@@ -50,7 +50,7 @@ settings may be saved to local `data/ai-settings.json` after an explicit Save.
 | `app/shared` | Event and Evaluation Schema invariants plus AI provider catalog | Event allowlist/types/enums/outcome normalization, narrow evaluation request/Artifact contracts, and provider identity/default metadata shared by frontend and backend |
 | `adapters/codex` | Codex hook payload to normalized events | Install merge, signal detection, non-blocking hook execution |
 | `adapters/claude` | Claude hook payload to normalized events | Config resolution, install merge, exact/heuristic detection |
-| `bin` | Root npm CLI commands | Scan plus manual lifecycle emission |
+| `bin` | Root npm CLI commands | Scan, manual lifecycle emission, Managed Suite execution, and governed Team project-template preview/apply/status/rollback |
 | `scripts` | Operator verification commands | Smoke and real-recording checks |
 
 ## 4. Dependency direction
@@ -158,6 +158,53 @@ Artifact content hashes use UTF-8 bytes after BOM removal and CRLF/CR to LF
 normalization. Metadata may cross the local HTTP seam, while the content body
 stays inside a controlled backend renderer.
 
+### 5.6 Unified Artifact Registry
+
+```text
+GET /api/artifacts
+  → rescan installed Skill and legacy command definitions
+  → read committed Prompt metadata, governance capabilities, and project locks
+  → normalize kind-scoped Artifact and immutable ArtifactVersion identities
+  → compare desired lock state with observed paths and content hashes
+  → return metadata, compatibility, dependencies, and drift only
+```
+
+`app/backend/evaluations/artifact-registry.mjs` is a derived read model behind
+the `app/backend/skill-evaluations.mjs` compatibility facade, not another
+content store. Skill/command files and Prompt bodies remain with their owning
+scanner or Git resolver. GitHub Candidate preview resolves the requested branch
+or tag to an exact commit before download, preserves its encoded candidate path
+for later resolution, and returns no body. The optional legacy migration is a
+separate preview/apply/rollback workflow. It accepts only the schema-versioned
+legacy scan allowlist and rejects unknown preimages. Only the newest preview is
+retained and it expires after ten minutes. Apply uses one process-shared file
+lock, verifies the previewed preimage hash, writes atomically, records and
+validates the post-write snapshot hash on every read, and retains an exact-byte
+backup when replacing an existing file.
+
+The migrated snapshot is read only as compatibility history: versions absent
+from current sources reappear as Deprecated, current source records always win,
+and installation state is always recomputed from the live scan and lock.
+
+### 5.7 Governed Team project templates
+
+```text
+skillops init --manifest <Git-managed manifest>
+  → validate Stable channel, exact template hash, Evidence Hash, and independent approval
+  → inspect greenfield/adopt-existing/migration targets without following symlinks
+  → return paths, actions, hashes, conflicts, affected Suites, and Git review state
+  → on explicit apply, run affected Suites before any file mutation
+  → write managed files plus metadata-only lock as one compensating transaction
+  → leave a Git Diff on a non-default branch for upgrade review
+  → restore the previous Stable lock and managed blobs from its exact Git commit
+```
+
+`app/backend/project-template.mjs` owns manifest validation, target confinement,
+conflict/drift detection, gate ordering, the managed-file transaction, adoption
+status, and previous-Stable restoration. `bin/project-template-cli.mjs` only
+maps CLI flags to that interface and reuses the existing Managed Suite runner.
+No template API or hosted template store is introduced.
+
 ## 6. Local HTTP interface
 
 | Method | Path | Purpose |
@@ -172,15 +219,32 @@ stays inside a controlled backend renderer.
 | `POST` | `/api/evaluations/run` | Run a hash-pinned, memory-only baseline/candidate A/B evaluation |
 | `GET` | `/api/evaluation-suites` | List validated Suite Schema v1 metadata |
 | `POST` | `/api/evaluation-runs` | Queue a hash-pinned Managed Suite run |
-| `GET` | `/api/evaluation-runs/:id` | Read sanitized run evidence and cases |
+| `GET` | `/api/evaluation-runs/:id` | Read a sanitized run summary |
+| `GET` | `/api/evaluation-runs/:id/cases` | Page through sanitized case verdicts |
+| `GET` | `/api/evaluation-runs/:id/report?format={json,html}` | Export a sanitized read-only report |
 | `POST` | `/api/evaluation-runs/:id/cancel` | Request cooperative cancellation |
-| `GET/POST` | `/api/capabilities/*` | Registry, evidence, gate, approval, promotion, and rollback operations |
-| `GET` | `/api/project-skeleton-lock` | Read the current immutable promotion/rollback lock |
+| `GET/POST` | `/api/capabilities/*` | Candidate nomination with optional Team project/policy binding, evidence re-evaluation, approval, two-step deploy-and-rescan Canary, Stable promotion, deprecation, and rollback operations |
+| `GET` | `/api/project-skeleton-lock` | Authenticated read of target-specific Canary, Stable, and previous immutable locks |
+| `GET` | `/api/governance-audit` | Authenticated read of metadata-only append-only transition records |
 | `GET` | `/api/prompt-registry/status` | Return local Git workspace, branch, commit, and persistence metadata |
 | `POST` | `/api/prompt-registry/{prompts,compare,nominate}` | Metadata-only committed Prompt browsing, component Diff, and explicit Candidate nomination |
+| `GET/POST` | `/api/connectors/prompthub/*` | List and preview remote Prompt metadata, then import only an exact component-matched immutable Git Prompt as Candidate |
+| `GET` | `/api/artifacts` | Return the unified metadata-only Artifact, version, compatibility, and installation view |
+| `POST` | `/api/artifacts/refresh` | Rescan and return the derived Artifact Registry |
+| `POST` | `/api/artifacts/{diff,import-preview}` | Compare immutable version metadata or preview a commit-pinned GitHub Candidate |
+| `POST` | `/api/artifacts/migration/{preview,apply}` | Preview or explicitly apply the reversible legacy metadata migration |
+| `POST` | `/api/artifacts/migration/:id/rollback` | Restore the exact migration preimage |
+| `GET/POST` | `/api/team` | Read or initialize the local Team control plane |
+| `GET/PUT/DELETE/POST` | `/api/team/*` | Role-gated entities, devices, catalog, queues, exceptions, audit, backup/export, retention, and collector upload |
 | `POST` | `/api/assistant/chat` | Ask the configured provider using inventory/evaluation metadata |
 | `GET` | `/api/ai-settings` | Load saved Skill Lab AI provider settings |
 | `PUT` | `/api/ai-settings` | Persist Skill Lab AI provider settings locally |
+
+Policy Pack writes persist a normalized Gate Policy only when its ID and
+canonical SHA-256 hash match the enclosing Team entity. Governance resolves the
+bound `projectId`/`policyId` on every evidence and release check. Approved
+project exceptions select the built-in fallback policy; changing either policy
+or exception state invalidates the prior Evidence Hash and approvals.
 
 The Vite development middleware and production Node server implement the same
 application interface. Changes must be kept behaviorally aligned.
@@ -210,9 +274,14 @@ interfaces without independent deployment needs.
 | AI provider settings and API key | Backend AI settings store | `data/ai-settings.json` after explicit Save; loaded by Evaluations on mount |
 | Evaluation task, outputs, and chat | Frontend | In-memory only |
 | Managed run/case summaries and identity hashes | Backend evidence store | `data/evidence/`; sanitized JSONL and indexes |
-| Capability, approval, promotion, and rollback metadata | Backend governance store | `data/governance/`; metadata and hashes only |
-| Stable installation locks and backups | Backend skeleton installer | Local target lock plus recoverable backup |
+| Capability, approval, release, and append-only audit metadata | Backend governance store | `data/capabilities.json` and `data/governance-audit.jsonl`; identities, metadata, and hashes only |
+| Stable/Canary locks and release recovery | Backend skeleton installer | `data/project-skeleton.lock.json` records target-specific immutable identity plus the Canary's canonical physical project root and post-deploy observation; metadata-only `data/governance-release-recoveries.json` and target-adjacent exact-byte file or complete Skill-directory backups support compensation; installed Artifact bodies remain in managed projects |
 | Prompt bodies | User Git repository/backend resolver | User-controlled source plus transient evaluation memory; never copied into SkillOps data |
+| PromptHub credentials and sync metadata | OS credential store / backend connector | Credential stays in native secure storage; remote ID/version/hash/branch and local Git content hash use metadata-only `data/prompthub-sync*.json*` |
+| Unified Artifact Registry snapshot | Backend Artifact Registry | Derived in memory; optional explicit migration writes metadata-only `data/artifact-registry.json` with exact-byte backup |
+| Team entities, role assignments, device token hashes, policies, and exceptions | Backend Team control plane | `data/team-control-plane.json`; token values are returned once and never persisted |
+| Team collector summaries and hash-chained audit | Backend Team control plane | `data/team-collector.jsonl` is retention-bounded allowlisted metadata; `data/team-audit.jsonl` is append-only actor/action/subject metadata |
+| Project template adoption, managed hashes, and rollback pointer | Target project's Git repository | `.skillops/team-template.lock.json` stores metadata only; managed bodies remain project files/Git blobs, and rollback reads the exact previous Stable commit |
 | Demo dataset | Frontend | In-memory only when local event API is unavailable |
 | Production frontend | Build | `dist/`, ignored by Git |
 
@@ -227,17 +296,37 @@ interfaces without independent deployment needs.
   default. Evaluation POSTs additionally require a loopback Host, same-origin
   browser request when Origin is present, and `application/json`.
 - **Candidate network seam**: only public `github.com` and
-  `raw.githubusercontent.com` HTTPS locations are accepted; downloaded Skill
-  files and repository-tree responses are size/count bounded.
+  `raw.githubusercontent.com` HTTPS locations are accepted. A mutable ref is
+  resolved to an exact 40-character commit before any Artifact body is read;
+  downloaded Skill files and repository-tree responses are size/count bounded.
 - **Prompt Registry seam**: only committed files under the configured
   repository-relative Prompt directory are eligible; revision and path syntax,
   file count/size, Schema fields, variables, and model configuration are
   bounded. The UI receives only metadata and component hashes, and immutable
   identity is verified again before execution and promotion.
+- **Artifact Registry seam**: the frontend receives identities, locations,
+  hashes, compatibility, dependencies, desired/observed state, and structured
+  metadata Diff only. Artifact bodies and migration backup bytes never cross
+  the HTTP boundary; migration requires a valid preview token and preimage-hash
+  match.
+- **Governed release seam**: owner, reviewer, and operator identities are
+  resolved by the loopback server rather than accepted from the browser.
+  Optional Bearer credentials map only to server-configured principals and are
+  never persisted. New-file targets are relative to an explicit managed root;
+  existing targets come from the enabled scan inventory. Preview tokens bind
+  operation, Capability, target, and content hash. Install, replace, remove,
+  and restore operations verify the resulting scan before metadata/lock commit
+  and use restart-safe compensating recovery if a later state commit fails.
+- **Team control-plane seam**: every browser route remains loopback-only and
+  resolves a server principal. Five ordered roles gate mutations. Device tokens
+  are random, one-time, SHA-256-hashed, revocable, and limited to
+  `collector:write`. Collector batches are bounded and reduced to the shared
+  event allowlist plus exact evidence-summary fields before persistence; Team
+  exports omit token hashes and collector records.
 - **Evaluation engine seam**: a restricted declarative Suite is compiled in
-  memory for an isolated Promptfoo Worker. Executable config, output paths,
-  caller environment, cache, telemetry, sharing, and remote generation are
-  prohibited.
+  memory for an isolated Promptfoo child process. Executable config, output
+  paths, inherited secrets, cache, telemetry, sharing, and remote generation
+  are prohibited; cancellation and timeout terminate the process.
 - **Provider network seam**: a user-selected HTTPS endpoint receives the
   in-memory key and requested prompt; keyless Ollama HTTP is loopback-only.
   Provider responses are never persisted by SkillOps. Credentials are persisted

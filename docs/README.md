@@ -1,8 +1,8 @@
 # SkillOps documentation
 
-> Version: v0.3.1
+> Version: v0.3.2-rc.1
 > Baseline date: 2026-07-20
-> Product state: runnable local MVP
+> Product state: local + Git release candidate
 
 This directory is the source of truth for SkillOps product intent, implemented
 behavior, architecture, operations, privacy, and planned work. Its information
@@ -17,6 +17,7 @@ local-first runtime observability product.
 | Contributor preparing a commit | [Commit convention](commit-convention.md) |
 | Product or UX contributor | [Product requirements](product/prd.md) |
 | Engineer changing module layout | [System architecture](develop/architecture/system_architecture.md) |
+| Engineer reviewing settled architecture choices | [Architecture decisions](develop/architecture/decisions.md) |
 | Backend contributor | [Backend architecture](develop/architecture/backend_architecture.md) |
 | Frontend contributor | [Frontend architecture](develop/architecture/frontend_architecture.md) |
 | Event producer or importer | [Event model](develop/data/event_model.md) |
@@ -42,6 +43,7 @@ docs/
 └─ develop/
    ├─ architecture/
    │  ├─ system_architecture.md
+   │  ├─ decisions.md
    │  ├─ backend_architecture.md
    │  └─ frontend_architecture.md
    ├─ data/

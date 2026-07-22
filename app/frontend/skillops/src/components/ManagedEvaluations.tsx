@@ -1,4 +1,4 @@
-import { Ban, BrainCircuit, CheckCircle2, Clock3, FlaskConical, History, LoaderCircle, LockKeyhole, ShieldCheck } from 'lucide-react'
+import { Ban, BrainCircuit, CheckCircle2, Clock3, Download, ExternalLink, FlaskConical, History, LoaderCircle, LockKeyhole, ShieldCheck } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import type { MessageKey } from '../i18n/messages'
@@ -11,6 +11,8 @@ type ManagedTab = 'suites' | 'history'
 type EvaluationCase = {
   id: string
   caseId: string
+  matrixId?: string
+  model?: string
   baseline: EvaluationCaseVariant
   candidate: EvaluationCaseVariant
 }
@@ -252,6 +254,10 @@ export function ManagedEvaluations({ tab }: { tab: ManagedTab }) {
 
       {currentRun && <section className="panel managed-run-result" aria-labelledby="managed-result-title">
         <header className="panel-header"><div><h2 id="managed-result-title">{t('evaluations.runResult')}</h2><span>{currentRun.id} · {currentRun.engine.name} {currentRun.engine.version}</span></div><span className={`managed-status ${currentRun.status}`}>{t(statusKeys[currentRun.status])}</span></header>
+        {!runIsActive(currentRun) && <div className="managed-run-actions">
+          <a className="button secondary" href={`/api/evaluation-runs/${encodeURIComponent(currentRun.id)}/report?format=json`} download="skillops-evaluation-report.json"><Download size={14} />{t('evaluations.downloadJsonReport')}</a>
+          <a className="button secondary" href={`/api/evaluation-runs/${encodeURIComponent(currentRun.id)}/report?format=html`} target="_blank" rel="noreferrer"><ExternalLink size={14} />{t('evaluations.openHtmlReport')}</a>
+        </div>}
         {runIsActive(currentRun) && <div className="managed-progress"><LoaderCircle className="spin" size={18} /><p>{t('evaluations.polling')}</p><button className="button danger" type="button" onClick={() => void cancelRun()}>{t('common.cancel')}</button></div>}
         {currentRun.metrics && <div className="managed-metrics">
           <article><span>{t('evaluations.candidateScore')}</span><strong>{metric(currentRun.metrics.candidateScore, '', t('evaluations.notAvailable'))}</strong></article>
@@ -269,7 +275,7 @@ export function ManagedEvaluations({ tab }: { tab: ManagedTab }) {
           <div className="managed-case-list">{filteredCases.map((item) => <article key={item.id}>
             <span className={item.candidate.pass ? 'passed' : 'failed'}>{item.candidate.pass ? t('evaluations.passed') : t('evaluations.failed')}</span>
             <strong>{item.caseId}</strong>
-            <small>{[...new Set([item.baseline, item.candidate].flatMap((variant) => variant.assertions?.map((assertion) => assertion.label) || []))].join(' · ')}</small>
+            <small>{[item.model, ...new Set([item.baseline, item.candidate].flatMap((variant) => variant.assertions?.map((assertion) => assertion.label) || []))].filter(Boolean).join(' · ')}</small>
             <dl className="managed-case-scores">
               <div><dt>{t('common.current')}</dt><dd>{metric(item.baseline.score, '', t('evaluations.notAvailable'))}</dd></div>
               <div><dt>{t('common.candidate')}</dt><dd>{metric(item.candidate.score, '', t('evaluations.notAvailable'))}</dd></div>

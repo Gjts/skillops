@@ -17,6 +17,7 @@ async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 function QuickEvaluationWorkspace() {
+  const { t } = useI18n()
   const [sourceUrl, setSourceUrl] = useState('')
   const [analysis, setAnalysis] = useState<CandidateAnalysis | null>(null)
   const [baselineSourcePath, setBaselineSourcePath] = useState('')
@@ -34,8 +35,12 @@ function QuickEvaluationWorkspace() {
   const [chatting, setChatting] = useState(false)
   const [chatError, setChatError] = useState<string | null>(null)
   const [messages, setMessages] = useState<AssistantMessage[]>([
-    { id: 'welcome', role: 'assistant', localOnly: true, content: 'Paste a public GitHub Skill URL. I can help you interpret its nearest local match and the A/B result without changing any installed Skill.' },
+    { id: 'welcome', role: 'assistant', localOnly: true, content: t('quick.assistantWelcome') },
   ])
+
+  useEffect(() => {
+    setMessages((current) => current.map((message) => message.id === 'welcome' ? { ...message, content: t('quick.assistantWelcome') } : message))
+  }, [t])
 
   useEffect(() => {
     let cancelled = false
@@ -73,7 +78,7 @@ function QuickEvaluationWorkspace() {
     } catch (problem) {
       setAnalysis(null)
       setBaselineSourcePath('')
-      setError(problem instanceof Error ? problem.message : 'Candidate analysis failed.')
+      setError(problem instanceof Error ? problem.message : t('quick.analysisFailed'))
     } finally {
       setAnalyzing(false)
     }
@@ -105,7 +110,7 @@ function QuickEvaluationWorkspace() {
       })
       setEvaluation(result)
     } catch (problem) {
-      setError(problem instanceof Error ? problem.message : 'A/B evaluation failed.')
+      setError(problem instanceof Error ? problem.message : t('quick.evaluationFailed'))
     } finally {
       setRunning(false)
     }
@@ -146,7 +151,7 @@ function QuickEvaluationWorkspace() {
       })
       setMessages((current) => [...current, { id: `assistant-${Date.now()}`, role: 'assistant', content: response.message }])
     } catch (problem) {
-      setChatError(problem instanceof Error ? problem.message : 'Assistant request failed.')
+      setChatError(problem instanceof Error ? problem.message : t('quick.assistantFailed'))
     } finally {
       setChatting(false)
     }
@@ -174,19 +179,19 @@ function QuickEvaluationWorkspace() {
       setError(null)
       setSettingsOpen(false)
     } catch (problem) {
-      setError(problem instanceof Error ? problem.message : 'Failed to save AI settings.')
+      setError(problem instanceof Error ? problem.message : t('quick.saveSettingsFailed'))
       setSettingsOpen(true)
     }
-  }, [])
+  }, [t])
 
   return (
     <div className={`evaluation-workspace-shell${assistantOpen ? ' assistant-open' : ''}`}>
       <div className="single-page evaluation-workspace">
       <div className="evaluation-intro">
-        <div><h2>Compare a new open-source Skill</h2><p>Discover overlap with enabled local Skills, then run both definitions against the same task and blind judge.</p></div>
+        <div><h2>{t('quick.workspaceTitle')}</h2><p>{t('quick.workspaceDescription')}</p></div>
         <div className="evaluation-intro-actions">
-          <button className="button ai-outline" type="button" onClick={() => openAssistant()}><MessageSquareText size={15} />Ask SkillOps</button>
-          <button className="button ai-outline" type="button" disabled={busy} onClick={() => setSettingsOpen(true)}><BrainCircuit size={15} />{providerIsConfigured(settings) ? `${providerDefinition.label} · ${settings.providers[settings.activeProvider].model}` : 'Configure AI'}</button>
+          <button className="button ai-outline" type="button" onClick={() => openAssistant()}><MessageSquareText size={15} />{t('quick.askSkillOps')}</button>
+          <button className="button ai-outline" type="button" disabled={busy} onClick={() => setSettingsOpen(true)}><BrainCircuit size={15} />{providerIsConfigured(settings) ? `${providerDefinition.label} · ${settings.providers[settings.activeProvider].model}` : t('evaluations.configureAi')}</button>
         </div>
       </div>
 
@@ -211,7 +216,7 @@ function QuickEvaluationWorkspace() {
             busy={busy}
             onInspectCandidate={(value) => void inspectCandidate(value)}
             onSelect={(value) => { setBaselineSourcePath(value); setEvaluation(null) }}
-            onExplain={() => openAssistant('Explain the overlap')}
+            onExplain={() => openAssistant(t('quick.explainOverlapPrompt'))}
           />}
 
           {analysis && selectedMatch && <QuickRunStage
@@ -225,12 +230,12 @@ function QuickEvaluationWorkspace() {
             onTaskChange={(value) => { setTask(value); setEvaluation(null) }}
             onCriteriaChange={(value) => { setCriteria(value); setEvaluation(null) }}
             onModeChange={(value) => { setEvaluationMode(value); setEvaluation(null) }}
-            onSuggest={() => openAssistant('Suggest an A/B task')}
+            onSuggest={() => openAssistant(t('quick.suggestAbTask'))}
             onSettings={() => setSettingsOpen(true)}
             onRun={() => void runEvaluation()}
           />}
 
-          {evaluation && <QuickResultStage evaluation={evaluation} onDiscuss={() => openAssistant('Why did this version win?')} />}
+          {evaluation && <QuickResultStage evaluation={evaluation} onDiscuss={() => openAssistant(t('quick.whyWinner'))} />}
         </div>
       </div>
 
@@ -239,10 +244,10 @@ function QuickEvaluationWorkspace() {
 
       <SkillOpsAssistantDrawer
         open={assistantOpen}
-        configuredProvider={providerIsConfigured(settings) ? `${providerDefinition.label} · session ready` : null}
-        contextLabel={analysis ? `Context: ${analysis.candidate.skillId}${selectedMatch ? ` ↔ ${selectedMatch.skillId}` : ''}` : 'Waiting for a candidate'}
+        configuredProvider={providerIsConfigured(settings) ? `${providerDefinition.label} · ${t('quick.sessionReady')}` : null}
+        contextLabel={analysis ? t('quick.context', { context: `${analysis.candidate.skillId}${selectedMatch ? ` ↔ ${selectedMatch.skillId}` : ''}` }) : t('quick.waitingCandidate')}
         messages={messages}
-        suggestions={evaluation ? ['Why did this version win?', 'What should I test next?'] : analysis ? ['Explain the overlap', 'Suggest an A/B task'] : ['How does Skill comparison work?']}
+        suggestions={evaluation ? [t('quick.whyWinner'), t('quick.testNext')] : analysis ? [t('quick.explainOverlapPrompt'), t('quick.suggestAbTask')] : [t('quick.comparisonHelp')]}
         input={chatInput}
         chatting={chatting}
         error={chatError}

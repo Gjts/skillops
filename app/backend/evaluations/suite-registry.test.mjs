@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { normalizeEvaluationSuite } from './suite-schema.mjs'
+import { redactEvaluationText, redactEvaluationVariables } from './evaluation-redaction.mjs'
 import { createSuiteRegistry } from './suite-registry.mjs'
 
 const roots = []
@@ -45,6 +46,12 @@ describe('Suite Schema v1', () => {
     }))).toThrow('not allowed')
   })
 
+  it('accepts suites for every governed Artifact kind', () => {
+    for (const artifactKind of ['skill', 'prompt', 'workflow', 'rules', 'agent', 'evaluation-suite', 'policy-pack']) {
+      expect(normalizeEvaluationSuite(validSuite({ artifactKind })).artifactKind).toBe(artifactKind)
+    }
+  })
+
   it('rejects duplicate IDs, oversized suites, and complex regular expressions', () => {
     const duplicate = { id: 'same', input: 'x', assertions: [{ type: 'contains', value: 'x' }] }
     expect(() => normalizeEvaluationSuite(validSuite({ cases: [duplicate, duplicate] }))).toThrow('Duplicate suite case ID')
@@ -52,9 +59,38 @@ describe('Suite Schema v1', () => {
     expect(() => normalizeEvaluationSuite(validSuite({ cases: [{ id: 'case-1', input: 'x', assertions: [{ type: 'regex', value: '(a+)+$' }] }] }))).toThrow('too complex')
   })
 
+  it('accepts a bounded model matrix and rejects excessive evaluation cells', () => {
+    expect(normalizeEvaluationSuite(validSuite({
+      matrix: { models: [{ id: 'fast', model: 'gpt-fast' }, { id: 'strong', model: 'gpt-strong' }] },
+    })).matrix.models).toEqual([
+      { id: 'fast', model: 'gpt-fast' },
+      { id: 'strong', model: 'gpt-strong' },
+    ])
+    expect(() => normalizeEvaluationSuite(validSuite({
+      repeats: 5,
+      matrix: { models: [{ id: 'one', model: 'gpt-1' }, { id: 'two', model: 'gpt-2' }] },
+      cases: Array.from({ length: 101 }, (_, index) => ({ id: `case-${index}`, input: 'x', assertions: [{ type: 'contains', value: 'x' }] })),
+    }))).toThrow('2,000-cell limit')
+  })
+
   it('rejects traversal and absolute dataset paths', () => {
     expect(() => normalizeEvaluationSuite({ ...validSuite(), cases: undefined, dataset: '../../secrets.json' })).toThrow('inside evals/datasets')
     expect(() => normalizeEvaluationSuite({ ...validSuite(), cases: undefined, dataset: 'C:\\secrets.json' })).toThrow('inside evals/datasets')
+  })
+
+  it('normalizes scoped redaction rules and applies literal replacements', () => {
+    const suite = normalizeEvaluationSuite(validSuite({
+      redaction: {
+        task: [{ pattern: 'TASK-[0-9]+', replacement: '[TASK]' }],
+        input: [{ pattern: 'secret', replacement: '$&-removed' }],
+        output: [{ pattern: 'token-[a-z]+', replacement: '[TOKEN]' }],
+      },
+    }))
+    expect(redactEvaluationText('TASK-42 token-abc', [...suite.redaction.task, ...suite.redaction.output])).toBe('[TASK] [TOKEN]')
+    expect(redactEvaluationVariables({ text: 'secret', count: 2 }, suite.redaction.input)).toEqual({ text: '$&-removed', count: 2 })
+    expect(() => normalizeEvaluationSuite(validSuite({
+      redaction: { output: [{ pattern: '(a+)+$', replacement: '[REDACTED]' }] },
+    }))).toThrow('too complex')
   })
 })
 

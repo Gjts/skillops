@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../App'
 import { KpiStrip } from '../components/KpiStrip'
+import { QuickEvaluationOnboarding } from '../components/QuickEvaluationStages'
 import { I18nProvider, useI18n } from './I18nProvider'
 import { localeOptions, messages } from './messages'
 
@@ -121,6 +122,15 @@ describe('SkillOps internationalization', () => {
     expect(screen.getByText('Évaluation en direct')).toBeTruthy()
   })
 
+  it('localizes the Quick Evaluation workflow copy', () => {
+    window.localStorage.setItem('skillops.locale.v1', 'zh')
+    render(<I18nProvider><QuickEvaluationOnboarding /></I18nProvider>)
+
+    expect(screen.getByRole('region', { name: '评测工作流' })).toBeTruthy()
+    expect(screen.getByText('加载一个公共 Skill')).toBeTruthy()
+    expect(screen.queryByText('Load one public Skill')).toBeNull()
+  })
+
   it('localizes validation errors, demo KPI values, and synthetic project providers', async () => {
     window.localStorage.setItem('skillops.locale.v1', 'zh')
     window.history.replaceState({}, '', '/runs')
@@ -137,12 +147,12 @@ describe('SkillOps internationalization', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '注册表' }))
     const row = (await screen.findByText('project-fallback')).closest('tr') as HTMLElement
-    expect(within(row).getAllByText('项目')).toHaveLength(2)
+    expect(within(row).getAllByText('项目')).toHaveLength(3)
     expect(within(row).queryByText('Project')).toBeNull()
 
     cleanup()
     window.localStorage.setItem('skillops.locale.v1', 'fr')
-    render(<I18nProvider><KpiStrip runs={10} successRate={90} lifecycleOnly={false} evaluatedRuns={9} outcomeCoverage={90} activeSkills={2} cost={1.25} costReportedRuns={10} mode="demo" /></I18nProvider>)
+    render(<I18nProvider><KpiStrip runs={10} successRate={90} lifecycleOnly={false} reportedOutcomeRuns={9} outcomeCoverage={90} activeSkills={2} cost={1.25} costReportedRuns={10} mode="demo" /></I18nProvider>)
     expect(screen.getByText(/12,7%/)).toBeTruthy()
     expect(screen.getByText(/3,4 pt/)).toBeTruthy()
     expect(screen.getByText(/7,6%/)).toBeTruthy()

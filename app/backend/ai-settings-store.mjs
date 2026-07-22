@@ -148,7 +148,7 @@ export async function writeAiSettings(input) {
   const normalized = normalizeAiSettings(input, { strict: true })
   await mkdir(dataDir, { recursive: true })
   const temporary = `${aiSettingsFile}.${process.pid}.tmp`
-  await writeFile(temporary, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8')
+  await writeFile(temporary, `${JSON.stringify(normalized, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
   await rename(temporary, aiSettingsFile)
   return normalized
 }

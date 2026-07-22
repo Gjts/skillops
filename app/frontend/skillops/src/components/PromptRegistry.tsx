@@ -53,8 +53,8 @@ export function PromptRegistryBrowser({ baselineRef, candidateRef, onBaseline, o
   const [model, setModel] = useState('')
   const [items, setItems] = useState<PromptRecord[]>([])
   const [warnings, setWarnings] = useState<Array<{ relativePath: string; message: string }>>([])
-  const [owner, setOwner] = useState('local-owner')
   const [targetSkeleton, setTargetSkeleton] = useState('')
+  const [projectId, setProjectId] = useState('')
   const [comparison, setComparison] = useState<{ changed: boolean; changedFields: string[] } | null>(null)
   const [nomination, setNomination] = useState('')
   const [busy, setBusy] = useState(false)
@@ -93,11 +93,13 @@ export function PromptRegistryBrowser({ baselineRef, candidateRef, onBaseline, o
   }
 
   const nominate = async () => {
-    if (!candidateRef.startsWith('prompt-registry:') || !owner.trim()) return
+    if (!candidateRef.startsWith('prompt-registry:')) return
     setBusy(true); setError(null)
     try {
       const result = await post<{ capability: { id: string } }>('/api/prompt-registry/nominate', {
-        sourceRef: candidateRef, owner: owner.trim(), targetSkeleton: targetSkeleton.trim() || undefined,
+        sourceRef: candidateRef,
+        targetSkeleton: targetSkeleton.trim(),
+        ...(projectId.trim() ? { projectId: projectId.trim() } : {}),
       })
       setNomination(result.capability.id)
     } catch (caught) { setError(caught instanceof Error ? caught.message : t('promptRegistry.failed')) } finally { setBusy(false) }
@@ -130,9 +132,9 @@ export function PromptRegistryBrowser({ baselineRef, candidateRef, onBaseline, o
     <div className="prompt-registry-workflow">
       <button className="button secondary" type="button" disabled={busy || !baselineRef.startsWith('prompt-registry:') || !candidateRef.startsWith('prompt-registry:')} onClick={() => void compare()}><GitCompareArrows size={14} />{t('promptRegistry.compare')}</button>
       {comparison && <p role="status">{comparison.changed ? t('promptRegistry.changedFields', { fields: comparison.changedFields.join(', ') }) : t('promptRegistry.unchanged')}</p>}
-      <label><span>{t('governance.owner')}</span><input value={owner} onChange={(event) => setOwner(event.target.value)} /></label>
       <label><span>{t('governance.targetSkeleton')}</span><input value={targetSkeleton} onChange={(event) => setTargetSkeleton(event.target.value)} placeholder={selectedCandidate ? `prompt:${selectedCandidate.id}` : t('promptRegistry.defaultTarget')} /></label>
-      <button className="button primary" type="button" disabled={busy || !candidateRef.startsWith('prompt-registry:') || !owner.trim()} onClick={() => void nominate()}><CheckCircle2 size={14} />{t('promptRegistry.nominate')}</button>
+      <label><span>{t('governance.projectId')}</span><input value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder="project-a" /></label>
+      <button className="button primary" type="button" disabled={busy || !candidateRef.startsWith('prompt-registry:') || !targetSkeleton.trim()} onClick={() => void nominate()}><CheckCircle2 size={14} />{t('promptRegistry.nominate')}</button>
     </div>
     {nomination && <p className="prompt-registry-nomination" role="status">{t('promptRegistry.nominated')} <code>{nomination}</code></p>}
     <p className="result-boundary"><ShieldCheck size={13} />{t('promptRegistry.privacy')}</p>

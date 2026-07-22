@@ -30,7 +30,17 @@ function services() {
     resolveArtifact: vi.fn().mockResolvedValue({ artifact, prompt: { template: 'private prompt body' } }),
   }
   const governance = { nominate: vi.fn().mockResolvedValue({ capability: { id: 'cap-1', artifact }, reused: false }) }
-  return { promptRegistry, governance, options: { promptRegistry, governanceServices: { governance } } }
+  const teamControlPlane = { authorize: vi.fn().mockResolvedValue({ role: 'Developer' }) }
+  return {
+    promptRegistry,
+    governance,
+    teamControlPlane,
+    options: {
+      promptRegistry,
+      governanceServices: { governance, teamControlPlane },
+      resolveGovernancePrincipal: async () => ({ id: 'prompt-owner', assurance: 'test' }),
+    },
+  }
 }
 
 async function call(method, url, body, options) {
@@ -54,16 +64,26 @@ describe('Prompt Registry local API', () => {
     const compared = await call('POST', '/api/prompt-registry/compare', { leftRef: artifact.sourceRef, rightRef: artifact.sourceRef }, options)
     expect(compared.json.changedFields).toEqual(['prompt'])
     expect(promptRegistry.compare).toHaveBeenCalledWith(artifact.sourceRef, artifact.sourceRef)
-    const nominated = await call('POST', '/api/prompt-registry/nominate', { sourceRef: artifact.sourceRef, owner: 'prompt-owner' }, options)
+    const nominated = await call('POST', '/api/prompt-registry/nominate', { sourceRef: artifact.sourceRef, targetSkeleton: 'prompt:release-summary', projectId: 'project-a' }, options)
     expect(nominated.response.statusCode).toBe(201)
     expect(nominated.response.body).not.toContain('private prompt body')
-    expect(governance.nominate).toHaveBeenCalledWith(expect.objectContaining({ artifact, targetSkeleton: 'prompt:release-summary' }))
+    expect(governance.nominate).toHaveBeenCalledWith(expect.objectContaining({ artifact, owner: 'prompt-owner', ownerIdentityAssurance: 'test', projectId: 'project-a', targetSkeleton: 'prompt:release-summary' }))
+    expect(options.governanceServices.teamControlPlane.authorize).toHaveBeenCalledWith(expect.objectContaining({ id: 'prompt-owner' }), 'Developer')
+  })
+
+  it('rejects unauthorized Prompt Candidate nominations', async () => {
+    const { governance, options } = services()
+    options.governanceServices.teamControlPlane.authorize.mockRejectedValue(new Error('forbidden'))
+    const result = await call('POST', '/api/prompt-registry/nominate', { sourceRef: artifact.sourceRef, targetSkeleton: 'prompt:release-summary' }, options)
+    expect(result.response.statusCode).toBe(500)
+    expect(governance.nominate).not.toHaveBeenCalled()
   })
 
   it('rejects unsupported fields and non-local request methods before mutation', async () => {
     const { governance, options } = services()
     expect((await call('GET', '/api/prompt-registry/prompts?revision=main', undefined, options)).response.statusCode).toBe(405)
-    expect((await call('POST', '/api/prompt-registry/nominate', { sourceRef: artifact.sourceRef, owner: 'owner', prompt: 'leak' }, options)).response.statusCode).toBe(422)
+    expect((await call('POST', '/api/prompt-registry/nominate', { sourceRef: artifact.sourceRef, owner: 'spoofed' }, options)).response.statusCode).toBe(422)
     expect(governance.nominate).not.toHaveBeenCalled()
+    expect((await call('POST', '/api/prompt-registry/nominate', { sourceRef: artifact.sourceRef }, options)).response.statusCode).toBe(422)
   })
 })

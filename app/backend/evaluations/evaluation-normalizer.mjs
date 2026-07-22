@@ -33,11 +33,15 @@ function p95(values) {
   return sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)]
 }
 
-function variantFromProvider(result) {
+function variantFromProvider(result, models) {
   const id = result?.provider?.id
-  if (id === 'skillops:baseline') return 'baseline'
-  if (id === 'skillops:candidate') return 'candidate'
-  throw new EvaluationError('Promptfoo returned an unknown baseline/candidate provider.', 502)
+  if (id === 'skillops:baseline') return { variant: 'baseline', matrixId: null }
+  if (id === 'skillops:candidate') return { variant: 'candidate', matrixId: null }
+  const match = /^skillops:matrix:([^:]+):(baseline|candidate)$/.exec(id)
+  if (!match || !models.some((model) => model.id === match[1])) {
+    throw new EvaluationError('Promptfoo returned an unknown baseline/candidate provider.', 502)
+  }
+  return { variant: match[2], matrixId: match[1] }
 }
 
 function metricFromResponse(result, type) {
@@ -82,6 +86,7 @@ export function normalizePromptfooEvaluation(raw, context) {
   const suite = context.suite
   if (!suite || !Array.isArray(suite.cases) || !suite.cases.length) throw new EvaluationError('A normalized Suite is required.', 500)
   const repeats = suite.repeats || 1
+  const models = suite.matrix?.models || [{ id: null, model: context.provider.model }]
   const casesById = new Map(suite.cases.map((testCase) => [testCase.id, testCase]))
   const variants = new Map()
   for (const result of raw.results) {
@@ -90,26 +95,30 @@ export function normalizePromptfooEvaluation(raw, context) {
     if (!casesById.has(caseId) || !Number.isInteger(repeat) || repeat < 0 || repeat >= repeats) {
       throw new EvaluationError('Promptfoo returned an unknown case identity.', 502)
     }
-    const variant = variantFromProvider(result)
-    const key = `${caseId}:${repeat}:${variant}`
+    const { variant, matrixId } = variantFromProvider(result, models)
+    const key = `${matrixId || ''}:${caseId}:${repeat}:${variant}`
     if (variants.has(key)) throw new EvaluationError(`Promptfoo returned duplicate case result ${key}.`, 502)
     variants.set(key, normalizeVariantResult(result, casesById.get(caseId)))
   }
 
   const caseSummaries = []
-  for (const testCase of suite.cases) {
-    for (let repeat = 0; repeat < repeats; repeat += 1) {
-      const baseline = variants.get(`${testCase.id}:${repeat}:baseline`)
-      const candidate = variants.get(`${testCase.id}:${repeat}:candidate`)
-      if (!baseline || !candidate) throw new EvaluationError(`Promptfoo baseline/candidate cases do not match for ${testCase.id}.`, 502)
-      caseSummaries.push({
-        id: `${testCase.id}:${repeat + 1}`,
-        caseId: testCase.id,
-        repeat: repeat + 1,
-        weight: testCase.weight,
-        baseline,
-        candidate,
-      })
+  for (const model of models) {
+    for (const testCase of suite.cases) {
+      for (let repeat = 0; repeat < repeats; repeat += 1) {
+        const prefix = `${model.id || ''}:${testCase.id}:${repeat}`
+        const baseline = variants.get(`${prefix}:baseline`)
+        const candidate = variants.get(`${prefix}:candidate`)
+        if (!baseline || !candidate) throw new EvaluationError(`Promptfoo baseline/candidate cases do not match for ${testCase.id}.`, 502)
+        caseSummaries.push({
+          id: model.id ? `${model.id}:${testCase.id}:${repeat + 1}` : `${testCase.id}:${repeat + 1}`,
+          caseId: testCase.id,
+          repeat: repeat + 1,
+          weight: testCase.weight,
+          ...(model.id ? { matrixId: model.id, model: model.model } : {}),
+          baseline,
+          candidate,
+        })
+      }
     }
   }
   if (variants.size !== caseSummaries.length * 2) throw new EvaluationError('Promptfoo returned unexpected extra case results.', 502)
@@ -118,6 +127,8 @@ export function normalizePromptfooEvaluation(raw, context) {
   const candidateScore = average(caseSummaries.map((item) => ({ value: item.candidate.score, weight: item.weight })))
   const baselinePassed = caseSummaries.filter((item) => item.baseline.pass)
   const candidatePassed = caseSummaries.filter((item) => item.candidate.pass)
+  const criticalFindings = caseSummaries.reduce((total, item) =>
+    total + item.candidate.assertions.filter((assertion) => assertion.blocking && !assertion.pass).length, 0)
   const regressions = baselinePassed.filter((item) => !item.candidate.pass).length
   const baselineTokens = sumNullable(caseSummaries.map((item) => item.baseline.tokens))
   const candidateTokens = sumNullable(caseSummaries.map((item) => item.candidate.tokens))
@@ -140,7 +151,9 @@ export function normalizePromptfooEvaluation(raw, context) {
       baseline: normalizeArtifactDefinition(context.baseline),
       candidate: normalizeArtifactDefinition(context.candidate),
       engine: { name: 'promptfoo', version: context.engineVersion },
-      provider: { id: context.provider.id || context.provider.provider, model: context.provider.model },
+      provider: suite.matrix
+        ? { id: context.provider.id || context.provider.provider, model: models.length === 1 ? models[0].model : 'matrix', models: models.map((model) => model.model) }
+        : { id: context.provider.id || context.provider.provider, model: context.provider.model },
       metrics: {
         baselineScore,
         candidateScore,
@@ -157,7 +170,7 @@ export function normalizePromptfooEvaluation(raw, context) {
         baselineP95LatencyMs,
         candidateP95LatencyMs,
         latencyDeltaPct: percentDelta(candidateP95LatencyMs, baselineP95LatencyMs),
-        criticalFindings: 0,
+        criticalFindings,
         highFindings: 0,
       },
       evidenceHash: null,

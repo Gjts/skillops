@@ -48,7 +48,7 @@ export interface SkillEvent {
   sourcePath?: string
   source?: 'global' | 'project' | 'plugin'
   provider?: string
-  kind?: 'skill' | 'command'
+  kind?: 'skill' | 'command' | 'rules' | 'agent'
   enabled?: boolean
   description?: string
   tags?: string[]
@@ -71,6 +71,9 @@ export interface SkillEvent {
   startSource?: string
 }
 
+export type DefinitionStatus = 'active' | 'disabled' | 'shadowed' | 'inactive' | 'missing'
+export type ConfigurationSource = 'user' | 'project' | 'local' | 'managed' | 'plugin' | 'admin'
+
 export interface InstalledSkill {
   skillId: string
   skillVersion: string
@@ -78,12 +81,41 @@ export interface InstalledSkill {
   source: 'global' | 'project' | 'plugin'
   sourcePath: string
   provider: string
-  kind: 'skill' | 'command'
+  kind: 'skill' | 'command' | 'rules' | 'agent'
   enabled: boolean
   disabledReason?: 'plugin' | 'skill-config' | 'plugin-and-skill-config'
+  status?: DefinitionStatus
+  shadowedBy?: string
+  configurationSource?: ConfigurationSource
+  scope?: ConfigurationSource
+  originConfigs?: string[]
+  projectRoot?: string
   contentHash?: string
   description?: string
   tags?: string[]
+}
+
+export interface SkillScanMetadata {
+  id: string
+  projectStart?: string
+  projectRoot: string
+  startedAt: string
+  completedAt: string
+  durationMs: number
+  coverage: Array<{
+    runtime: Runtime
+    directory: string
+    source: InstalledSkill['source']
+    configurationSource: ConfigurationSource
+    state: 'scanned' | 'missing' | 'inaccessible' | 'error'
+  }>
+  errors: Array<{ code: string; path: string; runtime: Runtime; message: string }>
+  observability: Array<{ runtime: Runtime; state: 'complete' | 'partial'; reason?: string }>
+}
+
+export interface SkillScanResponse {
+  definitions: Array<Partial<InstalledSkill>>
+  scan: SkillScanMetadata
 }
 
 export interface SkillMetric {
@@ -103,10 +135,16 @@ export interface SkillMetric {
   latestRunAt: string
 }
 
-export type PageId = 'overview' | 'skills' | 'runs' | 'evaluations' | 'registry' | 'governance' | 'settings'
+export type PageId = 'overview' | 'skills' | 'runs' | 'evaluations' | 'registry' | 'governance' | 'team' | 'settings'
 
 export type {
   ArtifactDefinition,
+  ArtifactInstallationRecord,
+  ArtifactRecord,
+  ArtifactRegistrySnapshot,
+  ArtifactStatus,
+  ArtifactVersionRecord,
+  CompatibilityStatus,
   ArtifactKind,
   ArtifactSource,
   Capability,

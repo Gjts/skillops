@@ -1,8 +1,11 @@
 {
   "name": "skillops",
-  "version": "0.3.1",
+  "version": "0.3.2-rc.1",
   "private": true,
   "type": "module",
+  "bin": {
+    "skillops": "./bin/skillops.mjs"
+  },
   "engines": {
     "node": ">=22.22.0"
   },
@@ -12,11 +15,16 @@
     "test": "vitest run --root .",
     "start": "node app/backend/server.mjs",
     "smoke": "node scripts/smoke.mjs",
+    "docs:check": "node scripts/check-markdown-links.mjs",
+    "artifacts:check": "node scripts/check-build-artifacts.mjs",
     "scan": "node bin/skillops.mjs scan",
+    "template:init": "node bin/skillops.mjs init",
     "emit": "node bin/skillops.mjs emit",
+    "events:migrate": "node bin/skillops.mjs events:migrate",
     "eval:list": "node bin/skillops.mjs eval:list",
     "eval:run": "node bin/skillops.mjs eval:run",
     "eval:verify": "node bin/skillops.mjs eval:verify",
+    "eval:changed": "node bin/skillops.mjs eval:changed",
     "codex:install": "node adapters/codex/install.mjs",
     "codex:uninstall": "node adapters/codex/install.mjs --uninstall",
     "codex:dry-run": "node adapters/codex/install.mjs --dry-run",

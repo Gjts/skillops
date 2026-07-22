@@ -22,7 +22,7 @@ describe('local Prompt definition', () => {
   it('normalizes a strict definition into an immutable Prompt Artifact', () => {
     const record = adaptPromptDefinition(definition(), { commit, relativePath: 'prompts/release.prompt.json' })
     expect(record.artifact).toEqual(expect.objectContaining({
-      kind: 'prompt', source: 'prompt-registry', artifactId: 'release-summary', version: commit,
+      kind: 'prompt', source: 'prompt-registry', artifactId: 'release-summary', version: commit, gitCommit: commit,
       variables: ['audience', 'release'], providerHint: 'openai', modelHint: 'gpt-5.6-sol',
     }))
     expect(parsePromptRegistrySourceRef(record.artifact.sourceRef)).toEqual({
@@ -37,6 +37,16 @@ describe('local Prompt definition', () => {
     expect(messages).toContainEqual({ role: 'system', content: 'Be precise for engineering.' })
     expect(messages).toContainEqual({ role: 'user', content: 'Summarize v2.' })
     expect(messages.map((message) => message.content).join('\n')).not.toContain('{{')
+  })
+
+  it('includes optional variable defaults in identity and inert rendering', () => {
+    const withDefaults = adaptPromptDefinition(definition({
+      variableDefaults: { audience: 'engineering' },
+    }), { commit, relativePath: 'prompts/release.prompt.json' })
+    const withoutDefaults = adaptPromptDefinition(definition(), { commit, relativePath: 'prompts/release.prompt.json' })
+    const messages = renderArtifactEvaluationPrompt(withDefaults, 'Write the summary.', 'Be concise.', { release: 'v2' })
+    expect(messages).toContainEqual({ role: 'system', content: 'Be precise for engineering.' })
+    expect(withDefaults.artifact.componentHashes.variables).not.toBe(withoutDefaults.artifact.componentHashes.variables)
   })
 
   it('rejects ambiguous bodies, unknown fields, unsafe variables, and invalid model configuration', () => {
