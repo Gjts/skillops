@@ -319,6 +319,7 @@ describe('changed Artifact evaluation gate', () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'skillops-changed-evaluation-'))
     directories.push(root)
     await git(root, 'init', '-b', 'main')
+    await git(root, 'config', 'core.quotePath', 'true')
     await git(root, 'config', 'remote.origin.url', repository)
     const skillFile = path.join(root, 'skills', 'review', 'SKILL.md')
     await mkdir(path.dirname(skillFile), { recursive: true })

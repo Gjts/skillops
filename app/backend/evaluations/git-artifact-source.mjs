@@ -248,8 +248,8 @@ export function createGitArtifactSource(options = {}) {
   async function list(input = {}) {
     const commit = await commitFor(input.revision || 'HEAD')
     const repository = await repositoryIdentity(commit)
-    const output = await runGit(['ls-tree', '-r', '--name-only', commit])
-    const files = output.split(/\r?\n/).map((item) => item.trim()).filter((item) => item && classifyGitArtifactPath(item))
+    const output = await runGit(['ls-tree', '-r', '-z', '--name-only', commit])
+    const files = output.split('\0').filter((item) => item && classifyGitArtifactPath(item))
     if (files.length > MAX_ARTIFACTS) throw new EvaluationError(`Git source contains more than ${MAX_ARTIFACTS} Artifacts.`, 422)
     const items = []
     const warnings = []
