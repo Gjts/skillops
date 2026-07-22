@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -45,7 +45,7 @@ async function waitForCompleted(store, runId) {
 
 describe('governance end-to-end', () => {
   it('moves GitHub candidates through Promptfoo, approval, Canary, Stable, and immutable rollback', async () => {
-    const dataDir = await mkdtemp(path.join(os.tmpdir(), 'skillops-governance-e2e-'))
+    const dataDir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'skillops-governance-e2e-')))
     temporaryDirectories.push(dataDir)
     const stableRoot = path.join(dataDir, 'stable-project')
     const canaryRoot = path.join(dataDir, 'canary-project')

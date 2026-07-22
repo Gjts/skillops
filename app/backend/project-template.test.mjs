@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -314,7 +314,10 @@ describe('Team project templates', () => {
     await git(source, 'add', '.')
     await git(source, '-c', 'user.name=SkillOps Test', '-c', 'user.email=skillops@example.invalid', 'commit', '-m', 'governed release')
 
-    const verified = await loadTeamTemplate(manifestFile)
+    const aliasParent = await workspace()
+    const aliasRoot = path.join(aliasParent, 'repository-alias')
+    await symlink(source, aliasRoot, process.platform === 'win32' ? 'junction' : 'dir')
+    const verified = await loadTeamTemplate(path.join(aliasRoot, 'templates', 'team-default.json'))
     expect(() => createProjectTemplateManager({ targetRoot: source, manifest: verified, evaluateSuite: passedEvaluation })).not.toThrow()
     expect(() => createProjectTemplateManager({ targetRoot: source, manifest: governed, evaluateSuite: passedEvaluation })).toThrow('provenance')
 

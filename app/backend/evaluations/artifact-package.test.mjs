@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { lstat, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -30,7 +30,7 @@ describe('immutable Artifact packages', () => {
   })
 
   it('reads nested regular files and rejects package symlinks', async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'skillops-package-'))
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'skillops-package-')))
     temporaryDirectories.push(root)
     await mkdir(path.join(root, 'scripts'))
     await writeFile(path.join(root, 'SKILL.md'), '# Review\n')

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -38,7 +38,7 @@ function version(commit, template) {
 
 describe('local Prompt Registry governance end-to-end', () => {
   it('runs Promptfoo, gates, approves, promotes two immutable references, and rolls back without the source', async () => {
-    const dataDir = await mkdtemp(path.join(os.tmpdir(), 'skillops-prompt-registry-e2e-'))
+    const dataDir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'skillops-prompt-registry-e2e-')))
     temporaryDirectories.push(dataDir)
     const stableRoot = path.join(dataDir, 'stable-project')
     const canaryRoot = path.join(dataDir, 'canary-project')

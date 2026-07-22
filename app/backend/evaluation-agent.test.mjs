@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, mkdir, rm, symlink, truncate, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, rm, symlink, truncate, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -13,7 +13,7 @@ afterEach(async () => {
 })
 
 async function workspaceFixture() {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'skillops-agent-'))
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'skillops-agent-')))
   temporaryRoots.push(root)
   await mkdir(path.join(root, 'app'), { recursive: true })
   await mkdir(path.join(root, 'data'), { recursive: true })

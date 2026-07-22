@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -15,7 +15,7 @@ afterEach(async () => {
 })
 
 async function setup({ scanSucceeds = true, sameContents = false, missingObservation = false } = {}) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'skillops-skeleton-'))
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'skillops-skeleton-')))
   temporaryDirectories.push(root)
   const targetFile = path.join(root, 'SKILL.md')
   const candidate = '# Candidate\nSafe instructions.\n'
@@ -257,7 +257,7 @@ describe('project skeleton installer', () => {
   })
 
   it('binds Canary writes and verification to one separate canonical project root', async () => {
-    const dataDir = await mkdtemp(path.join(os.tmpdir(), 'skillops-canary-roots-'))
+    const dataDir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'skillops-canary-roots-')))
     temporaryDirectories.push(dataDir)
     const stableRoot = path.join(dataDir, 'stable-project')
     const canaryRoot = path.join(dataDir, 'canary-project')

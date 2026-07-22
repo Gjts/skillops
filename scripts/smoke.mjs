@@ -71,6 +71,9 @@ const provider = createServer(async (request, response) => {
   for await (const chunk of request) chunks.push(chunk)
   const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
   const prompt = JSON.stringify(body.messages || [])
+  // Give each synthetic upgrade a deterministic latency improvement without weakening production policy.
+  await wait(prompt.includes('SMOKE_STABLE_B') || prompt.includes('smoke-candidate') || prompt.includes('Require evaluation evidence')
+    ? 50 : prompt.includes('SMOKE_STABLE_A') ? 100 : 150)
   const output = prompt.includes('SMOKE_STABLE_B')
     ? 'The verified release status is ready for engineering leaders.'
     : prompt.includes('SMOKE_STABLE_A')

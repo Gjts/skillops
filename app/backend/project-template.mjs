@@ -185,8 +185,9 @@ function canonicalRepository(value) {
 
 async function verifyTeamTemplateProvenance(manifestFile, manifest) {
   try {
-    const gitRoot = await realpath(path.resolve((await defaultGit(path.dirname(manifestFile), ['rev-parse', '--show-toplevel'])).trim()))
-    const manifestPath = path.relative(gitRoot, manifestFile).replace(/\\/g, '/')
+    const manifestRealPath = await realpath(manifestFile)
+    const gitRoot = await realpath(path.resolve((await defaultGit(path.dirname(manifestRealPath), ['rev-parse', '--show-toplevel'])).trim()))
+    const manifestPath = path.relative(gitRoot, manifestRealPath).replace(/\\/g, '/')
     if (relativePath(manifestPath, 'Team Template manifest path') !== manifest.source.manifestPath) {
       throw new EvaluationError('Team Template manifest path does not match its Git source.', 409)
     }
@@ -194,7 +195,7 @@ async function verifyTeamTemplateProvenance(manifestFile, manifest) {
       defaultGit(gitRoot, ['rev-parse', 'HEAD']),
       defaultGit(gitRoot, ['config', '--get', 'remote.origin.url']),
       defaultGit(gitRoot, ['rev-parse', `HEAD:${manifestPath}`]),
-      defaultGit(gitRoot, ['hash-object', '--path', manifestPath, manifestFile]),
+      defaultGit(gitRoot, ['hash-object', '--path', manifestPath, manifestRealPath]),
     ])
     if (canonicalRepository(repository) !== canonicalRepository(manifest.source.repository)) {
       throw new EvaluationError('Team Template repository does not match the configured Git origin.', 409)
