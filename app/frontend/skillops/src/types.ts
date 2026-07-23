@@ -129,6 +129,7 @@ export interface SkillMetric {
   successRate: number | null
   lifecycleOnly: boolean
   cost: number
+  costReportedRuns: number
   avgDuration: number
   trend: number[]
   latestRunId: string

@@ -1,4 +1,4 @@
-import { createHmac, randomBytes } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { appendFile, copyFile, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { normalizeEvent, normalizeEvents } from '../shared/event-schema.mjs'
@@ -16,13 +16,22 @@ export function discoveryKey(event) {
   return `${event.runtime}:${event.skillId}:${event.skillVersion || 'unversioned'}:${event.sourcePath || ''}`
 }
 
+function ensureStableLegacyEventId(event, line, occurrence) {
+  if (typeof event.id === 'string' && event.id.trim()) return event
+  event.id = `legacy-sha256:${createHash('sha256').update(line).update('\0').update(String(occurrence)).digest('hex')}`
+  return event
+}
+
 function parseEventLines(contents) {
   const events = []
+  const occurrences = new Map()
   for (const line of contents.split('\n')) {
     if (!line.trim()) continue
     try {
       const event = JSON.parse(line)
-      if (event && typeof event === 'object') events.push(event)
+      const occurrence = occurrences.get(line) ?? 0
+      occurrences.set(line, occurrence + 1)
+      if (event && typeof event === 'object') events.push(ensureStableLegacyEventId(event, line, occurrence))
     } catch {
       // A crashed writer can leave one partial JSONL record. Keep all other events readable.
     }
@@ -142,12 +151,15 @@ export function migrateLegacyEvents({ backup = true } = {}) {
     const lines = []
     let migrated = 0
     let removed = 0
+    const occurrences = new Map()
     for (const line of contents.split('\n')) {
       if (!line.trim()) continue
       try {
         const event = JSON.parse(line)
         if (!event || typeof event !== 'object' || Array.isArray(event)) throw new Error('Invalid event row')
-        const normalized = await anonymizeEventSession(normalizeEvent(event))
+        const occurrence = occurrences.get(line) ?? 0
+        occurrences.set(line, occurrence + 1)
+        const normalized = await anonymizeEventSession(normalizeEvent(ensureStableLegacyEventId(event, line, occurrence)))
         const serialized = JSON.stringify(normalized)
         if (serialized !== line.trim()) migrated += 1
         events.push(normalized)

@@ -29,7 +29,7 @@ local-first runtime observability product.
 | Someone diagnosing a failure | [Troubleshooting](develop/operations/troubleshooting.md) |
 | Team governing duplicate/conflicting Skills | [Registry health and collision handling](develop/operations/registry-health.md) |
 | Security or privacy reviewer | [Privacy and security](develop/security/privacy-security.md) |
-| Planner | [Roadmap](develop/roadmap/roadmap.md) and [task ledger](develop/roadmap/task.md) |
+| Planner | [Roadmap](develop/roadmap/roadmap.md), [task ledger](develop/roadmap/task.md), and [v0.4 UX progress](develop/roadmap/v0.4-ux-progress.md) |
 
 ## Documentation map
 
@@ -61,7 +61,8 @@ docs/
    │  └─ privacy-security.md
    └─ roadmap/
       ├─ roadmap.md
-      └─ task.md
+      ├─ task.md
+      └─ v0.4-ux-progress.md
 ```
 
 ## Status vocabulary

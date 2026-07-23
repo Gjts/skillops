@@ -210,6 +210,8 @@ No template API or hosted template store is introduced.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/events` | Read events; supports `If-None-Match` and `304` |
+| `GET` | `/api/runs` | Read one validated terminal Skill run page (20/50/100), scoped lifecycle counts, server-side filters, and stable timestamp/ID ordering |
+| `GET` | `/api/runs/~:id` | Read one terminal run in a bounded 200-event correlated session/turn window that preserves the run and reports total/truncation metadata, on demand |
 | `POST` | `/api/events` | Validate and append one event |
 | `DELETE` | `/api/events` | Back up and clear active events |
 | `POST` | `/api/import` | Atomically validate/deduplicate/append an event array |

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -289,6 +289,7 @@ describe('local-first Team control plane', () => {
       '',
     ].join('\n'), 'utf8')
     await writeFile(path.join(dataDir, 'events.jsonl.backup-expired'), 'expired', 'utf8')
+    await utimes(path.join(dataDir, 'events.jsonl.backup-expired'), new Date('2026-07-22T00:00:00.000Z'), new Date('2026-07-22T00:00:00.000Z'))
     await writeFile(path.join(dataDir, 'backups', 'team-backup-expired.json'), JSON.stringify({ exportedAt: '2026-07-20T00:00:00.000Z' }), 'utf8')
 
     const auditCount = (await controlPlane.audit(owner)).length

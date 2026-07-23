@@ -45,6 +45,9 @@ function outcomeMetrics(runs: SkillEvent[]) {
 export function summarize(events: SkillEvent[]) {
   const runs = terminalRuns(events)
   const outcomes = outcomeMetrics(runs)
+  const reportedCosts = runs
+    .map((event) => event.costUsd)
+    .filter((cost): cost is number => typeof cost === 'number' && Number.isFinite(cost))
   return {
     runs: runs.length,
     successRate: outcomes.successRate,
@@ -52,8 +55,8 @@ export function summarize(events: SkillEvent[]) {
     reportedOutcomeRuns: outcomes.reportedOutcomeRuns,
     outcomeCoverage: outcomes.outcomeCoverage,
     activeSkills: new Set(runs.map((event) => event.skillId).filter(Boolean)).size,
-    cost: runs.reduce((sum, event) => sum + (event.costUsd ?? 0), 0),
-    costReportedRuns: runs.filter((event) => event.costUsd !== undefined).length,
+    cost: reportedCosts.reduce((sum, cost) => sum + cost, 0),
+    costReportedRuns: reportedCosts.length,
   }
 }
 
@@ -104,6 +107,13 @@ export function bySkill(events: SkillEvent[], days = 7): SkillMetric[] {
     const daily = byDay(skillRuns, days)
     const latestRun = skillRuns.reduce((latest, event) =>
       new Date(event.timestamp).getTime() > new Date(latest.timestamp).getTime() ? event : latest)
+    let cost = 0
+    let costReportedRuns = 0
+    skillRuns.forEach((event) => {
+      if (typeof event.costUsd !== 'number' || !Number.isFinite(event.costUsd)) return
+      cost += event.costUsd
+      costReportedRuns += 1
+    })
     return {
       key,
       skillId: latestRun.skillId!,
@@ -114,7 +124,8 @@ export function bySkill(events: SkillEvent[], days = 7): SkillMetric[] {
       knownOutcomes: outcomes.knownOutcomes,
       successRate: outcomes.successRate,
       lifecycleOnly: outcomes.lifecycleOnly,
-      cost: skillRuns.reduce((sum, event) => sum + (event.costUsd ?? 0), 0),
+      cost,
+      costReportedRuns,
       avgDuration: skillRuns.reduce((sum, event) => sum + (event.durationMs ?? 0), 0) / skillRuns.length,
       trend: daily.map((day) => day.success + day.failed + day.observed),
       latestRunId: latestRun.id,

@@ -52,7 +52,7 @@ The result is a closed loop from runtime evidence to governed change, without tu
 
 | Surface | What it answers | Safety boundary |
 | --- | --- | --- |
-| **Overview and Runs** | Which Skills ran, where, for how long, at what reported cost, and with which known outcome? | Normalized metadata only |
+| **Overview and Runs** | Which Skills ran, where, for how long, at what reported cost, and with which known outcome? | Normalized metadata only; missing cost stays unreported and run history is server-paginated |
 | **Registry and conflict center** | Which definitions are duplicated, disabled, shadowed, conflicting, or drifting? | Preview, exact Diff, backup, rescan, and undo |
 | **Skill Lab and Managed Suites** | Is a candidate measurably better than its baseline? | Quick Compare stays in memory; persisted evidence is sanitized |
 | **Governance** | Which immutable version has fresh evidence, independent approval, and a valid release target? | Candidate, Canary, Stable, deprecation, and rollback gates |

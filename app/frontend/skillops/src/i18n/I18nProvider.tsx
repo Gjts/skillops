@@ -69,6 +69,7 @@ export interface I18nContextValue {
   setLocale: (locale: Locale) => void
   t: (key: MessageKey, values?: MessageValues) => string
   formatNumber: (value: number, options?: Intl.NumberFormatOptions) => string
+  formatUsd: (value: number) => string
   formatDate: (value: string | number | Date, options?: Intl.DateTimeFormatOptions) => string
   formatTime: (value: string | number | Date, options?: Intl.DateTimeFormatOptions) => string
   formatDateTime: (value: string | number | Date, options?: Intl.DateTimeFormatOptions) => string
@@ -83,6 +84,7 @@ function createFallbackContext(): I18nContextValue {
     setLocale: () => undefined,
     t: (key, values) => translate('en', key, values),
     formatNumber: (value, options) => numberFormatter(intl, options).format(value),
+    formatUsd: (value) => numberFormatter(intl, { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol', minimumFractionDigits: 2, maximumFractionDigits: 6 }).format(value),
     formatDate: (value, options) => formatDateValue(intl, value, options),
     formatTime: (value, options) => formatTimeValue(intl, value, options),
     formatDateTime: (value, options) => formatDateTimeValue(intl, value, options),
@@ -110,6 +112,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
   const t = useCallback((key: MessageKey, values?: MessageValues) => translate(locale, key, values), [locale])
   const formatNumber = useCallback((value: number, options?: Intl.NumberFormatOptions) => numberFormatter(config.intl, options).format(value), [config.intl])
+  const formatUsd = useCallback((value: number) => numberFormatter(config.intl, { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol', minimumFractionDigits: 2, maximumFractionDigits: 6 }).format(value), [config.intl])
   const formatDate = useCallback((value: string | number | Date, options?: Intl.DateTimeFormatOptions) => formatDateValue(config.intl, value, options), [config.intl])
   const formatTime = useCallback((value: string | number | Date, options?: Intl.DateTimeFormatOptions) => formatTimeValue(config.intl, value, options), [config.intl])
   const formatDateTime = useCallback((value: string | number | Date, options?: Intl.DateTimeFormatOptions) => formatDateTimeValue(config.intl, value, options), [config.intl])
@@ -127,11 +130,12 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     setLocale,
     t,
     formatNumber,
+    formatUsd,
     formatDate,
     formatTime,
     formatDateTime,
     formatDuration,
-  }), [formatDate, formatDateTime, formatDuration, formatNumber, formatTime, locale, t])
+  }), [formatDate, formatDateTime, formatDuration, formatNumber, formatTime, formatUsd, locale, t])
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>
 }

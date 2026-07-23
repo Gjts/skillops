@@ -43,7 +43,7 @@ export function normalizeEvent(value) {
     if (event[field] !== undefined && typeof event[field] !== 'string') throw new Error(`${field} must be a string.`)
   }
   for (const field of numericFields) {
-    if (event[field] !== undefined && (typeof event[field] !== 'number' || !Number.isFinite(event[field]))) {
+    if (event[field] !== undefined && !(field === 'costUsd' && event[field] === null) && (typeof event[field] !== 'number' || !Number.isFinite(event[field]))) {
       throw new Error(`${field} must be a finite number.`)
     }
   }
@@ -62,7 +62,7 @@ export function normalizeEvent(value) {
     throw new Error('skill.failed outcome must be failed.')
   }
 
-  const normalized = Object.fromEntries(Object.entries(event).filter(([key]) => allowedFields.has(key)))
+  const normalized = Object.fromEntries(Object.entries(event).filter(([key, fieldValue]) => allowedFields.has(key) && !(key === 'costUsd' && fieldValue === null)))
   normalized.id = event.id?.trim() || randomId()
   normalized.timestamp = event.timestamp ? new Date(event.timestamp).toISOString() : new Date().toISOString()
   if (event.event === 'skill.completed') normalized.outcome = event.outcome ?? 'unknown'

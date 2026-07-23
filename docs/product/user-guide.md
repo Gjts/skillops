@@ -80,8 +80,11 @@ to isolate one session.
 ### Overview
 
 Use runtime and date filters to inspect terminal runs. The success rate may be
-blank or marked lifecycle-only when no run has an evaluated outcome. Cost only
-sums records that actually include `costUsd`.
+blank or marked lifecycle-only when no run has an evaluated outcome. Reported
+cost sums only terminal Runtime Skill runs that contain a finite `costUsd`;
+missing cost is shown as unreported, while an explicit zero remains `$0.00`.
+Promptfoo and Provider Evaluation cost stays in Evaluation evidence and is not
+added to the Runtime KPI.
 
 ### Skills
 
@@ -90,8 +93,19 @@ both Codex and Claude Code remains two runtime-specific rows.
 
 ### Runs
 
-Shows `skill.completed` and `skill.failed` events. Select a run for correlated
-session/turn detail. Search matches Skill name, event ID, and project.
+Shows `skill.completed` and `skill.failed` events. The page requests only the
+current 20, 50, or 100 rows from `GET /api/runs`. Opening a run then requests
+that run in a bounded 200-event correlated session/turn window from canonical
+`GET /api/runs/~:id`; the selected run is preserved and the UI labels loaded
+and total counts when the window is truncated. Search matches Skill name,
+event ID, and project. Runtime, project, outcome, date, sort, and reported-cost
+filters run on the server. Page, page size, filters, and sort stay in the URL,
+so refresh and browser history restore the same view. Page navigation enters
+history only after the requested page loads; failures restore the last fully
+loaded view. A newest-first bounded poll detects replacement arrivals by
+timestamp/ID, moves an out-of-range page after deletions, and retries the local
+API from Demo mode without downloading `/api/events` or inserting rows into a
+page already being read.
 
 ### Skill Lab
 

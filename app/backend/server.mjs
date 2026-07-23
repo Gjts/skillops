@@ -10,6 +10,7 @@ import { enrichRuntimeConnections, readRuntimeConnections } from './runtime-conn
 import { scanSkillInventory } from './skill-scanner.mjs'
 import { isLoopbackHostname } from './evaluations/provider-client.mjs'
 import { assertLocalApiRequest } from './evaluations/request-guard.mjs'
+import { handleRunsApi } from './runs-api.mjs'
 
 const port = Number(process.env.PORT || 4173)
 const host = process.env.SKILLOPS_HOST || '127.0.0.1'
@@ -31,6 +32,7 @@ initializeConflictServices()
 const server = createServer(async (request, response) => {
   const pathname = new URL(request.url || '/', 'http://localhost').pathname
   if (await handleEvaluationApi(request, response, pathname, { managedEvaluationServices, teamControlPlane })) return
+  if (await handleRunsApi(request, response, pathname)) return
   if (pathname === '/api/connections' || pathname === '/api/scan' || pathname === '/api/events' || pathname === '/api/import') {
     try {
       assertLocalApiRequest(request, { requireJson: request.method === 'POST' && (pathname === '/api/events' || pathname === '/api/import') })

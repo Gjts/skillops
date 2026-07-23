@@ -40,12 +40,18 @@ function eventLabel(event: SkillEvent, t: I18nContextValue['t']) {
 
 export function correlatedRunEvents(run: SkillEvent, events: SkillEvent[]) {
   return events
-    .filter((event) => event.id === run.id || Boolean(run.sessionId && event.sessionId === run.sessionId))
-    .sort((left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp))
+    .filter((event) => {
+      if (event.id === run.id) return true
+      if (event.runtime !== run.runtime) return false
+      if (!run.turnId) return Boolean(run.sessionId && event.sessionId === run.sessionId)
+      if (run.sessionId) return event.sessionId === run.sessionId && (event.turnId === run.turnId || !event.turnId)
+      return event.turnId === run.turnId && !event.sessionId
+    })
+    .sort((left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp) || left.id.localeCompare(right.id))
 }
 
-export function RunDetail({ run, events, onClose }: { run: SkillEvent; events: SkillEvent[]; onClose: () => void }) {
-  const { formatDateTime, formatDuration, formatNumber, formatTime, t } = useI18n()
+export function RunDetail({ run, events, totalEvents = events.length, truncated = false, onClose }: { run: SkillEvent; events: SkillEvent[]; totalEvents?: number; truncated?: boolean; onClose: () => void }) {
+  const { formatDateTime, formatDuration, formatNumber, formatTime, formatUsd, t } = useI18n()
   const closeRef = useRef<HTMLButtonElement>(null)
   const previousFocus = useRef<HTMLElement | null>(null)
   const timeline = useMemo(() => correlatedRunEvents(run, events), [events, run])
@@ -79,14 +85,15 @@ export function RunDetail({ run, events, onClose }: { run: SkillEvent; events: S
             <div><dt>{t('common.version')}</dt><dd>{run.skillVersion && run.skillVersion !== 'unversioned' ? `v${run.skillVersion}` : t('common.notReported')}</dd></div>
             <div><dt>{t('common.project')}</dt><dd>{run.project || t('common.notReported')}</dd></div>
             <div><dt>{t('common.duration')}</dt><dd>{formatDuration(run.durationMs)}</dd></div>
-            <div><dt>{t('common.cost')}</dt><dd>{run.costUsd === undefined ? t('common.notReported') : `$${formatNumber(run.costUsd, { minimumFractionDigits: 4, maximumFractionDigits: 4 })}`}</dd></div>
+            <div><dt>{t('common.cost')}</dt><dd>{typeof run.costUsd === 'number' && Number.isFinite(run.costUsd) ? formatUsd(run.costUsd) : t('common.notReported')}</dd></div>
             <div><dt>{t('common.tokens')}</dt><dd>{run.tokens === undefined ? t('common.notReported') : formatNumber(run.tokens)}</dd></div>
             <div><dt>{t('common.session')}</dt><dd className="mono">{run.sessionId || t('common.notReported')}</dd></div>
             <div><dt>{t('common.detection')}</dt><dd>{run.detectionMethod ? t(detectionKeys[run.detectionMethod]) : t('common.notReported')}</dd></div>
           </dl>
           {run.error && <section className="run-error"><h3>{t('common.error')}</h3><p>{demoErrorKey ? t(demoErrorKey) : run.error}</p></section>}
           <section className="run-timeline" aria-labelledby="run-timeline-title">
-            <div><h3 id="run-timeline-title">{t('detail.timeline')}</h3><span>{formatNumber(timeline.length)} {t(timeline.length === 1 ? 'common.event' : 'common.events')}</span></div>
+            <div><h3 id="run-timeline-title">{t('detail.timeline')}</h3><span>{truncated ? `${formatNumber(timeline.length)} / ${formatNumber(totalEvents)}` : formatNumber(timeline.length)} {t(totalEvents === 1 ? 'common.event' : 'common.events')}</span></div>
+            {truncated && <p className="timeline-truncation" role="status">{t('detail.timelineTruncated', { shown: formatNumber(timeline.length), total: formatNumber(totalEvents) })}</p>}
             <ol>{timeline.map((event) => <li key={event.id}><span className="timeline-node" /><div><strong>{eventLabel(event, t)}</strong><time dateTime={event.timestamp}>{formatTime(event.timestamp)}</time><small>{event.toolName || event.subagentType || event.reason || event.startSource || (event.detectionMethod ? t(detectionKeys[event.detectionMethod]) : undefined) || t('common.normalizedRuntimeEvent')}</small></div></li>)}</ol>
           </section>
         </div>

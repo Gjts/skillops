@@ -123,6 +123,12 @@ in the dashboard.
 | `outcome` | enum | `success`, `failed`, or `unknown` |
 | `reason` | string | Sanitized skip/failure reason |
 
+`costUsd` is optional provenance, not an estimate. An absent value means
+**unreported**; imported or legacy JSONL `null` is normalized to absence, while
+an explicit finite `0` is a reported zero-dollar run. Runtime dashboards
+aggregate this field only from terminal Skill runs. Promptfoo or Provider
+Evaluation cost remains separate Evaluation evidence.
+
 ### Detection metadata
 
 | Field | Type | Allowed values/meaning |
@@ -145,6 +151,12 @@ in the dashboard.
 - tags must be an array of strings;
 - enum/boolean/string fields must have the documented type;
 - unsupported fields are discarded.
+
+When reading legacy JSONL, the event store assigns a deterministic
+`legacy-sha256:` ID to a row whose ID is not a non-empty string. The hash uses
+the raw row content plus its occurrence among identical rows, so unrelated
+line deletion or compaction does not change it and exact duplicate rows remain
+distinct. Explicit migration persists those IDs.
 
 Outcome invariants:
 

@@ -109,12 +109,13 @@ describe('SkillOps internationalization', () => {
       return Promise.resolve({ ok: true, status: 200, json: async () => input === '/api/events' ? stored : [], headers: new Headers() })
     }))
     const { container } = render(<I18nProvider><App /></I18nProvider>)
+    await screen.findByText('Local events')
     const file = new File([JSON.stringify([{ id: 'translated-import', event: 'skill.completed', skillId: 'translated-skill', runtime: 'codex', timestamp: new Date().toISOString(), outcome: 'success' }])], 'events.json', { type: 'application/json' })
     fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [file] } })
 
-    expect((await screen.findByRole('status')).textContent).toBe('Imported 1 new event into the local event store.')
+    expect((await screen.findByText('Imported 1 new event into the local event store.')).getAttribute('role')).toBe('status')
     fireEvent.change(screen.getByLabelText('Language'), { target: { value: 'ja' } })
-    expect(screen.getByRole('status').textContent).toBe('新しいイベント1件をローカルイベントストアにインポートしました。')
+    expect(screen.getByText('新しいイベント1件をローカルイベントストアにインポートしました。').getAttribute('role')).toBe('status')
 
     fireEvent.change(screen.getByLabelText('言語'), { target: { value: 'fr' } })
     fireEvent.click(screen.getByRole('button', { name: 'Skill Lab' }))
@@ -138,7 +139,7 @@ describe('SkillOps internationalization', () => {
     vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => Promise.resolve({
       ok: true,
       status: 200,
-      json: async () => input === '/api/scan' ? scan : [],
+      json: async () => input === '/api/scan' ? scan : input.startsWith('/api/runs?') ? { items: [], page: 1, pageSize: 20, totalItems: 0, totalPages: 0, hasPrevious: false, hasNext: false } : [],
       headers: new Headers(),
     })))
     const { container } = render(<I18nProvider><App /></I18nProvider>)
@@ -152,9 +153,9 @@ describe('SkillOps internationalization', () => {
 
     cleanup()
     window.localStorage.setItem('skillops.locale.v1', 'fr')
-    render(<I18nProvider><KpiStrip runs={10} successRate={90} lifecycleOnly={false} reportedOutcomeRuns={9} outcomeCoverage={90} activeSkills={2} cost={1.25} costReportedRuns={10} mode="demo" /></I18nProvider>)
+    render(<I18nProvider><KpiStrip runs={10} successRate={90} lifecycleOnly={false} reportedOutcomeRuns={9} outcomeCoverage={90} activeSkills={2} cost={1.25} costReportedRuns={10} mode="demo" onViewCostRuns={() => undefined} /></I18nProvider>)
     expect(screen.getByText(/12,7%/)).toBeTruthy()
     expect(screen.getByText(/3,4 pt/)).toBeTruthy()
-    expect(screen.getByText(/7,6%/)).toBeTruthy()
+    expect(screen.getByText('Données de démonstration')).toBeTruthy()
   })
 })

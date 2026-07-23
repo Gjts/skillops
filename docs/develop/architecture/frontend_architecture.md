@@ -82,19 +82,34 @@ head script so the initial paint and the React runtime cannot drift.
 
 ### Derived state
 
-The frontend derives runs, outcome coverage, Skill metrics, charts, inventory
-issues, filtered tables, and pagination. Derived values are not persisted.
+The frontend derives outcome coverage, overview/Skill metrics, charts, inventory
+issues, and filtered inventory tables. Derived values are not persisted. Runs
+filtering, ordering, and pagination come from the local `/api/runs` contract.
 
 ## 5. Data refresh behavior
 
 ### Events
 
-- initial and repeated `GET /api/events`;
-- refresh every 3 seconds;
+- initial and repeated `GET /api/events` outside the Runs page;
+- refresh every 3 seconds while an event-derived page is active;
 - sends `If-None-Match` after the first successful response;
 - ignores a `304` without reparsing or replacing state;
 - on initial API failure only, loads deterministic sample events and marks Demo mode;
 - later polling failures preserve the last known view.
+- aborts the active full-feed request when navigation enters Runs.
+
+### Runs
+
+- requests only the selected 20/50/100-row `/api/runs` page;
+- checks for new matching runs with a newest-first bounded 20-row poll, never
+  `/api/events`, and compares timestamp/ID identity rather than totals alone;
+- preserves the loaded page and browser-history position until a replacement
+  page succeeds, restoring its full filter/URL state if a request fails;
+- moves to the last valid page if polling observes deleted matching runs;
+- requests canonical `/api/runs/~:id` detail only after a run opens and renders
+  loaded/total counts when its bounded 200-event window is truncated;
+- retries the bounded Runs API in Demo mode and returns its transport to Local
+  mode when it recovers without relabeling the separate full event feed.
 
 ### Connections
 
@@ -149,9 +164,13 @@ grouped by `runtime:skillId`, keeping same-name Skills in separate runtimes.
 
 ### Runs
 
-Combines runtime lifecycle counters, search, 20-row pagination, import control,
-activity rail, and `RunDetail`. Run detail correlates events using available
-session/turn metadata rather than assuming all same-name events belong together.
+Requests one 20, 50, or 100-row page from `/api/runs`, validates page metadata
+and every returned run before rendering, and replaces rather than appends pages.
+Search, runtime, project, outcome, date, cost provenance, sort, page, and page
+size stay in the URL and restore across refresh and browser history. Stale
+responses cannot replace newer navigation state. New-record checks use bounded
+filtered run pages rather than the full event feed. `RunDetail` requests one
+run's correlated session timeline only when opened.
 
 ### Registry
 

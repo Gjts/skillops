@@ -1,14 +1,14 @@
 import { Bot, Box, Code2, ExternalLink } from 'lucide-react'
 import { useI18n } from '../i18n/I18nProvider'
 import { demoErrorKeys } from '../i18n/demo'
-import { recentRuns, runtimeLabel } from '../lib/analytics'
+import { recentRuns, runtimeLabel, terminalRuns } from '../lib/analytics'
 import type { Runtime, SkillEvent } from '../types'
 
 const icons: Record<Runtime, typeof Code2> = { codex: Code2, 'claude-code': Bot, cursor: Box }
 
 export function ActivityRail({ events, expanded = false, onViewAll, onSelectRun, onConnect, refreshLabel }: { events: SkillEvent[]; expanded?: boolean; onViewAll?: () => void; onSelectRun?: (run: SkillEvent) => void; onConnect?: () => void; refreshLabel?: string }) {
   const { formatDate, formatDuration, formatTime, t } = useI18n()
-  const runs = recentRuns(events, expanded ? 20 : 7)
+  const runs = expanded ? terminalRuns(events) : recentRuns(events, 7)
   return (
     <section className={expanded ? 'panel full-activity' : 'activity-rail'}>
       <header className="activity-header"><div><h2>{t('activity.title')}</h2>{expanded && <span>{t('activity.latest')}</span>}</div>{!expanded && <button type="button" onClick={onViewAll}>{t('activity.viewAll')} <ExternalLink size={13} /></button>}</header>

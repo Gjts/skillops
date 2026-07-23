@@ -93,7 +93,7 @@ function SkillRows({ metric, definition, Icon, expanded, onToggle, onViewRun }: 
   onToggle: () => void
   onViewRun?: (runId: string) => void
 }) {
-  const { formatDuration, formatNumber, t } = useI18n()
+  const { formatDuration, formatNumber, formatUsd, t } = useI18n()
   return (
     <>
       <tr className={expanded ? 'is-expanded' : ''} onClick={onToggle} tabIndex={0} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onToggle() } }}>
@@ -103,7 +103,7 @@ function SkillRows({ metric, definition, Icon, expanded, onToggle, onViewRun }: 
         <td><span className="runtime-cell"><Icon size={15} />{runtimeLabel[metric.runtime]}</span></td>
         <td>{formatNumber(metric.runs)}</td>
         <td><span className={metric.successRate === null ? 'unknown-text' : metric.successRate >= 90 ? 'success-text' : 'warning-text'}>{metric.lifecycleOnly ? t('skills.lifecycleOnly') : metric.successRate === null ? t('common.unknown') : `${formatNumber(metric.successRate, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`}</span></td>
-        <td>${formatNumber(metric.cost, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+        <td>{metric.costReportedRuns ? formatUsd(metric.cost) : t('common.notReported')}</td>
         <td><Sparkline values={metric.trend} /></td>
       </tr>
       {expanded && (

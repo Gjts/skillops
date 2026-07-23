@@ -17,6 +17,8 @@ import { enrichRuntimeConnections, readRuntimeConnections } from './app/backend/
 import { scanSkillInventory } from './app/backend/skill-scanner.mjs'
 // @ts-expect-error Plain JavaScript module is shared with the production server.
 import { assertLocalApiRequest } from './app/backend/evaluations/request-guard.mjs'
+// @ts-expect-error Plain JavaScript module is shared with the production server.
+import { handleRunsApi } from './app/backend/runs-api.mjs'
 
 function themeBootstrap(): Plugin {
   return {
@@ -49,6 +51,7 @@ function localEventApi(): Plugin {
       server.middlewares.use(async (request, response, next) => {
         const pathname = new URL(request.url || '/', 'http://localhost').pathname
         if (await handleEvaluationApi(request, response, pathname, { managedEvaluationServices: await managedServices, teamControlPlane: await teamControlPlane })) return
+        if (await handleRunsApi(request, response, pathname)) return
         if (pathname === '/api/connections' || pathname === '/api/scan' || pathname === '/api/events' || pathname === '/api/import') {
           try {
             assertLocalApiRequest(request, { requireJson: request.method === 'POST' && (pathname === '/api/events' || pathname === '/api/import') })

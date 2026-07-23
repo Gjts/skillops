@@ -84,3 +84,36 @@ describe('lifecycle-only outcomes', () => {
     expect(summarize(events)).toMatchObject({ successRate: 50, lifecycleOnly: false, reportedOutcomeRuns: 2, outcomeCoverage: 100 })
   })
 })
+
+describe('reported runtime costs', () => {
+  it('counts only finite cost metadata while preserving explicit zero', () => {
+    const summary = summarize([
+      ...Array.from({ length: 6 }, () => event({ costUsd: undefined })),
+      event({ costUsd: null as unknown as number }),
+      event({ costUsd: Number.NaN }),
+      event({ costUsd: 0.01 }),
+      event({ costUsd: 0.02 }),
+      event({ costUsd: 0 }),
+    ])
+
+    expect(summary).toMatchObject({ runs: 11, cost: 0.03, costReportedRuns: 3 })
+  })
+
+  it('keeps per-Skill cost unreported until a run supplies metadata', () => {
+    expect(bySkill([event({ costUsd: undefined })])[0]).toMatchObject({ cost: 0, costReportedRuns: 0 })
+    expect(bySkill([event({ costUsd: 0 })])[0]).toMatchObject({ cost: 0, costReportedRuns: 1 })
+  })
+
+  it('does not mix non-runtime evaluation costs into the Runtime KPI', () => {
+    const evaluation = {
+      ...event({ costUsd: 99 }),
+      event: 'evaluation.completed',
+    } as unknown as SkillEvent
+
+    expect(summarize([event({ costUsd: 0.01 }), evaluation])).toMatchObject({
+      runs: 1,
+      cost: 0.01,
+      costReportedRuns: 1,
+    })
+  })
+})

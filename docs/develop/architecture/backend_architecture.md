@@ -44,7 +44,16 @@ SPA fallback, path traversal protection, and loopback binding.
 ### `event-store.mjs`
 
 Owns event reads/appends/imports, ETag versioning, backups, clearing, selective
-removal, discovery deduplication, and lock coordination.
+removal, discovery deduplication, lock coordination, and deterministic IDs for
+legacy JSONL rows that lack one.
+
+### `runs-api.mjs`
+
+Owns bounded run reads. `GET /api/runs` validates every query parameter before
+event-store I/O, filters terminal Skill runs, preserves stable timestamp/ID
+ordering, and returns 20/50/100-row pages plus scoped lifecycle counts.
+`GET /api/runs/~:id` returns one terminal run in a bounded 200-event
+correlation window, preserving the selected run and reporting total/truncation metadata.
 
 ### `skill-scanner.mjs`
 
@@ -126,6 +135,38 @@ Responses:
 
 - `200`: JSON array;
 - `304`: unchanged;
+- `500`: read or sync failure.
+
+### `GET /api/runs`
+
+Validates page, page-size, search, runtime, project, outcome, date, sort, and
+reported-cost parameters before syncing or reading events. Returns one terminal
+Skill run page; response items never exceed the requested 20, 50, or 100 rows.
+Lifecycle metadata contains counts only and follows the runtime/date scope.
+
+Responses:
+
+- `200`: page metadata, scoped lifecycle counts, and validated run items;
+- `400`: invalid or unbounded query parameter;
+- `405`: unsupported method;
+- `500`: read or sync failure.
+
+### `GET /api/runs/~:id`
+
+Returns the exact terminal run plus its correlation scope, ordered by timestamp
+and ID. Correlated events must use the same runtime. A run with both session and
+turn IDs includes matching-turn events from that session plus session-level
+events without a turn ID; same-turn events from other sessions are excluded. A
+bounded 200-event window always contains the selected run. The `~` envelope
+keeps `.` and `..` IDs from being normalized as URL path segments. The full
+event feed is not sent.
+
+Responses:
+
+- `200`: `run`, bounded `events`, `totalEvents`, and `truncated`;
+- `400`: invalid encoded run ID;
+- `404`: terminal run not found;
+- `405`: unsupported method;
 - `500`: read or sync failure.
 
 ### `POST /api/events`

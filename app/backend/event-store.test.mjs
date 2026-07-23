@@ -85,6 +85,16 @@ describe('event-store privacy boundary', () => {
     expect(await readFile(store.eventFile, 'utf8')).toBe(before)
   })
 
+  it('keeps JSONL runs with null cost as unreported', async () => {
+    const id = `null-cost-${Date.now()}`
+    await appendFile(store.eventFile, `${JSON.stringify({ id, event: 'skill.completed', skillId: 'null-cost', runtime: 'codex', timestamp: new Date().toISOString(), costUsd: null })}\n`, 'utf8')
+
+    const saved = (await store.readEvents()).find((event) => event.id === id)
+
+    expect(saved).toBeTruthy()
+    expect(saved).not.toHaveProperty('costUsd')
+  })
+
   it('keeps valid events readable without mutating a truncated JSONL file', async () => {
     const saved = await store.appendEvent({ event: 'session.started', runtime: 'codex', sessionId: 'valid-before-corruption' })
     await appendFile(store.eventFile, '{"event":"session.started"', 'utf8')
@@ -93,6 +103,53 @@ describe('event-store privacy boundary', () => {
     const events = await store.readEvents()
     expect(events.some((event) => event.sessionId === saved.sessionId)).toBe(true)
     expect(await readFile(store.eventFile, 'utf8')).toBe(before)
+  })
+
+  it('keeps generated legacy event IDs stable across reads, rewrites, and migration', async () => {
+    const skillId = `legacy-without-id-${Date.now()}`
+    const malformedSkillId = `legacy-malformed-id-${Date.now()}`
+    const duplicateSkillId = `legacy-duplicate-${Date.now()}`
+    const duplicateLine = JSON.stringify({ event: 'skill.completed', skillId: duplicateSkillId, runtime: 'codex', timestamp: '2026-07-22T00:00:00.000Z', outcome: 'success' })
+    await appendFile(store.eventFile, [
+      '',
+      JSON.stringify({ id: 'expired-before-legacy', event: 'session.started', runtime: 'codex', timestamp: '2026-01-01T00:00:00.000Z' }),
+      JSON.stringify({
+        event: 'skill.completed',
+        skillId,
+        runtime: 'codex',
+        timestamp: '2026-07-22T00:00:00.000Z',
+        outcome: 'success',
+      }),
+      JSON.stringify({ id: null, event: 'skill.completed', skillId: malformedSkillId, runtime: 'codex', outcome: 'success' }),
+      duplicateLine,
+      duplicateLine,
+      '',
+    ].join('\n'), 'utf8')
+
+    const initialEvents = await store.readEvents()
+    const first = initialEvents.find((event) => event.skillId === skillId)
+    const malformedFirst = initialEvents.find((event) => event.skillId === malformedSkillId)
+    const second = (await store.readEvents()).find((event) => event.skillId === skillId)
+    const malformedSecond = (await store.readEvents()).find((event) => event.skillId === malformedSkillId)
+    const duplicateIds = initialEvents.filter((event) => event.skillId === duplicateSkillId).map((event) => event.id)
+    expect(first.id).toMatch(/^legacy-sha256:[a-f0-9]{64}$/)
+    expect(second.id).toBe(first.id)
+    expect(malformedFirst.id).toMatch(/^legacy-sha256:[a-f0-9]{64}$/)
+    expect(malformedSecond.id).toBe(malformedFirst.id)
+    expect(new Set(duplicateIds).size).toBe(2)
+
+    const pruned = await store.pruneEventsBefore(new Date('2026-07-01T00:00:00.000Z'), { backup: false })
+    expect(pruned.removed).toBeGreaterThan(0)
+    const rewrittenEvents = await store.readEvents()
+    expect(rewrittenEvents.find((event) => event.skillId === skillId).id).toBe(first.id)
+    expect(rewrittenEvents.find((event) => event.skillId === malformedSkillId).id).toBe(malformedFirst.id)
+    expect(rewrittenEvents.filter((event) => event.skillId === duplicateSkillId).map((event) => event.id)).toEqual(duplicateIds)
+
+    await store.migrateLegacyEvents({ backup: false })
+    const migratedEvents = await store.readEvents()
+    expect(migratedEvents.find((event) => event.skillId === skillId).id).toBe(first.id)
+    expect(migratedEvents.find((event) => event.skillId === malformedSkillId).id).toBe(malformedFirst.id)
+    expect(migratedEvents.filter((event) => event.skillId === duplicateSkillId).map((event) => event.id)).toEqual(duplicateIds)
   })
 
   it('migrates valid legacy rows and drops malformed rows through an explicit recoverable command', async () => {
