@@ -98,6 +98,29 @@ Production smoke:
 npm run smoke
 ```
 
+Deterministic performance acceptance:
+
+```powershell
+npm run performance
+```
+
+The script generates 100,000 normalized events and 5,000 scanner definitions
+from a fixed seed and timestamp. For each endpoint it measures five cold
+processes, performs 10 warm-ups, then records 100 sequential samples at
+concurrency 1. The ignored `data/performance-report.json` contains raw samples,
+nearest-rank p95, environment versions, fixture hash, boundary assertions, and
+optional memory-soak evidence. Budgets are Command Center warm p95 <= 750 ms
+and Activity warm p95 <= 500 ms.
+
+Use `--soak-minutes=30` for the RC memory soak. UI timing is a separate
+production-browser check: retain the fixture with
+`--fixture-directory=<path>`, perform five warm page loads and 50 measured
+loads at 1366-by-768, and read `skillops:primary-content` from the Performance
+API. Its product p95 budget is <= 120 ms (stricter than the 500 ms release
+ceiling). Copy the raw endpoint, UI, and memory samples
+into the sanitized [release evidence record](rc-evidence/v0.3.2-rc.1.md); the script
+does not write browser measurements itself.
+
 Repository hygiene:
 
 ```powershell
@@ -329,8 +352,10 @@ Before claiming a change is complete:
 2. Run `npm test` and read the failure count.
 3. Run `npm run build` and confirm exit code 0.
 4. Run `npm run smoke` for server/API/routing/build/privacy changes.
-5. Perform the relevant real-user scenario for adapter or inventory changes.
-6. Run link/path checks for documentation changes.
-7. Inspect Git status and disclose untracked or generated files.
+5. Run `npm run performance` for projection, pagination, event-store, scanner,
+   or release-candidate changes.
+6. Perform the relevant real-user scenario for adapter or inventory changes.
+7. Run link/path checks for documentation changes.
+8. Inspect Git status and disclose untracked or generated files.
 
 Past output or a code review is not a substitute for a fresh command result.

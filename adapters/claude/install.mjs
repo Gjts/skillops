@@ -3,13 +3,13 @@ import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { redactConfigForDisplay } from '../redact-config.mjs'
 import { resolveEffectiveSettingsFile } from './config.mjs'
 
 const installerPath = fileURLToPath(import.meta.url)
 const adapterDir = path.dirname(installerPath)
 const hookPath = path.join(adapterDir, 'hook.mjs')
 const marker = 'skillops-claude-hook'
-const sensitiveSetting = /(token|secret|password|authorization|api[-_]?key|credential)/i
 
 const eventDefinitions = [
   { name: 'SessionStart', matcher: 'startup|resume|clear|compact' },
@@ -85,22 +85,12 @@ export function mergeSkillOpsHooks(config) {
   return output
 }
 
-export function redactConfigForDisplay(value, parentKey = '') {
-  if (Array.isArray(value)) return value.map((item) => redactConfigForDisplay(item, parentKey))
-  if (!value || typeof value !== 'object') return value
-  return Object.fromEntries(Object.entries(value).map(([key, nested]) => [
-    key,
-    parentKey === 'env' || sensitiveSetting.test(key)
-      ? '[REDACTED]'
-      : redactConfigForDisplay(nested, key),
-  ]))
-}
 
 async function readConfig(file) {
   try {
-    return JSON.parse(await readFile(file, 'utf8'))
+    return { config: JSON.parse(await readFile(file, 'utf8')), exists: true }
   } catch (error) {
-    if (error?.code === 'ENOENT') return {}
+    if (error?.code === 'ENOENT') return { config: {}, exists: false }
     throw new Error(`Cannot read ${file}: ${error.message}`)
   }
 }
@@ -114,15 +104,15 @@ export function resolveSettingsFile({ scope = 'user', target = process.cwd(), cl
 
 export async function updateInstallation({ scope = 'user', target, claudeHome, home, ccSwitchHome, environment, dryRun = false, uninstall = false } = {}) {
   const file = await resolveEffectiveSettingsFile({ scope, target, claudeHome, home, ccSwitchHome, environment })
-  const current = await readConfig(file)
+  const { config: current, exists } = await readConfig(file)
   const next = uninstall ? removeSkillOpsHooks(current) : mergeSkillOpsHooks(current)
   const changed = JSON.stringify(current) !== JSON.stringify(next)
-  if (dryRun) return { file, changed, config: next }
-  if (!changed) return { file, changed, config: next }
+  if (dryRun) return { file, changed, backupPlanned: exists && changed, config: next }
+  if (!changed) return { file, changed, backup: undefined, config: next }
 
   await mkdir(path.dirname(file), { recursive: true })
   let backup
-  if (Object.keys(current).length) {
+  if (exists) {
     const stamp = new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-')
     backup = `${file}.skillops-backup-${stamp}`
     await copyFile(file, backup)
@@ -154,6 +144,7 @@ async function main() {
   if (options.dryRun) {
     console.log(JSON.stringify(redactConfigForDisplay(result.config), null, 2))
     console.log(`\nDry run only. Target: ${result.file}`)
+    if (result.backupPlanned) console.log('Existing settings file will be backed up before installation.')
     return
   }
   console.log(options.uninstall ? 'SkillOps Claude Code hooks removed.' : 'SkillOps Claude Code hooks installed.')

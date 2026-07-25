@@ -43,8 +43,8 @@ Principles:
 | `subagent.started` | Subagent lifecycle began |
 | `subagent.completed` | Subagent lifecycle ended |
 
-Only `skill.completed` and `skill.failed` currently count as terminal Skill runs
-in the dashboard.
+Only `skill.completed` and `skill.failed` count as terminal Skill runs in
+Command Center and Activity projections.
 
 ## 3. Canonical event example
 
@@ -266,8 +266,17 @@ derived lifecycle evidence again.
 
 ### Export
 
-Settings serializes the current local event array as JSONL. Demo events cannot
-be exported through that control.
+Settings navigates directly to `GET /api/events?download=1`; the backend reads
+and normalizes the store before emitting JSONL. Demo events cannot use that
+control.
+
+### Read projections
+
+`summary=1` returns only total count and latest non-discovery activity time.
+Command Center, Agents, and Activity derive bounded read models from the same
+normalized records; they do not add fields to this schema or create another
+fact store. Agent discovery can populate Definitions, but only Agent lifecycle
+events can populate Observed Activity.
 
 ### Clear
 
@@ -301,7 +310,7 @@ Do not add a generic payload/metadata object to bypass the allowlist.
 - [ ] Numeric non-finite values are rejected.
 - [ ] Contradictory outcome/event combinations are rejected.
 - [ ] Unknown completions remain outside the success-rate denominator.
-- [ ] Discovery events cannot appear as Runs.
+- [ ] Discovery events cannot appear as Activity runs or observed Agent activity.
 - [ ] Import is atomic and duplicate IDs are skipped.
 - [ ] Clear and selective removal create recoverable backups.
 - [ ] New adapters emit only fields declared here.

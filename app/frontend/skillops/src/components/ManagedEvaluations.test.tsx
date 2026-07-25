@@ -22,7 +22,7 @@ const baseRun = {
   },
   policyHash: 'd'.repeat(64), gates: [{ id: 'pass-rate', status: 'passed' as const, blocking: true }],
   evidenceHash: 'e'.repeat(64), gateResult: 'passed' as const, requestedBy: 'qa', requestedAt: '2026-07-21T00:00:00.000Z',
-  startedAt: '2026-07-21T00:00:01.000Z', completedAt: '2026-07-21T00:00:02.000Z', errorCode: null,
+  startedAt: '2026-07-21T00:00:01.000Z', completedAt: '2026-07-21T00:00:02.000Z', errorCode: null, evidenceFresh: true,
 }
 const caseResult = {
   id: 'case-1:1', caseId: 'case-1',
@@ -59,12 +59,22 @@ describe('managed evaluations UI', () => {
       if (input === '/api/evaluation-suites') return response({ items: [suite] })
       if (input === '/api/evaluation-runs?limit=50') return response({ items: [baseRun] })
       if (input.includes('/cases')) return response({ items: [caseResult], nextCursor: null })
+      if (input.includes('/decision')) return response({ decision: null })
       return response({ error: { message: 'Not found' } }, 404)
     }))
     render(<ManagedEvaluations tab="history" />)
     const historyRun = await screen.findByRole('button', { name: /Completed.*suite-1.*candidate/ })
     fireEvent.click(historyRun)
     expect(await screen.findByText('Case results')).toBeTruthy()
+    expect(screen.getByText('+10.0 pp')).toBeTruthy()
+    expect(screen.getByText('1 passed · 0 failed · 0 errors · 0 skipped')).toBeTruthy()
+    expect(screen.getByText('1 / 1 (100.0%)')).toBeTruthy()
+    expect(screen.getByText('0 regressions')).toBeTruthy()
+    expect(screen.getByText('Evidence is current')).toBeTruthy()
+    expect(screen.getByText('Candidate meets the configured release gate.')).toBeTruthy()
+    for (const action of ['Create Candidate', 'Keep Baseline', 'Reject Candidate', 'Collect More Evidence']) {
+      expect(screen.getByRole('button', { name: action })).toBeTruthy()
+    }
     expect(screen.getAllByText('Not available').length).toBeGreaterThanOrEqual(2)
     expect(screen.getByText(/baseline-only assertion.*required phrase/)).toBeTruthy()
     expect(screen.getByText('80.0')).toBeTruthy()
@@ -95,6 +105,9 @@ describe('managed evaluations UI', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Baseline reference' }), { target: { value: 'local-scan:baseline' } })
     fireEvent.change(screen.getByRole('textbox', { name: 'Candidate reference' }), { target: { value: 'github:candidate#SKILL.md' } })
     await configureOpenAi()
+    fireEvent.click(screen.getByRole('button', { name: 'Review preflight' }))
+    expect(screen.getByRole('region', { name: 'Managed Suite preflight' }).textContent).toContain('1 eligible cases')
+    expect(screen.getByRole('region', { name: 'Managed Suite preflight' }).textContent).toContain('Artifact content, suite case inputs, assertion criteria, and judge context.')
     fireEvent.click(screen.getByRole('button', { name: 'Start evaluation' }))
     expect(await screen.findByText(/server queue/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
@@ -117,6 +130,7 @@ describe('managed evaluations UI', () => {
       if (input === '/api/evaluation-runs' && init?.method === 'POST') return response({ run: queued }, 202)
       if (input === '/api/evaluation-runs/run-poll') { polls += 1; return response({ ...baseRun, id: 'run-poll' }) }
       if (input.includes('/run-poll/cases')) return response({ items: [caseResult] })
+      if (input.includes('/decision')) return response({ decision: null })
       return response({ error: { message: 'Not found' } }, 404)
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -125,11 +139,52 @@ describe('managed evaluations UI', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Baseline reference' }), { target: { value: 'local-scan:baseline' } })
     fireEvent.change(screen.getByRole('textbox', { name: 'Candidate reference' }), { target: { value: 'github:candidate#SKILL.md' } })
     await configureOpenAi()
+    fireEvent.click(screen.getByRole('button', { name: 'Review preflight' }))
     fireEvent.click(screen.getByRole('button', { name: 'Start evaluation' }))
     expect(await screen.findByText(/server queue/)).toBeTruthy()
     expect(await screen.findByText('Case results', {}, { timeout: 2_000 })).toBeTruthy()
     expect(polls).toBe(1)
     await new Promise((resolve) => setTimeout(resolve, 1_050))
     expect(polls).toBe(1)
+  })
+
+  it('creates a validated Candidate without asking for internal IDs and records idempotent decisions', async () => {
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      if (input === '/api/evaluation-suites') return response({ items: [suite] })
+      if (input === '/api/evaluation-runs?limit=50') return response({ items: [baseRun] })
+      if (input.includes('/cases')) return response({ items: [caseResult], nextCursor: null })
+      if (input.endsWith('/decision') && init?.method === 'POST') {
+        const decision = JSON.parse(String(init.body)).decision
+        return response({ decision: { runId: 'run-1', artifactId: 'candidate', candidateHash: 'b'.repeat(64), decision, decidedAt: '2026-07-25T12:00:00.000Z' }, reused: false }, 201)
+      }
+      if (input.endsWith('/decision')) return response({ decision: null })
+      if (input === '/api/capabilities' && init?.method === 'POST') {
+        return response({ capability: { id: 'cap-1', latestEvidenceRunId: null }, reused: false }, 201)
+      }
+      if (input === '/api/capabilities/cap-1/evaluate') return response({ id: 'cap-1', stage: 'ready', latestEvidenceRunId: 'run-1' })
+      return response({ error: { message: 'Not found' } }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ManagedEvaluations tab="history" />)
+    fireEvent.click(await screen.findByRole('button', { name: /Completed.*suite-1.*candidate/ }))
+    await screen.findByText('Case results')
+    fireEvent.change(screen.getByRole('textbox', { name: 'Target skeleton' }), { target: { value: 'local-scan:codex:C:/skills/review/SKILL.md' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create Candidate' }))
+    expect((await screen.findByRole('link', { name: 'Open Releases' })).getAttribute('href')).toBe('/releases?capability=cap-1')
+
+    const nomination = fetchMock.mock.calls.find(([input]) => input === '/api/capabilities')
+    expect(JSON.parse(String(nomination?.[1]?.body))).toEqual({
+      artifact: baseRun.candidate,
+      baseline: baseRun.baseline,
+      targetSkeleton: 'local-scan:codex:C:/skills/review/SKILL.md',
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/capabilities/cap-1/evaluate', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ runId: 'run-1' }),
+    }))
+    expect(fetchMock).toHaveBeenCalledWith('/api/evaluation-runs/run-1/decision', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ decision: 'create-candidate' }),
+    }))
   })
 })

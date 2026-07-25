@@ -11,6 +11,21 @@ const sessionIdentityKeyFile = path.join(dataDir, 'session-identity.key')
 const eventLockFile = path.join(dataDir, 'events.lock')
 const pseudonymPattern = /^hmac-sha256:[a-f0-9]{64}$/
 let sessionIdentityKeyPromise
+let eventCache
+
+function invalidateEventCache() {
+  eventCache = undefined
+}
+
+async function eventFingerprint() {
+  try {
+    const stats = await stat(eventFile, { bigint: true })
+    return `${stats.size}:${stats.mtimeNs}`
+  } catch (error) {
+    if (error?.code === 'ENOENT') return 'empty'
+    throw error
+  }
+}
 
 export function discoveryKey(event) {
   return `${event.runtime}:${event.skillId}:${event.skillVersion || 'unversioned'}:${event.sourcePath || ''}`
@@ -112,26 +127,34 @@ async function replaceEventFile(contents) {
   try {
     await writeFile(temporary, contents, 'utf8')
     await rename(temporary, eventFile)
+    invalidateEventCache()
   } finally {
     await rm(temporary, { force: true })
   }
 }
 
 async function readEventsUnlocked() {
+  const fingerprint = await eventFingerprint()
+  if (eventCache?.fingerprint === fingerprint) return eventCache.events
   let contents
   try {
     contents = await readFile(eventFile, 'utf8')
   } catch (error) {
-    if (error?.code === 'ENOENT') return []
+    if (error?.code === 'ENOENT') {
+      eventCache = { fingerprint, events: [] }
+      return eventCache.events
+    }
     throw error
   }
-  return Promise.all(parseEventLines(contents).map(async (event) => {
+  const events = await Promise.all(parseEventLines(contents).map(async (event) => {
     try {
       return await anonymizeEventSession(normalizeEvent(event))
     } catch {
       return undefined
     }
-  })).then((events) => events.filter(Boolean))
+  })).then((values) => values.filter(Boolean))
+  eventCache = { fingerprint, events }
+  return events
 }
 
 export function readEvents() {
@@ -196,6 +219,7 @@ export async function appendEvent(event) {
     await readEventsUnlocked()
     await repairTrailingNewline()
     await appendFile(eventFile, `${JSON.stringify(normalized)}\n`, 'utf8')
+    invalidateEventCache()
     return normalized
   })
 }
@@ -213,6 +237,7 @@ export async function appendEvents(events) {
     if (!created.length) return []
     await repairTrailingNewline()
     await appendFile(eventFile, `${created.map((event) => JSON.stringify(event)).join('\n')}\n`, 'utf8')
+    invalidateEventCache()
     return created
   })
 }
@@ -433,6 +458,7 @@ export function pruneEventsBefore(cutoff, { backup = true, directory = dataDir }
       try {
         await writeFile(temporary, kept.length ? `${kept.join('\n')}\n` : '', 'utf8')
         await rename(temporary, file)
+        if (path.resolve(directory) === dataDir) invalidateEventCache()
       } finally {
         await rm(temporary, { force: true })
       }

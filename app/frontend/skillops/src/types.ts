@@ -1,12 +1,24 @@
 export type Runtime = 'codex' | 'claude-code' | 'cursor'
 export type ConnectionStatus = 'checking' | 'installed' | 'not-installed' | 'broken' | 'preview' | 'error' | 'unavailable'
+export type ConnectionStage = 'not-installed' | 'installed' | 'awaiting-verification' | 'verified' | 'degraded' | 'preview-only'
 
 export interface RuntimeConnection {
   runtime: Runtime
   status: ConnectionStatus
+  configurationStatus?: ConnectionStatus
+  connectionStage?: ConnectionStage
+  detected?: boolean
+  verificationBoundaryAt?: string
   checkedAt?: string
   eventCount?: number
   lastEventAt?: string
+  lastActivityAt?: string
+  lastSkillUseAt?: string
+  lastTerminalRunAt?: string
+  verifiedEvidenceAt?: string
+  activityObserved?: boolean
+  skillUseObserved?: boolean
+  terminalRunObserved?: boolean
 }
 export type EventName =
   | 'skill.discovered'
@@ -136,7 +148,7 @@ export interface SkillMetric {
   latestRunAt: string
 }
 
-export type PageId = 'overview' | 'skills' | 'runs' | 'evaluations' | 'registry' | 'governance' | 'team' | 'settings'
+export type PageId = 'command-center' | 'agents' | 'activity' | 'assets' | 'benchmarks' | 'releases' | 'team' | 'settings'
 
 export type {
   ArtifactDefinition,

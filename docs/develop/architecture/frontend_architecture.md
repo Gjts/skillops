@@ -38,14 +38,17 @@ saved through loopback `GET`/`PUT /api/ai-settings` into local
 
 | Path | Page | Data source |
 | --- | --- | --- |
-| `/` | Overview | Events + connections |
-| `/skills` | Skills | Terminal events + discovery metadata |
-| `/runs` | Runs | Terminal and correlated lifecycle events |
-| `/evaluations` | Skill Lab | Live GitHub candidate comparison, A/B evaluation, and assistant chat |
-| `/registry` | Registry | Live scan, falling back to discovery events on failure |
-| `/governance` | Governance | Capability lifecycle, evidence, approvals, previews, and rollback |
-| `/team` | Team | Team state, unified Artifact directory, approval/release queues, and local backup |
-| `/settings` | Settings | Connections + local events |
+| `/` | Command Center | `/api/command-center` + connections |
+| `/agents` | Agents | bounded `/api/agents` projection |
+| `/activity` | Activity | paged terminal runs + on-demand correlation |
+| `/assets` | Assets | live scan + Artifact/conflict APIs |
+| `/benchmarks` | Benchmarks | Quick Compare + Managed Suite APIs |
+| `/releases` | Releases | Capability/evidence/approval/release APIs |
+| `/settings` | Settings | connections + bounded event summary/settings |
+| `/team` and other Advanced paths | Advanced | existing Team, policy, template, Prompt, and audit APIs |
+
+Legacy `/skills`, `/runs`, `/evaluations`, `/registry`, and `/governance` paths
+map to the corresponding canonical product page.
 
 `popstate` restores the matching page. Navigation updates browser history. The
 production server falls back to `index.html` for extensionless SPA paths.
@@ -54,22 +57,25 @@ production server falls back to `index.html` for extensionless SPA paths.
 
 ### Source state
 
-- `events`: current event array;
+- canonical page plus page-owned filter/tab/page state restored from the URL;
 - `connections`: runtime configuration/activity results;
-- `mode`: `loading`, `local`, or `demo`;
-- `eventEtag`: last event-store version;
-- selected page, runtime, time range, menu, modal, and requested run;
+- Command Center and Runs `loading`, `local`, or `demo` transport state;
+- deterministic sample events only while the explicit Activity Demo fallback is active;
+- responsive menu/modal state and requested run ID;
 - selected UI locale, persisted under the versioned browser key
   `skillops.locale.v1`;
-- selected appearance from the 25-style product catalog after a manual choice,
-  persisted under `skillops.theme.v2`; before a manual choice, the dashboard
-  maps `prefers-color-scheme` to the DevTools or Synapse design system. The
-  pre-paint bootstrap and React hook both migrate the legacy
-  `skillops.theme.v1` light/dark preference to those two themes;
-- candidate URL/selection, local baseline, A/B inputs/results, and chat messages;
-- active AI provider settings loaded from `/api/ai-settings` and kept in page state while the workspace is open.
+- appearance follows the OS until the user selects stable Light/Dark or an
+  experimental catalog theme. Manual choices persist under
+  `skillops.theme.v2`; choosing System removes that key. A small in-document
+  change event keeps the Sidebar and Settings chooser instances synchronized.
+  The pre-paint bootstrap and React hook both migrate the legacy
+  `skillops.theme.v1` light/dark preference to DevTools/Synapse;
+- candidate URL/selection, local baseline, A/B inputs/results, and chat messages
+  held only while the Benchmark page is mounted;
+- AI provider settings loaded from `/api/ai-settings`; credentials are never
+  written to browser storage or rendered in full by the settings modal;
 - Team state, derived Artifact catalog, Approval Inbox, and Release Queue loaded
-  on `/team`; device secrets are never held by this page.
+  only on `/team`.
 
 Evaluation request/result and Artifact types come from the shared Evaluation
 Schema declaration. The frontend does not define parallel Candidate/result
@@ -82,23 +88,22 @@ head script so the initial paint and the React runtime cannot drift.
 
 ### Derived state
 
-The frontend derives outcome coverage, overview/Skill metrics, charts, inventory
-issues, and filtered inventory tables. Derived values are not persisted. Runs
-filtering, ordering, and pagination come from the local `/api/runs` contract.
+Each primary page consumes one backend-owned bounded projection or page.
+Command Center and Agents do not receive the complete event array. Activity
+filtering, ordering, pagination, and detail correlation come from `/api/runs`;
+Assets owns only its current live scan result. Derived UI state is not persisted.
 
 ## 5. Data refresh behavior
 
-### Events
+### Command Center
 
-- initial and repeated `GET /api/events` outside the Runs page;
-- refresh every 3 seconds while an event-derived page is active;
-- sends `If-None-Match` after the first successful response;
-- ignores a `304` without reparsing or replacing state;
-- on initial API failure only, loads deterministic sample events and marks Demo mode;
-- later polling failures preserve the last known view.
-- aborts the active full-feed request when navigation enters Runs.
+- requests `/api/command-center` with runtime and 7/14/30-day scope;
+- refreshes the bounded snapshot every 3 seconds;
+- marks data receipt and primary-content readiness for browser performance
+  acceptance;
+- keeps deterministic Demo data visibly separate after an initial failure.
 
-### Runs
+### Activity
 
 - requests only the selected 20/50/100-row `/api/runs` page;
 - checks for new matching runs with a newest-first bounded 20-row poll, never
@@ -108,19 +113,29 @@ filtering, ordering, and pagination come from the local `/api/runs` contract.
 - moves to the last valid page if polling observes deleted matching runs;
 - requests canonical `/api/runs/~:id` detail only after a run opens and renders
   loaded/total counts when its bounded 200-event window is truncated;
-- retries the bounded Runs API in Demo mode and returns its transport to Local
-  mode when it recovers without relabeling the separate full event feed.
+- retries the bounded Runs API in Demo mode without loading the full event feed.
 
-### Connections
+### Agents
+
+- requests one 50-row `/api/agents` page for the selected tab, runtime, time
+  window, query, and page;
+- requests one bounded detail record only after the drawer opens;
+- resets pagination when a filter or tab changes.
+
+### Connections and Settings
 
 - `GET /api/connections` on mount and every 5 seconds;
-- API failure maps Codex/Claude to `unavailable` while Cursor stays `preview`.
+- connection failure maps Codex/Claude Code to `unavailable` while Cursor stays
+  `preview`;
+- Settings requests `/api/events?summary=1` and `/api/ai-settings`, never the
+  full event array, and exports through a direct
+  `/api/events?download=1` navigation.
 
-### Registry
+### Assets
 
 - `POST /api/scan` on page mount and manual rescan;
 - retains the last successful scan on a later failure;
-- before any successful live scan, can display persisted discovery events.
+- does not substitute stale discovery events before a successful scan.
 
 ## 6. Metric semantics
 
@@ -144,62 +159,43 @@ Missing cost fields are treated as unreported, not as evidence of zero provider 
 
 ## 7. Page composition
 
-### Overview
+### Command Center
 
-```text
-KpiStrip
-├─ RunsChart
-├─ RuntimeDistribution
-├─ SkillTable (top four)
-└─ ActivityRail
-```
+`CommandCenter` renders readiness, five provenance-aware metrics, deterministic
+issues/next actions, and at most five recent lifecycle records from one bounded
+aggregate. No chart or success claim is synthesized when evidence is absent.
 
-If no terminal events match the filters, the page renders connection guidance
-instead of empty charts.
+### Agents
 
-### Skills
+`AgentsPage` keeps Definitions and Observed Activity distinct, paginates both,
+and opens one bounded evidence timeline. Runtime-aware keys prevent same-name
+Agents in different runtimes from being merged.
 
-Uses `SkillTable` with search and expandable definition information. Metrics are
-grouped by `runtime:skillId`, keeping same-name Skills in separate runtimes.
+### Activity
 
-### Runs
+`RunsPage` requests one 20, 50, or 100-row page from `/api/runs`, validates page
+metadata and every returned run, and replaces rather than appends pages. Search,
+runtime, project, outcome, date, cost provenance, sort, page, and page size stay
+in the URL. Stale responses cannot replace newer navigation state. `RunDetail`
+requests correlation only when opened.
 
-Requests one 20, 50, or 100-row page from `/api/runs`, validates page metadata
-and every returned run before rendering, and replaces rather than appends pages.
-Search, runtime, project, outcome, date, cost provenance, sort, page, and page
-size stay in the URL and restore across refresh and browser history. Stale
-responses cannot replace newer navigation state. New-record checks use bounded
-filtered run pages rather than the full event feed. `RunDetail` requests one
-run's correlated session timeline only when opened.
+### Assets
 
-### Registry
-
-The primary filter is runtime workspace. All totals and secondary categories
-follow that scope. Definitions are then categorized by:
-
-- source: global, project, plugin;
-- provider;
-- enabled/disabled state;
-- kind: Skill or command;
-- attention issue: duplicate definition, definition conflict, disabled, or missing metadata.
-
-Combined view inserts runtime group rows and marks Skill names present in more
-than one runtime as shared.
-
-### Team
-
-`TeamPage` initializes the local Team from the server principal, then presents a
-bounded-height Registry-derived Artifact table so the approval and release
-queues remain visible. Summary cards report Artifact versions, active members,
-pending approvals, and pending releases. Refresh is explicit; backup invokes
-the sanitized backend export. The page does not offer network deployment, SSO,
-SCIM, or browser-selected identities.
+`RegistryPage` owns the live scan and client-side 50-row display page. Runtime is
+the primary workspace filter; source, provider, enabled state, definition kind,
+and duplicate/conflict/disabled/missing classifications follow that scope.
+`ArtifactRegistry` supplies immutable Artifact metadata and desired/observed
+state without returning definition bodies.
 
 ### Settings
 
-Connection rows show config truth separately from activity. Export serializes
-the current local event array as JSONL. Clear requires a confirmation dialog and
-uses the server's backup-first operation.
+`SettingsPage` owns five bounded sections: Runtime connections, AI Providers,
+Appearance, Data & Privacy, and Advanced links. Connection rows show
+configuration truth, activity, stage, and last verified evidence separately.
+Provider status returns model/endpoint configuration without credential echo.
+The page uses a bounded summary for local-data status, navigates directly to the
+backend JSONL download, names retention/encryption limitations, and requires a
+focus-trapped confirmation before backup-first clear.
 
 ### Skill Lab
 
@@ -226,17 +222,21 @@ focus, closes with Escape or its scrim, restores the invoking control, and
 collapses to a bottom sheet on narrow screens without shrinking the main flow.
 
 `AiSettingsModal` follows the supplied provider-grid reference. It supports
-nine providers, traps focus, restores focus on close, hides keys by default,
-loads/saves settings through the local AI settings API, and exposes reasoning effort for
-OpenAI-compatible transports. `EvaluationWorkspace` surfaces the GPT-5.6
-Chat Completions tool-call constraint and disables incompatible agent runs.
+nine providers, traps focus, restores focus on close, and replaces every saved
+key with a fixed mask before rendering; the reveal control never receives the
+stored value. An unchanged mask preserves the saved key, while an explicit
+replacement or clear is sent through the local AI settings API. The modal also
+exposes reasoning effort for OpenAI-compatible transports.
+`EvaluationWorkspace` surfaces the GPT-5.6 Chat Completions tool-call constraint
+and disables incompatible agent runs.
 
 ## 8. Component map
 
 | Component | Responsibility |
 | --- | --- |
 | `Sidebar` | Responsive navigation, global theme chooser, and local-mode identity |
-| `ThemeChooser` | Localized 25-style catalog with miniature product previews, selection state, and accessible popover behavior |
+| `ThemeChooser` | System/Light/Dark stable choices plus the localized 25-style catalog (remaining choices experimental), synchronized selection, miniature previews, and accessible popover behavior |
+| `SettingsPage` | Connection evidence, provider status/configuration, appearance, bounded data controls, and Advanced links |
 | `KpiStrip` | Outcome-aware summary metrics |
 | `Charts` | Daily runs and runtime distribution |
 | `SkillTable` | Runtime-specific Skill metrics and definition details |

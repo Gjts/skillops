@@ -1,7 +1,7 @@
 # Roadmap: SkillOps
 
-> Version: v0.3.1 baseline
-> Status: evidence-driven roadmap; dates intentionally uncommitted
+> Version: v0.3.2-rc.1
+> Status: Personal AI Developer OS P0 implemented; Limited Preview pending external RC evidence
 
 ## 1. Roadmap principle
 
@@ -26,9 +26,10 @@ semantics are weak.
 - Shared allowlisted event schema.
 - Codex hook adapter plus conservative Codex Desktop ingestion.
 - Claude Code native hook adapter with CC Switch-aware config resolution.
-- Live Registry across global/project/plugin definitions.
+- Live Assets inventory across global/project/plugin definitions.
 - Runtime-first inventory, source/provider categories, duplicate/conflict health.
-- Overview, Skills, Runs, Registry, Settings, and live Skill Lab surfaces.
+- Command Center, Agents, Activity, Assets, Benchmarks, Releases, Settings, and
+  compatibility routes for the previous product URLs.
 - Public GitHub candidate discovery, deterministic local overlap ranking,
   content-memory-only prompt/agent multi-provider A/B evaluation, explicit
   local AI settings, and contextual assistant chat.
@@ -50,8 +51,9 @@ semantics are weak.
  conflict/drift previews, metadata-only asset locks, pre-write Suite gates,
  Git-review-only upgrades, adoption metrics, and previous-Stable rollback.
 - Outcome coverage and lifecycle-only semantics.
-- Atomic import, local export, backup-first clear, discovery deduplication.
-- Automated unit/integration/UI tests, build, and smoke verification.
+- Atomic import, direct normalized export, backup-first clear, and discovery deduplication.
+- Automated unit/integration/UI, accessibility, deterministic 100k-event /
+  5k-definition performance, build, and production smoke verification.
 
 ## 3. Phase 1: Operational hardening
 
@@ -167,7 +169,19 @@ and upgrades stay as ordinary Git Diffs until a human commits them. Per-project
 status feeds Team adoption, drift, and pending-upgrade metrics. Hosted template
 distribution and automatic PR creation remain deferred.
 
-## 9. Explicitly deferred
+## 9. Current stretch backlog
+
+These items remain P1 and do not block the P0 release:
+
+- local event/evidence/audit file health and retention visibility;
+- unified cross-domain Activity;
+- global metadata-only Assistant with evidence links and preview-only actions.
+
+They start only after every P0 release gate passes. None may introduce a new
+fact store, persist request content, or make core deterministic advice depend on
+an AI provider.
+
+## 10. Explicitly deferred
 
 - cloud accounts and billing;
 - social/team feed;
@@ -178,7 +192,7 @@ distribution and automatic PR creation remain deferred.
 - editing arbitrary Skill contents from the dashboard;
 - hosted Team synchronization, SaaS tenancy, SSO, and SCIM.
 
-## 10. Decision checkpoints
+## 11. Decision checkpoints
 
 ### Checkpoint A: retention
 
@@ -199,7 +213,7 @@ Proceed only when native runtime signals can prove use with documented limits.
 Require repeated user need that cannot be met by export/import. Revisit the full
 privacy/security model before adding network collection.
 
-## 11. Roadmap metrics
+## 12. Roadmap metrics
 
 | Area | Measure |
 | --- | --- |
@@ -211,7 +225,7 @@ privacy/security model before adding network collection.
 | Inventory | Runtime/source/provider totals reconcile with definition rows |
 | Maintenance | Clear/compaction actions have verified backup/rollback |
 
-## 12. Prioritization rule
+## 13. Prioritization rule
 
 Work order is:
 

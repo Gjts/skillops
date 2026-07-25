@@ -52,13 +52,14 @@ The result is a closed loop from runtime evidence to governed change, without tu
 
 | Surface | What it answers | Safety boundary |
 | --- | --- | --- |
-| **Overview and Runs** | Which Skills ran, where, for how long, at what reported cost, and with which known outcome? | Normalized metadata only; missing cost stays unreported and run history is server-paginated |
-| **Registry and conflict center** | Which definitions are duplicated, disabled, shadowed, conflicting, or drifting? | Preview, exact Diff, backup, rescan, and undo |
-| **Skill Lab and Managed Suites** | Is a candidate measurably better than its baseline? | Quick Compare stays in memory; persisted evidence is sanitized |
-| **Governance** | Which immutable version has fresh evidence, independent approval, and a valid release target? | Candidate, Canary, Stable, deprecation, and rollback gates |
-| **Prompt Registry** | Which committed Prompt version and component hashes are in use? | Git is authoritative; Prompt bodies stay behind the backend boundary |
-| **Team control plane** | Who can approve, release, collect metadata, or apply a policy exception? | Local RBAC, scoped tokens, retention, and hash-chained audit |
-| **Project templates** | Can a governed Team baseline be previewed, adopted, upgraded, and rolled back? | Review branch for migrations, exact hashes, no silent overwrite |
+| **Command Center** | Is the local control plane healthy, and what deserves attention next? | Bounded aggregate projection; discovery never counts as execution |
+| **Agents** | Which Agent definitions exist, and which Agents have real lifecycle evidence? | Definitions and observed activity remain separate, runtime-scoped facts |
+| **Activity** | Which Skills ran, where, for how long, at what reported cost, and with which known outcome? | Server-paginated normalized metadata; missing cost stays unreported |
+| **Assets** | Which definitions are duplicated, disabled, shadowed, conflicting, or drifting? | Live scan, exact Diff, preview, backup, rescan, and undo |
+| **Benchmarks** | Is a candidate measurably better than its baseline? | Quick Compare stays in memory; only sanitized Managed Suite evidence persists |
+| **Releases** | Which immutable version has fresh evidence, independent approval, and a valid target? | Existing Capability stages, preview/apply, rescan, and rollback |
+| **Settings** | Are runtimes connected, where are provider settings stored, and how is local data controlled? | Loopback inspection, direct normalized export, backup-first clear, no credential echo |
+| **Advanced** | Which Team, template, Prompt Registry, and audit controls are available? | Local Git authority, scoped credentials, and explicit mutations |
 
 Artifact identities are kind-scoped. Immutable versions bind the exact Git commit when available and a deterministic SHA-256 content hash.
 
@@ -143,6 +144,7 @@ Run every command from the repository root.
 | Build and run the loopback production server | `npm run build && npm start` |
 | Run automated tests | `npm test` |
 | Run the production smoke scenario | `npm run smoke` |
+| Run deterministic 100k-event / 5k-definition performance acceptance | `npm run performance` |
 | Check Markdown links | `npm run docs:check` |
 | List Managed Suites | `npm run eval:list` |
 | Run a Managed Suite | `npm run eval:run -- --suite <id> --baseline <ref> --candidate <ref> --provider <id>` |
@@ -182,11 +184,15 @@ Start with the [system architecture](docs/develop/architecture/system_architectu
 | Prompt contributor | [Local Prompt Registry contract](docs/develop/integrations/prompt-registry.md) |
 | Event producer | [Event model](docs/develop/data/event_model.md) |
 | Security reviewer | [Privacy and security](docs/develop/security/privacy-security.md) |
+| Release reviewer | [Release Candidate evidence](docs/develop/operations/rc-evidence/v0.3.2-rc.1.md) |
 | Maintainer | [Complete documentation map](docs/README.md) |
 
 ## Current scope and known limits
 
-- Product state: local + Git release candidate.
+- Product state: local + Git **Limited Preview**. P0 implementation is present,
+  but general RC promotion remains blocked on the five-person validation sample,
+  manual independent-review/keyboard evidence, and the deferred current-candidate
+  macOS run. See the [release evidence record](docs/develop/operations/rc-evidence/v0.3.2-rc.1.md).
 - PromptHub v1 is a read connector. It can list and diff remote versions, but cannot publish, promote, or provide the unsupported push-only and bidirectional modes.
 - Team mode remains local. SaaS tenancy, authenticated network deployment, SSO, and SCIM are deferred.
 - The pinned Promptfoo dependency inherits known transitive `npm audit` advisories. Isolation reduces exposure but does not remove dependency risk. See the [dated advisory and upgrade contract](docs/develop/integrations/promptfoo.md#known-dependency-advisory).

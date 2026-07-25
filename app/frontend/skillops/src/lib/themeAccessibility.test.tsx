@@ -64,7 +64,7 @@ describe('theme accessibility', () => {
     window.localStorage.setItem(THEME_STORAGE_KEY, 'devtools')
     render(
       <I18nProvider>
-        <Sidebar page="overview" open={false} onNavigate={vi.fn()} onToggle={vi.fn()} onClose={vi.fn()} />
+        <Sidebar page="command-center" open={false} onNavigate={vi.fn()} onToggle={vi.fn()} onClose={vi.fn()} />
       </I18nProvider>,
     )
 
@@ -73,9 +73,9 @@ describe('theme accessibility', () => {
     fireEvent.click(chooser)
 
     const dialog = screen.getByRole('dialog', { name: 'Choose a theme' })
-    expect(dialog.querySelectorAll('button[aria-pressed]').length).toBe(themeOptions.length)
+    expect(dialog.querySelectorAll('button[aria-pressed]').length).toBe(themeOptions.length + 1)
 
-    const devtools = screen.getByRole('button', { name: 'DevTools system' })
+    const devtools = screen.getByRole('button', { name: 'Light mode' })
     expect(document.activeElement).toBe(devtools)
 
     const close = screen.getByRole('button', { name: 'Close' })
@@ -85,6 +85,7 @@ describe('theme accessibility', () => {
     fireEvent.keyDown(document, { key: 'Tab' })
     expect(document.activeElement).toBe(close)
 
+    fireEvent.click(screen.getByText('Experimental themes'))
     const blueprint = screen.getByRole('button', { name: 'Blueprint' })
     fireEvent.click(blueprint)
     expect(blueprint.getAttribute('aria-pressed')).toBe('true')
@@ -99,11 +100,11 @@ describe('theme accessibility', () => {
   it('restores focus to the chooser when the close button dismisses the dialog', () => {
     render(
       <I18nProvider>
-        <Sidebar page="overview" open={false} onNavigate={vi.fn()} onToggle={vi.fn()} onClose={vi.fn()} />
+        <Sidebar page="command-center" open={false} onNavigate={vi.fn()} onToggle={vi.fn()} onClose={vi.fn()} />
       </I18nProvider>,
     )
 
-    const chooser = screen.getByRole('button', { name: 'Choose a theme: DevTools system' })
+    const chooser = screen.getByRole('button', { name: 'Choose a theme: System' })
     fireEvent.click(chooser)
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
 
@@ -137,8 +138,20 @@ describe('theme accessibility', () => {
   })
 
   it('keeps keyboard focus visible, managed views responsive, and reduced motion bounded', () => {
-    expect(styles).toMatch(/button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, tr:focus-visible\s*{[^}]*outline:\s*2px solid var\(--accent\)/)
+    expect(styles).toMatch(/button:focus-visible,[^{]*a:focus-visible,[^{]*summary:focus-visible[^{]*\{[^}]*outline:\s*2px solid var\(--accent\)/)
     expect(styles).toMatch(/@media \(max-width: 900px\)\s*{[^}]*\.managed-suite-grid\s*{\s*grid-template-columns:\s*1fr;/s)
     expect(styles).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*{\s*\*, \*::before, \*::after\s*{[^}]*animation-duration:\s*\.01ms !important;/s)
+  })
+
+  it('enforces readable type and interaction target floors', () => {
+    const fontSizes = [...styles.matchAll(/\bfont(?:-size)?\s*:[^;{}]*?(\d+(?:\.\d+)?)px/g)]
+      .map((match) => Number(match[1]))
+    expect(fontSizes.filter((size) => size < 12)).toEqual([])
+    expect(styles).toMatch(/--font-body:\s*14px/)
+    expect(styles).toMatch(/body\s*{[^}]*font-size:\s*var\(--font-body\)/s)
+    expect(styles).toMatch(/--target-min:\s*36px/)
+    expect(styles).toMatch(/--target-min-mobile:\s*44px/)
+    expect(styles).toMatch(/@media \(max-width: 700px\)\s*{[^}]*min-height:\s*var\(--target-min-mobile\) !important/s)
+    expect(styles).toMatch(/@media \(max-width: 700px\)\s*{[^}]*min-height:\s*var\(--target-min-mobile\) !important;[^}]*}[^}]*min-width:\s*var\(--target-min-mobile\) !important/s)
   })
 })

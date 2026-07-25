@@ -4,8 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { THEME_STORAGE_KEY, useTheme } from './useTheme'
 
 function ThemeProbe() {
-  const { theme, setTheme } = useTheme()
-  return <button type="button" onClick={() => setTheme('blueprint')}>{theme}</button>
+  const { theme, source, setTheme, useSystemTheme } = useTheme()
+  return <><button type="button" onClick={() => setTheme('blueprint')}>{theme}</button><button type="button" onClick={useSystemTheme}>system:{source}</button></>
 }
 
 function stubSystemTheme(dark: boolean) {
@@ -53,6 +53,20 @@ describe('useTheme', () => {
     expect(document.documentElement.style.colorScheme).toBe('dark')
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe('blueprint')
     expect(document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.content).toBe('#003366')
+  })
+
+  it('synchronizes mounted choosers and can return to the operating-system theme', () => {
+    stubSystemTheme(false)
+    window.localStorage.setItem(THEME_STORAGE_KEY, 'softly')
+    render(<><ThemeProbe /><ThemeProbe /></>)
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'softly' })[0])
+    expect(screen.getAllByRole('button', { name: 'blueprint' })).toHaveLength(2)
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'system:user' })[0])
+    expect(screen.getAllByRole('button', { name: 'devtools' })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: 'system:system' })).toHaveLength(2)
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBeNull()
   })
 
   it.each([

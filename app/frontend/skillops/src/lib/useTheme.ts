@@ -13,6 +13,8 @@ import {
 export type { Theme } from './themeCatalog'
 export { THEME_STORAGE_KEY } from './themeCatalog'
 
+const THEME_CHANGE_EVENT = 'skillops:theme-change'
+
 function isTheme(value: string | null | undefined): value is Theme {
   return Boolean(value && (themeIds as readonly string[]).includes(value))
 }
@@ -65,6 +67,12 @@ export function useTheme() {
   }, [state.source, state.theme])
 
   useEffect(() => {
+    const syncTheme = (event: Event) => setState((event as CustomEvent<ReturnType<typeof initialThemeState>>).detail)
+    window.addEventListener(THEME_CHANGE_EVENT, syncTheme)
+    return () => window.removeEventListener(THEME_CHANGE_EVENT, syncTheme)
+  }, [])
+
+  useEffect(() => {
     if (state.source !== 'system' || typeof window.matchMedia !== 'function') return
     const media = window.matchMedia('(prefers-color-scheme: dark)')
     const syncWithSystem = (event: MediaQueryListEvent) => {
@@ -74,9 +82,19 @@ export function useTheme() {
     return () => media.removeEventListener?.('change', syncWithSystem)
   }, [state.source])
 
-  const setTheme = useCallback((theme: Theme) => {
-    setState({ theme, source: 'user' })
+  const updateTheme = useCallback((next: ReturnType<typeof initialThemeState>) => {
+    setState(next)
+    window.dispatchEvent(new CustomEvent(THEME_CHANGE_EVENT, { detail: next }))
   }, [])
 
-  return { theme: state.theme, setTheme }
+  const setTheme = useCallback((theme: Theme) => {
+    updateTheme({ theme, source: 'user' })
+  }, [updateTheme])
+
+  const useSystemTheme = useCallback(() => {
+    try { window.localStorage.removeItem(THEME_STORAGE_KEY) } catch { /* The in-memory system preference still applies. */ }
+    updateTheme({ theme: preferredTheme(), source: 'system' })
+  }, [updateTheme])
+
+  return { theme: state.theme, source: state.source, setTheme, useSystemTheme }
 }

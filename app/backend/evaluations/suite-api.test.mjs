@@ -53,6 +53,17 @@ function services(overrides = {}) {
         { id: 'case-1:1', caseId: 'case-1', baseline: { pass: true, score: 100 }, candidate: { pass: true, score: 100 } },
         { id: 'case-2:1', caseId: 'case-2', baseline: { pass: true, score: 100 }, candidate: { pass: false, score: 0 } },
       ]),
+      getDecision: vi.fn().mockResolvedValue(null),
+      appendDecision: vi.fn().mockImplementation(async (runId, decision) => ({
+        decision: {
+          runId,
+          artifactId: 'candidate',
+          candidateHash: 'b'.repeat(64),
+          decision,
+          decidedAt: '2026-07-25T12:00:00.000Z',
+        },
+        reused: false,
+      })),
     },
     ...overrides,
   }
@@ -120,6 +131,33 @@ describe('managed evaluation API', () => {
     expect(cases.json).toEqual({ items: [expect.objectContaining({ id: 'case-1:1' })], nextCursor: 'case-1:1' })
     const cancelled = await call('POST', '/api/evaluation-runs/run-1/cancel', {}, service)
     expect(cancelled.json.cancelled).toBe(true)
+  })
+
+  it('stores only an allowlisted managed decision and returns it across reloads', async () => {
+    const completed = {
+      ...summary,
+      mode: 'suite',
+      status: 'completed',
+      candidate: artifact('candidate', 'b').artifact,
+      policyHash: 'd'.repeat(64),
+      evidenceHash: 'e'.repeat(64),
+    }
+    const service = services({ policyHash: completed.policyHash })
+    service.store.getRun.mockResolvedValue(completed)
+    expect((await call('GET', '/api/evaluation-runs/run-1', undefined, service)).json.evidenceFresh).toBe(true)
+    const created = await call('POST', '/api/evaluation-runs/run-1/decision', { decision: 'keep-baseline' }, service)
+    expect(created.response.statusCode).toBe(201)
+    expect(created.json).toEqual({
+      decision: expect.objectContaining({ runId: 'run-1', decision: 'keep-baseline' }),
+      reused: false,
+    })
+    expect(service.store.appendDecision).toHaveBeenCalledWith('run-1', 'keep-baseline')
+
+    service.store.getDecision.mockResolvedValue(created.json.decision)
+    expect((await call('GET', '/api/evaluation-runs/run-1/decision', undefined, service)).json).toEqual({ decision: created.json.decision })
+    const rejected = await call('POST', '/api/evaluation-runs/run-1/decision', { decision: 'keep-baseline', rawOutput: 'secret' }, service)
+    expect(rejected.response.statusCode).toBe(422)
+    expect(rejected.response.body).not.toContain('secret')
   })
   it('exports sanitized JSON and inert HTML reports', async () => {
     const service = services()

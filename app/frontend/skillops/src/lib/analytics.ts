@@ -1,3 +1,5 @@
+// @ts-expect-error Plain JavaScript truth contract is shared with the backend.
+import { runtimeMetrics } from '../../../../shared/truth-semantics.mjs'
 import type { Runtime, SkillEvent, SkillMetric } from '../types'
 
 export const runtimeLabel: Record<Runtime, string> = {
@@ -28,35 +30,28 @@ export function filterEvents(events: SkillEvent[], runtime: Runtime | 'all', day
 }
 
 function outcomeMetrics(runs: SkillEvent[]) {
-  const successes = runs.filter((event) => event.event === 'skill.completed' && event.outcome === 'success').length
-  const failures = runs.filter((event) => event.event === 'skill.failed').length
-  const knownOutcomes = successes + failures
-  const lifecycleOnly = runs.length > 0 && knownOutcomes === 0
+  const metrics = runtimeMetrics(runs)
   return {
-    successes,
-    knownOutcomes,
-    reportedOutcomeRuns: knownOutcomes,
-    outcomeCoverage: runs.length ? (knownOutcomes / runs.length) * 100 : 0,
-    lifecycleOnly,
-    successRate: knownOutcomes ? (successes / knownOutcomes) * 100 : null,
+    successes: metrics.successRate.numerator,
+    knownOutcomes: metrics.knownOutcomes,
+    reportedOutcomeRuns: metrics.knownOutcomes,
+    outcomeCoverage: metrics.runtimeOutcomeCoverage.value ?? 0,
+    lifecycleOnly: runs.length > 0 && metrics.knownOutcomes === 0,
+    successRate: metrics.successRate.value,
   }
 }
 
 export function summarize(events: SkillEvent[]) {
-  const runs = terminalRuns(events)
-  const outcomes = outcomeMetrics(runs)
-  const reportedCosts = runs
-    .map((event) => event.costUsd)
-    .filter((cost): cost is number => typeof cost === 'number' && Number.isFinite(cost))
+  const metrics = runtimeMetrics(events)
   return {
-    runs: runs.length,
-    successRate: outcomes.successRate,
-    lifecycleOnly: outcomes.lifecycleOnly,
-    reportedOutcomeRuns: outcomes.reportedOutcomeRuns,
-    outcomeCoverage: outcomes.outcomeCoverage,
-    activeSkills: new Set(runs.map((event) => event.skillId).filter(Boolean)).size,
-    cost: reportedCosts.reduce((sum, cost) => sum + cost, 0),
-    costReportedRuns: reportedCosts.length,
+    runs: metrics.terminalRuns,
+    successRate: metrics.successRate.value,
+    lifecycleOnly: metrics.terminalRuns > 0 && metrics.knownOutcomes === 0,
+    reportedOutcomeRuns: metrics.knownOutcomes,
+    outcomeCoverage: metrics.runtimeOutcomeCoverage.value ?? 0,
+    activeSkills: metrics.observedAssets,
+    cost: metrics.reportedCostUsd ?? 0,
+    costReportedRuns: metrics.costCoverage.numerator,
   }
 }
 

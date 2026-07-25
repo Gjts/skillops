@@ -6,6 +6,8 @@ import { appendEvent, appendEvents, clearEvents, eventVersion, readEvents, readJ
 import { initializeConflictServices } from './conflicts/conflict-api.mjs'
 import { handleEvaluationApi, initializeGovernanceServices, initializeManagedEvaluationServices, initializeTeamControlPlane } from './skill-evaluations.mjs'
 import { syncCodexDesktopEvents } from './codex-desktop-ingest.mjs'
+import { handleCommandCenterApi } from './command-center.mjs'
+import { handleAgentsApi } from './agents-api.mjs'
 import { enrichRuntimeConnections, readRuntimeConnections } from './runtime-connections.mjs'
 import { scanSkillInventory } from './skill-scanner.mjs'
 import { isLoopbackHostname } from './evaluations/provider-client.mjs'
@@ -31,6 +33,8 @@ initializeConflictServices()
 
 const server = createServer(async (request, response) => {
   const pathname = new URL(request.url || '/', 'http://localhost').pathname
+  if (await handleCommandCenterApi(request, response, pathname)) return
+  if (await handleAgentsApi(request, response, pathname)) return
   if (await handleEvaluationApi(request, response, pathname, { managedEvaluationServices, teamControlPlane })) return
   if (await handleRunsApi(request, response, pathname)) return
   if (pathname === '/api/connections' || pathname === '/api/scan' || pathname === '/api/events' || pathname === '/api/import') {
@@ -73,7 +77,8 @@ const server = createServer(async (request, response) => {
   }
 
   if (pathname === '/api/events') {
-    response.setHeader('Content-Type', 'application/json')
+    response.setHeader('Content-Type', 'application/json; charset=utf-8')
+    response.setHeader('Cache-Control', 'no-store')
     try {
       if (request.method === 'GET') {
         await syncCodexDesktopEvents()
@@ -83,7 +88,19 @@ const server = createServer(async (request, response) => {
           response.statusCode = 304
           return response.end()
         }
-        return response.end(JSON.stringify(await readEvents()))
+        const events = await readEvents()
+        const mode = new URL(request.url || pathname, 'http://127.0.0.1').searchParams
+        if (mode.get('summary') === '1') {
+          const runtimeEvents = events.filter((event) => event.event !== 'skill.discovered')
+          const lastEvent = runtimeEvents.reduce((latest, event) => !latest || Date.parse(event.timestamp) > Date.parse(latest.timestamp) ? event : latest, null)
+          return response.end(JSON.stringify({ generatedAt: new Date().toISOString(), count: events.length, lastRuntimeEventAt: lastEvent?.timestamp ?? null }))
+        }
+        if (mode.get('download') === '1') {
+          response.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8')
+          response.setHeader('Content-Disposition', `attachment; filename="skillops-events-${new Date().toISOString().slice(0, 10)}.jsonl"`)
+          return response.end(events.map((event) => JSON.stringify(event)).join('\n') + (events.length ? '\n' : ''))
+        }
+        return response.end(JSON.stringify(events))
       }
       if (request.method === 'POST') {
         response.statusCode = 201

@@ -19,7 +19,7 @@ function method(request, expected) {
 }
 
 function capabilityRoute(pathname) {
-  const match = pathname.match(/^\/api\/capabilities\/([^/]+)(?:\/(evaluate|approve|canary|install|promote|deprecate|rollback))?$/)
+  const match = pathname.match(/^\/api\/capabilities\/([^/]+)(?:\/(audit|evaluate|approve|canary|install|promote|deprecate|rollback))?$/)
   if (!match) return null
   try { return { id: decodeURIComponent(match[1]), action: match[2] || null } } catch { throw new EvaluationError('Capability ID is invalid.', 422) }
 }
@@ -98,6 +98,10 @@ export async function handleGovernanceApi(request, response, pathname, options =
       method(request, 'GET')
       await authorize('Viewer')
       sendJson(response, 200, await governance.get(route.id))
+    } else if (route.action === 'audit') {
+      method(request, 'GET')
+      await authorize('Viewer')
+      sendJson(response, 200, { items: await governance.listAudit({ capabilityId: route.id }) })
     } else {
       method(request, 'POST')
       if (route.action === 'evaluate') {

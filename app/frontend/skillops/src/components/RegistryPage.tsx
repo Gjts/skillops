@@ -1,4 +1,4 @@
-import { Bot, CheckCircle2, Code2, GitPullRequest, Layers3, MousePointer2, RefreshCw, Search, XCircle } from 'lucide-react'
+import { Bot, CheckCircle2, ChevronLeft, ChevronRight, Code2, GitPullRequest, Layers3, MousePointer2, RefreshCw, Search, XCircle } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { ArtifactRegistry } from './ArtifactRegistry'
 import { ConflictDetailPage } from './ConflictDetailPage'
@@ -6,7 +6,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import type { MessageKey } from '../i18n/messages'
 import { runtimeLabel } from '../lib/analytics'
 import { buildInventoryIssues, countInventoryIssues, definitionKey, issuesForDefinition, normalizedSkillId } from '../lib/skill-inventory'
-import type { ConfigurationSource, DefinitionStatus, InstalledSkill, Runtime, SkillEvent, SkillScanMetadata, SkillScanResponse } from '../types'
+import type { ConfigurationSource, DefinitionStatus, InstalledSkill, Runtime, SkillScanMetadata, SkillScanResponse } from '../types'
 
 type AttentionFilter = 'all' | 'attention' | 'conflict' | 'duplicate' | 'disabled' | 'missing'
 
@@ -66,24 +66,6 @@ function RuntimeIcon({ runtime }: { runtime: Runtime | 'all' }) {
   return <Layers3 size={18} />
 }
 
-function fromEvent(event: SkillEvent): InstalledSkill {
-  const source = event.source ?? 'global'
-  const enabled = event.enabled ?? true
-  return {
-    skillId: event.skillId!,
-    skillVersion: event.skillVersion ?? 'unversioned',
-    runtime: event.runtime,
-    source,
-    sourcePath: event.sourcePath ?? 'Unknown location',
-    provider: event.provider ?? (source === 'project' ? 'Project' : runtimeLabel[event.runtime]),
-    kind: event.kind ?? 'skill',
-    enabled,
-    status: enabled ? 'active' : 'disabled',
-    configurationSource: source === 'plugin' ? 'plugin' : source === 'project' ? 'project' : 'user',
-    description: event.description,
-    tags: event.tags,
-  }
-}
 
 function normalizeInstalledSkill(skill: Partial<InstalledSkill>): InstalledSkill {
   const runtime = skill.runtime ?? 'codex'
@@ -141,7 +123,9 @@ function CategoryPanel({ title, items }: { title: string; items: CategoryItem[] 
   )
 }
 
-export function RegistryPage({ events }: { events: SkillEvent[] }) {
+const PAGE_SIZE = 50
+
+export function RegistryPage() {
   const { formatNumber, t } = useI18n()
   const displayProvider = useCallback((provider: string) => provider === 'Project' ? t('registry.project') : provider, [t])
   const [scannedSkills, setScannedSkills] = useState<InstalledSkill[] | null>(null)
@@ -155,6 +139,7 @@ export function RegistryPage({ events }: { events: SkillEvent[] }) {
   const [attentionFilter, setAttentionFilter] = useState<AttentionFilter>('all')
   const [nominationStatus, setNominationStatus] = useState<Record<string, 'busy' | 'done' | 'failed'>>({})
   const [selectedConflict, setSelectedConflict] = useState<InstalledSkill | null>(null)
+  const [page, setPage] = useState(1)
 
   const nominate = async (skill: InstalledSkill) => {
     const sourceRef = `local-scan:${skill.runtime}:${skill.sourcePath}`
@@ -190,15 +175,10 @@ export function RegistryPage({ events }: { events: SkillEvent[] }) {
   }, [])
 
   useEffect(() => { void scan() }, [scan])
+  useEffect(() => { setPage(1) }, [attentionFilter, providerFilter, query, runtimeFilter, sourceFilter, statusFilter])
 
-  const discovered = useMemo(() => {
-    const definitions = events
-      .filter((event) => event.event === 'skill.discovered' && Boolean(event.skillId))
-      .map(fromEvent)
-    return [...new Map(definitions.map((definition) => [definitionKey(definition), definition])).values()]
-  }, [events])
 
-  const rows = useMemo(() => [...(scannedSkills ?? discovered)], [discovered, scannedSkills])
+  const rows = useMemo(() => [...(scannedSkills ?? [])], [scannedSkills])
   const allEnabledDefinitions = useMemo(() => rows.filter((row) => row.enabled), [rows])
   const allEnabledSkills = useMemo(() => allEnabledDefinitions.filter((row) => row.kind === 'skill'), [allEnabledDefinitions])
   const runtimeStats = useMemo(() => runtimeOrder.map((runtime) => {
@@ -255,6 +235,9 @@ export function RegistryPage({ events }: { events: SkillEvent[] }) {
         Number(right.enabled) - Number(left.enabled) || left.skillId.localeCompare(right.skillId) || left.sourcePath.localeCompare(right.sourcePath))
   }, [attentionFilter, displayProvider, issuesFor, providerFilter, query, rows, runtimeFilter, sourceFilter, statusFilter])
 
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE))
+  const currentPage = Math.min(page, totalPages)
+  const pagedRows = useMemo(() => filteredRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE), [currentPage, filteredRows])
   const visibleRuntimeCounts = useMemo(() => new Map(runtimeOrder.map((runtime) => [runtime, filteredRows.filter((row) => row.runtime === runtime).length])), [filteredRows])
   const scopeLabel = runtimeFilter === 'all' ? t('registry.combined') : runtimeLabel[runtimeFilter]
 
@@ -373,14 +356,15 @@ export function RegistryPage({ events }: { events: SkillEvent[] }) {
         </header>
         <div className="registry-table-scroll">
           <table className="registry-table">
-            <thead><tr><th>Skill</th><th>{t('common.type')}</th><th>{t('common.version')}</th><th>{t('common.runtime')}</th><th>{t('common.category')}</th><th>{t('registry.configurationSource')}</th><th>{t('common.provider')}</th><th>{t('common.location')}</th><th>{t('common.status')}</th><th>{t('registry.governance')}</th></tr></thead>
+            <caption className="sr-only">{t('registry.scopeInventory', { scope: scopeLabel })}</caption>
+            <thead><tr><th>{t('common.skill')}</th><th>{t('common.type')}</th><th>{t('common.version')}</th><th>{t('common.runtime')}</th><th>{t('common.category')}</th><th>{t('registry.configurationSource')}</th><th>{t('common.provider')}</th><th>{t('common.location')}</th><th>{t('common.status')}</th><th>{t('registry.governance')}</th></tr></thead>
             <tbody>
-              {filteredRows.map((skill, index) => {
+              {pagedRows.map((skill, index) => {
                 const nomination = nominationStatus[nominationKey(skill)]
                 const definitionStatus = skill.status ?? (skill.enabled ? 'active' : 'disabled')
                 const configurationSource = skill.configurationSource ?? (skill.source === 'plugin' ? 'plugin' : skill.source === 'project' ? 'project' : 'user')
                 return <Fragment key={definitionKey(skill)}>
-                  {runtimeFilter === 'all' && filteredRows[index - 1]?.runtime !== skill.runtime ? <tr className={`registry-runtime-group runtime-${skill.runtime}`}><th scope="rowgroup" colSpan={10}><span className="registry-runtime-badge"><RuntimeIcon runtime={skill.runtime} />{runtimeLabel[skill.runtime]}</span><strong>{t('registry.runtimeGroup', { runtime: runtimeLabel[skill.runtime], count: formatNumber(visibleRuntimeCounts.get(skill.runtime) ?? 0) })}</strong></th></tr> : null}
+                  {runtimeFilter === 'all' && pagedRows[index - 1]?.runtime !== skill.runtime ? <tr className={`registry-runtime-group runtime-${skill.runtime}`}><th scope="rowgroup" colSpan={10}><span className="registry-runtime-badge"><RuntimeIcon runtime={skill.runtime} />{runtimeLabel[skill.runtime]}</span><strong>{t('registry.runtimeGroup', { runtime: runtimeLabel[skill.runtime], count: formatNumber(visibleRuntimeCounts.get(skill.runtime) ?? 0) })}</strong></th></tr> : null}
                   <tr className={definitionStatus === 'active' ? '' : `is-${definitionStatus}`}>
                     <td><span className="registry-skill-name"><strong>{skill.skillId}</strong>{runtimeFilter === 'all' && sharedSkillIds.has(normalizedSkillId(skill.skillId)) ? <span className="shared-skill">{t('registry.shared')}</span> : null}{[...issuesFor(skill)].map((issue) => <span className={`registry-issue ${issue}`} key={issue}>{t(issueLabel[issue])}</span>)}</span></td>
                     <td>{t(kindLabel[skill.kind])}</td>
@@ -399,6 +383,7 @@ export function RegistryPage({ events }: { events: SkillEvent[] }) {
             </tbody>
           </table>
         </div>
+        {totalPages > 1 && <nav className="runs-pagination-bar registry-pagination" aria-label={t('common.pageOf', { page: formatNumber(currentPage), count: formatNumber(totalPages) })}><div className="pagination-controls"><button type="button" aria-label={t('common.previousPage')} disabled={currentPage === 1} onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft size={15} /></button><span role="status">{t('common.pageOf', { page: formatNumber(currentPage), count: formatNumber(totalPages) })}</span><button type="button" aria-label={t('common.nextPage')} disabled={currentPage === totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))}><ChevronRight size={15} /></button></div></nav>}
       </section>
     </div>
   )

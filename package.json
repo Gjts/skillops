@@ -15,6 +15,7 @@
     "test": "vitest run --root .",
     "start": "node app/backend/server.mjs",
     "smoke": "node scripts/smoke.mjs",
+    "performance": "node --expose-gc scripts/performance.mjs",
     "docs:check": "node scripts/check-markdown-links.mjs",
     "artifacts:check": "node scripts/check-build-artifacts.mjs",
     "scan": "node bin/skillops.mjs scan",

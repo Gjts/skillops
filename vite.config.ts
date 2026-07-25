@@ -12,6 +12,8 @@ import { handleEvaluationApi, initializeManagedEvaluationServices, initializeTea
 // @ts-expect-error Plain JavaScript module is shared with the production server.
 import { syncCodexDesktopEvents } from './app/backend/codex-desktop-ingest.mjs'
 // @ts-expect-error Plain JavaScript module is shared with the production server.
+import { handleCommandCenterApi } from './app/backend/command-center.mjs'
+// @ts-expect-error Plain JavaScript module is shared with the production server.
 import { enrichRuntimeConnections, readRuntimeConnections } from './app/backend/runtime-connections.mjs'
 // @ts-expect-error Plain JavaScript module is shared with the production server.
 import { scanSkillInventory } from './app/backend/skill-scanner.mjs'
@@ -50,6 +52,7 @@ function localEventApi(): Plugin {
       server.httpServer?.once('close', () => { void managedServices.then((services: { manager: { shutdown(): Promise<void> } }) => services.manager.shutdown()) })
       server.middlewares.use(async (request, response, next) => {
         const pathname = new URL(request.url || '/', 'http://localhost').pathname
+        if (await handleCommandCenterApi(request, response, pathname)) return
         if (await handleEvaluationApi(request, response, pathname, { managedEvaluationServices: await managedServices, teamControlPlane: await teamControlPlane })) return
         if (await handleRunsApi(request, response, pathname)) return
         if (pathname === '/api/connections' || pathname === '/api/scan' || pathname === '/api/events' || pathname === '/api/import') {

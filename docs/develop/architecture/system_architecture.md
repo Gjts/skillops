@@ -81,8 +81,8 @@ Runtime hook signal
   → runtime adapter parses privacy-minimized metadata
   → shared normalization validates and discards unknown fields
   → event store appends one JSONL record
-  → GET /api/events returns the local history
-  → frontend recomputes visible metrics
+  → bounded backend projections read the versioned store
+  → frontend renders evidence without receiving the full history
 ```
 
 Telemetry errors are swallowed at the runtime-adapter edge so a collection
@@ -106,7 +106,7 @@ transcript importer.
 ### 5.3 Inventory scan
 
 ```text
-Registry opens or user clicks Scan again
+Assets opens or user clicks Scan again
   → POST /api/scan
   → scanner resolves runtime homes and plugin registries
   → recursively finds SKILL.md and legacy command Markdown
@@ -158,7 +158,20 @@ Artifact content hashes use UTF-8 bytes after BOM removal and CRLF/CR to LF
 normalization. Metadata may cross the local HTTP seam, while the content body
 stays inside a controlled backend renderer.
 
-### 5.6 Unified Artifact Registry
+### 5.6 Personal control-plane projections
+
+```text
+Command Center / Agents / Activity opens
+  → validate runtime, time, query, tab, sort, and page scope
+  → read normalized events through the versioned in-memory cache
+  → derive one deterministic bounded view
+  → return metric provenance or evidence state with no raw content
+```
+
+The projection modules introduce no new persistence. They reuse the event store,
+scanner, connection inspection, evaluation evidence, and Capability state.
+
+### 5.7 Unified Artifact Registry
 
 ```text
 GET /api/artifacts
@@ -186,7 +199,7 @@ The migrated snapshot is read only as compatibility history: versions absent
 from current sources reappear as Deprecated, current source records always win,
 and installation state is always recomputed from the live scan and lock.
 
-### 5.7 Governed Team project templates
+### 5.8 Governed Team project templates
 
 ```text
 skillops init --manifest <Git-managed manifest>
@@ -209,7 +222,10 @@ No template API or hosted template store is introduced.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/events` | Read events; supports `If-None-Match` and `304` |
+| `GET` | `/api/events` | Compatibility event feed with ETag/304; `summary=1` returns bounded status and `download=1` returns normalized JSONL |
+| `GET` | `/api/command-center` | Return one deterministic bounded readiness/metrics/issues/actions/recent-activity projection |
+| `GET` | `/api/agents` | Return one validated 50-row Definitions or Observed Activity page |
+| `GET` | `/api/agents/:id` | Return one Agent projection with a bounded evidence timeline |
 | `GET` | `/api/runs` | Read one validated terminal Skill run page (20/50/100), scoped lifecycle counts, server-side filters, and stable timestamp/ID ordering |
 | `GET` | `/api/runs/~:id` | Read one terminal run in a bounded 200-event correlated session/turn window that preserves the run and reports total/truncation metadata, on demand |
 | `POST` | `/api/events` | Validate and append one event |

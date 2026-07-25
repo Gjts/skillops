@@ -98,7 +98,7 @@ export function QuickRunStage({ task, criteria, mode, busy, running, ready, agen
 }
 
 
-export function QuickResultStage({ evaluation, onDiscuss }: { evaluation: QuickEvaluationResult; onDiscuss: () => void }) {
+export function QuickResultStage({ evaluation, onDiscuss, onManagedSuite }: { evaluation: QuickEvaluationResult; onDiscuss: () => void; onManagedSuite: () => void }) {
   const { t, formatDateTime, formatDuration, formatNumber } = useI18n()
   const winnerLabel = evaluation.winner === 'candidate' ? t('quick.candidateWins') : evaluation.winner === 'baseline' ? t('quick.baselineWins') : t('quick.tie')
   const variants = [
@@ -106,7 +106,7 @@ export function QuickResultStage({ evaluation, onDiscuss }: { evaluation: QuickE
     { label: t('quick.candidate'), winner: 'candidate', variant: evaluation.candidate },
   ]
   return <section className="panel evaluation-result" aria-labelledby="evaluation-result-title">
-    <header><span className="lab-step complete"><CheckCircle2 size={15} /></span><div><h2 id="evaluation-result-title">{t('quick.resultTitle')}</h2><p>{formatDateTime(evaluation.createdAt)} · {evaluation.judge.model} · {evaluation.mode === 'agent' ? t('quick.readOnlyAgentShort') : t('quick.promptOnlyShort')}{evaluation.engine ? ` · ${evaluation.engine.name} ${evaluation.engine.version}` : ''}</p></div><div className="stage-header-actions"><span className={`winner-badge ${evaluation.winner}`}>{winnerLabel}</span><button className="assistant-stage-action" type="button" onClick={onDiscuss}><MessageSquareText size={13} />{t('quick.discussResult')}</button></div></header>
+    <header><span className="lab-step complete"><CheckCircle2 size={15} /></span><div><h2 id="evaluation-result-title">{t('quick.resultTitle')}</h2><p>{formatDateTime(evaluation.createdAt)} · {evaluation.judge.model} · {evaluation.mode === 'agent' ? t('quick.readOnlyAgentShort') : t('quick.promptOnlyShort')}{evaluation.engine ? ` · ${evaluation.engine.name} ${evaluation.engine.version}` : ''}</p></div><div className="stage-header-actions"><span className={`winner-badge ${evaluation.winner}`}>{winnerLabel}</span><button className="assistant-stage-action" type="button" onClick={onManagedSuite}><ShieldCheck size={13} />{t('quick.runManagedSuite')}</button><button className="assistant-stage-action" type="button" onClick={onDiscuss}><MessageSquareText size={13} />{t('quick.discussResult')}</button></div></header>
     <div className="score-comparison">
       {variants.map(({ label, winner, variant }) => <article key={winner} className={evaluation.winner === winner ? 'score-card winner' : 'score-card'}>
         <span>{label}</span><strong>{variant.score}<small>/100</small></strong><h3>{variant.skillId}</h3><p>{formatDuration(variant.durationMs)} · {t('quick.tokenCount', { count: formatNumber(variant.tokens) })}</p><details><summary>{t('quick.viewOutput')}</summary><pre>{variant.output}</pre></details>

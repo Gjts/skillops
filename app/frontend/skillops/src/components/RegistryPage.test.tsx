@@ -16,7 +16,7 @@ describe('registry governance nomination', () => {
       return Promise.reject(new Error(`Unexpected request: ${input} ${init?.method || 'GET'}`))
     })
     vi.stubGlobal('fetch', fetchMock)
-    render(<RegistryPage events={[]} />)
+    render(<RegistryPage />)
     fireEvent.click(await screen.findByRole('button', { name: 'Nominate' }))
     expect(await screen.findByRole('button', { name: 'Nominated' })).toBeTruthy()
     expect(fetchMock).toHaveBeenCalledWith('/api/capabilities', expect.objectContaining({
@@ -39,7 +39,7 @@ describe('registry governance nomination', () => {
       return Promise.reject(new Error(`Unexpected request: ${input}`))
     })
     vi.stubGlobal('fetch', fetchMock)
-    render(<RegistryPage events={[]} />)
+    render(<RegistryPage />)
     fireEvent.click(await screen.findByRole('button', { name: 'Nominate' }))
     expect(await screen.findByRole('button', { name: 'Nominated' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Scan again' }))
@@ -70,7 +70,7 @@ describe('registry governance nomination', () => {
       ] })
     })
     vi.stubGlobal('fetch', fetchMock)
-    const { container } = render(<RegistryPage events={[]} />)
+    const { container } = render(<RegistryPage />)
     await screen.findByText('/home/me/.agents/skills/review/SKILL.md')
 
     const healthButton = (label: string) => [...container.querySelectorAll<HTMLButtonElement>('.registry-health button')]
@@ -124,12 +124,34 @@ describe('registry governance nomination', () => {
       })
     }))
 
-    render(<RegistryPage events={[]} />)
+    render(<RegistryPage />)
 
     expect(await screen.findByText('scan_123')).toBeTruthy()
     expect(screen.getByText('/workspace/repository')).toBeTruthy()
     expect(screen.getByText('Admin')).toBeTruthy()
     expect(screen.getByText('Active')).toBeTruthy()
     expect(screen.getByText('Partially observable')).toBeTruthy()
+  })
+  it('keeps large definition inventories bounded to 50 rows per page', async () => {
+    const definitions = Array.from({ length: 101 }, (_, index) => ({
+      skillId: `skill-${String(index).padStart(3, '0')}`,
+      skillVersion: '1.0.0',
+      runtime: 'codex',
+      source: 'global',
+      sourcePath: `/home/me/.codex/skills/skill-${index}/SKILL.md`,
+      provider: 'Codex',
+      kind: 'skill',
+      enabled: true,
+    }))
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: async () => definitions })))
+
+    const { container } = render(<RegistryPage />)
+    expect(await screen.findByText('skill-000')).toBeTruthy()
+    expect(container.querySelectorAll('.registry-table tbody > tr:not(.registry-runtime-group)')).toHaveLength(50)
+    expect(screen.queryByText('skill-050')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+    expect(await screen.findByText('skill-050')).toBeTruthy()
+    expect(screen.queryByText('skill-000')).toBeNull()
   })
 })

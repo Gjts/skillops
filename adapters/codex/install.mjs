@@ -3,6 +3,7 @@ import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { redactConfigForDisplay } from '../redact-config.mjs'
 
 const installerPath = fileURLToPath(import.meta.url)
 const adapterDir = path.dirname(installerPath)
@@ -75,9 +76,9 @@ export function mergeSkillOpsHooks(config) {
 
 async function readConfig(file) {
   try {
-    return JSON.parse(await readFile(file, 'utf8'))
+    return { config: JSON.parse(await readFile(file, 'utf8')), exists: true }
   } catch (error) {
-    if (error?.code === 'ENOENT') return {}
+    if (error?.code === 'ENOENT') return { config: {}, exists: false }
     throw new Error(`Cannot read ${file}: ${error.message}`)
   }
 }
@@ -90,19 +91,21 @@ export function resolveHooksFile({ scope = 'user', target = process.cwd(), codex
 
 export async function updateInstallation({ scope = 'user', target, codexHome, dryRun = false, uninstall = false } = {}) {
   const file = resolveHooksFile({ scope, target, codexHome })
-  const current = await readConfig(file)
+  const { config: current, exists } = await readConfig(file)
   const next = uninstall ? removeSkillOpsHooks(current) : mergeSkillOpsHooks(current)
-  if (dryRun) return { file, changed: JSON.stringify(current) !== JSON.stringify(next), config: next }
+  const changed = JSON.stringify(current) !== JSON.stringify(next)
+  if (dryRun) return { file, changed, backupPlanned: exists && changed, config: next }
+  if (!changed) return { file, changed, backup: undefined, config: next }
 
   await mkdir(path.dirname(file), { recursive: true })
   let backup
-  if (Object.keys(current).length) {
+  if (exists) {
     const stamp = new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-')
     backup = `${file}.skillops-backup-${stamp}`
     await copyFile(file, backup)
   }
   await writeFile(file, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
-  return { file, backup, changed: JSON.stringify(current) !== JSON.stringify(next), config: next }
+  return { file, backup, changed, config: next }
 }
 
 function parseArguments(args) {
@@ -124,8 +127,9 @@ async function main() {
   const options = parseArguments(process.argv.slice(2))
   const result = await updateInstallation(options)
   if (options.dryRun) {
-    console.log(JSON.stringify(result.config, null, 2))
+    console.log(JSON.stringify(redactConfigForDisplay(result.config), null, 2))
     console.log(`\nDry run only. Target: ${result.file}`)
+    if (result.backupPlanned) console.log('Existing hooks file will be backed up before installation.')
     return
   }
   console.log(options.uninstall ? 'SkillOps Codex hooks removed.' : 'SkillOps Codex hooks installed.')

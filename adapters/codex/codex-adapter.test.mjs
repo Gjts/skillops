@@ -33,7 +33,42 @@ function runHook(input, environment) {
   })
 }
 
+function runInstaller(args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.resolve('adapters/codex/install.mjs'), ...args], {
+      cwd: process.cwd(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (chunk) => { stdout += chunk })
+    child.stderr.on('data', (chunk) => { stderr += chunk })
+    child.on('error', reject)
+    child.on('exit', (code) => code === 0
+      ? resolve({ stdout, stderr })
+      : reject(new Error(`Installer exited ${code}: ${stderr}`)))
+  })
+}
+
 describe('Codex hook installer', () => {
+  it('redacts credential and environment values without changing unrelated handlers during dry-run', async () => {
+    const codexHome = await temporaryDirectory('skillops-codex-dry-run-')
+    const hooksFile = path.join(codexHome, 'hooks.json')
+    const secret = 'CODEX_DRY_RUN_SECRET_SENTINEL'
+    const original = `${JSON.stringify({
+      env: { OPENAI_API_KEY: secret },
+      hooks: { PreToolUse: [{ matcher: '^Bash$', hooks: [{ type: 'command', command: 'echo existing', env: { AUTH_TOKEN: secret } }] }] },
+    }, null, 2)}\n`
+    await writeFile(hooksFile, original)
+
+    const { stdout } = await runInstaller(['--dry-run', '--codex-home', codexHome])
+    expect(stdout).not.toContain(secret)
+    expect(stdout).toContain('[REDACTED]')
+    expect(stdout).toContain('will be backed up')
+    expect(stdout).toContain('echo existing')
+    expect(await readFile(hooksFile, 'utf8')).toBe(original)
+  })
+
   it('emits a cross-shell Windows command', async () => {
     const codexHome = await temporaryDirectory('skillops-codex-home-')
     const hooksFile = path.join(codexHome, 'hooks.json')
@@ -49,13 +84,16 @@ describe('Codex hook installer', () => {
   it('merges idempotently and removes only SkillOps handlers', async () => {
     const codexHome = await temporaryDirectory('skillops-codex-home-')
     const hooksFile = path.join(codexHome, 'hooks.json')
-    await writeFile(hooksFile, JSON.stringify({
+    const original = JSON.stringify({
       description: 'Existing user hooks',
       hooks: { PreToolUse: [{ matcher: '^Bash$', hooks: [{ type: 'command', command: 'echo existing' }] }] },
-    }))
+    })
+    await writeFile(hooksFile, original)
 
-    await updateInstallation({ codexHome })
-    await updateInstallation({ codexHome })
+    const first = await updateInstallation({ codexHome })
+    const second = await updateInstallation({ codexHome })
+    expect(await readFile(first.backup, 'utf8')).toBe(original)
+    expect(second).toEqual(expect.objectContaining({ changed: false, backup: undefined }))
     const installed = JSON.parse(await readFile(hooksFile, 'utf8'))
     expect(installed.description).toBe('Existing user hooks')
     expect(installed.hooks.PreToolUse.flatMap((group) => group.hooks).filter((hook) => hook.command.includes('skillops-codex-hook'))).toHaveLength(1)

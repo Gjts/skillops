@@ -53,6 +53,9 @@ describe('governance API', () => {
   it('implements the capability collection, detail, evidence, approval, and canary routes', async () => {
     expect((await call('GET', '/api/capabilities')).json.items).toHaveLength(1)
     expect((await call('GET', '/api/capabilities/cap-1')).json.id).toBe('cap-1')
+    const audit = await call('GET', '/api/capabilities/cap-1/audit')
+    expect(audit.json.items).toEqual([{ id: 'audit-1', action: 'candidate.nominated' }])
+    expect(audit.governance.listAudit).toHaveBeenCalledWith({ capabilityId: 'cap-1' })
     const governance = service()
     const nomination = await call('POST', '/api/capabilities', {
       artifact: {},

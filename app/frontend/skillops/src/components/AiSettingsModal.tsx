@@ -10,9 +10,29 @@ interface AiSettingsModalProps {
   onSave: (settings: AiSettings) => void
 }
 
+const SAVED_KEY_MASK = '••••••••'
+
+function maskCredentials(settings: AiSettings) {
+  const masked = structuredClone(settings)
+  for (const config of Object.values(masked.providers)) {
+    if (config.apiKey) config.apiKey = SAVED_KEY_MASK
+  }
+  return masked
+}
+
+function restoreCredentials(draft: AiSettings, settings: AiSettings) {
+  const restored = structuredClone(draft)
+  for (const provider of AI_PROVIDERS) {
+    if (restored.providers[provider.id].apiKey === SAVED_KEY_MASK) {
+      restored.providers[provider.id].apiKey = settings.providers[provider.id].apiKey
+    }
+  }
+  return restored
+}
+
 export function AiSettingsModal({ open, settings, onClose, onSave }: AiSettingsModalProps) {
   const { t } = useI18n()
-  const [draft, setDraft] = useState(settings)
+  const [draft, setDraft] = useState(() => maskCredentials(settings))
   const [showKey, setShowKey] = useState(false)
   const dialog = useRef<HTMLDivElement>(null)
   const previousFocus = useRef<HTMLElement | null>(null)
@@ -20,7 +40,7 @@ export function AiSettingsModal({ open, settings, onClose, onSave }: AiSettingsM
   useEffect(() => {
     if (!open) return
     previousFocus.current = document.activeElement as HTMLElement | null
-    setDraft(settings)
+    setDraft(maskCredentials(settings))
     setShowKey(false)
     const timer = window.setTimeout(() => dialog.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus(), 0)
     const handleKey = (event: KeyboardEvent) => {
@@ -99,14 +119,14 @@ export function AiSettingsModal({ open, settings, onClose, onSave }: AiSettingsM
             <section className="ai-provider-config" aria-labelledby="provider-config-title">
               <div><h3 id="provider-config-title">{provider.label}</h3><p>{helper}</p></div>
               {provider.requiresKey && (
-                <label className="ai-field">
-                  <span><KeyRound size={14} /> {t('ai.apiKey')}</span>
+                <div className="ai-field">
+                  <label htmlFor="ai-provider-api-key"><KeyRound size={14} /> {t('ai.apiKey')}</label>
                   <span className="secret-input">
-                    <input type={showKey ? 'text' : 'password'} value={config.apiKey} autoComplete="off" placeholder={t('ai.enterApiKey', { provider: provider.label })} onChange={(event) => updateConfig({ apiKey: event.target.value })} />
+                    <input id="ai-provider-api-key" type={showKey ? 'text' : 'password'} value={config.apiKey} autoComplete="off" placeholder={t('ai.enterApiKey', { provider: provider.label })} onFocus={(event) => { if (event.currentTarget.value === SAVED_KEY_MASK) event.currentTarget.select() }} onChange={(event) => updateConfig({ apiKey: event.target.value })} />
                     <button type="button" aria-label={showKey ? t('ai.hideApiKey') : t('ai.showApiKey')} onClick={() => setShowKey((visible) => !visible)}>{showKey ? <EyeOff size={15} /> : <Eye size={15} />}</button>
                   </span>
                   {provider.keyUrl && <small><a href={provider.keyUrl} target="_blank" rel="noreferrer">{t('ai.getApiKey', { provider: provider.label })}<ExternalLink size={11} /></a></small>}
-                </label>
+                </div>
               )}
               <label className="ai-field">
                 <span>{provider.id === 'azure-openai' ? t('ai.modelDeployment') : t('common.model')}</span>
@@ -139,7 +159,7 @@ export function AiSettingsModal({ open, settings, onClose, onSave }: AiSettingsM
           </div>
         </div>
 
-        <footer><button className="button secondary" type="button" onClick={onClose}>{t('common.cancel')}</button><button className="button ai-primary" type="button" disabled={!canSave} onClick={() => onSave(draft)}>{t('ai.saveSettings')}</button></footer>
+        <footer><button className="button secondary" type="button" onClick={onClose}>{t('common.cancel')}</button><button className="button ai-primary" type="button" disabled={!canSave} onClick={() => onSave(restoreCredentials(draft, settings))}>{t('ai.saveSettings')}</button></footer>
       </div>
     </div>
   )

@@ -1,5 +1,5 @@
 import { Bot, Box, CheckCircle2, Circle, Code2, X, XCircle } from 'lucide-react'
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useI18n, type I18nContextValue } from '../i18n/I18nProvider'
 import { demoErrorKeys } from '../i18n/demo'
 import type { MessageKey } from '../i18n/messages'
@@ -53,6 +53,7 @@ export function correlatedRunEvents(run: SkillEvent, events: SkillEvent[]) {
 export function RunDetail({ run, events, totalEvents = events.length, truncated = false, onClose }: { run: SkillEvent; events: SkillEvent[]; totalEvents?: number; truncated?: boolean; onClose: () => void }) {
   const { formatDateTime, formatDuration, formatNumber, formatTime, formatUsd, t } = useI18n()
   const closeRef = useRef<HTMLButtonElement>(null)
+  const dialogRef = useRef<HTMLElement>(null)
   const previousFocus = useRef<HTMLElement | null>(null)
   const timeline = useMemo(() => correlatedRunEvents(run, events), [events, run])
   const Icon = runtimeIcon[run.runtime]
@@ -68,9 +69,19 @@ export function RunDetail({ run, events, totalEvents = events.length, truncated 
     return () => { window.removeEventListener('keydown', escape); previousFocus.current?.focus() }
   }, [onClose])
 
+  const trapFocus = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'Tab') return
+    const controls = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])') ?? [])]
+    if (!controls.length) return
+    const first = controls[0]
+    const last = controls.at(-1)!
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+  }
+
   return (
     <div className="modal-backdrop run-detail-backdrop" role="presentation" onMouseDown={onClose}>
-      <aside className="run-detail" role="dialog" aria-modal="true" aria-labelledby="run-detail-title" onMouseDown={(event) => event.stopPropagation()}>
+      <aside ref={dialogRef} className="run-detail" role="dialog" aria-modal="true" aria-labelledby="run-detail-title" onKeyDown={trapFocus} onMouseDown={(event) => event.stopPropagation()}>
         <header>
           <div><span className="eyebrow">{t('detail.title')}</span><h2 id="run-detail-title">{run.skillId ?? t('detail.unidentified')}</h2><p className="mono">{run.id}</p></div>
           <button ref={closeRef} type="button" aria-label={t('detail.close')} onClick={onClose}><X size={18} /></button>

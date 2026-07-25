@@ -60,6 +60,30 @@ describe('evaluation store', () => {
     expect(await store.health()).toEqual(expect.objectContaining({ warning: true, automaticDeletion: false }))
   })
 
+  it('persists only authoritative managed decision metadata and makes retries idempotent', async () => {
+    const store = await temporaryStore()
+    await store.appendRun(summary({ evidenceHash: 'f'.repeat(64) }))
+
+    const first = await store.appendDecision('run-1', 'create-candidate')
+    expect(first).toEqual({
+      decision: {
+        runId: 'run-1',
+        artifactId: 'candidate',
+        candidateHash: 'b'.repeat(64),
+        decision: 'create-candidate',
+        decidedAt: expect.any(String),
+      },
+      reused: false,
+    })
+    expect(await store.appendDecision('run-1', 'create-candidate')).toEqual({ decision: first.decision, reused: true })
+    const revised = await store.appendDecision('run-1', 'collect-more-evidence')
+    expect(revised.reused).toBe(false)
+    expect(await store.getDecision('run-1')).toEqual(revised.decision)
+    expect(Object.keys(revised.decision).sort()).toEqual(['artifactId', 'candidateHash', 'decidedAt', 'decision', 'runId'])
+    await expect(store.appendDecision('run-1', 'promote')).rejects.toThrow('decision')
+    await expect(store.appendDecision('missing', 'keep-baseline')).rejects.toThrow('not found')
+  })
+
   it('hashes local source paths before persisting evaluation evidence', async () => {
     const store = await temporaryStore()
     const sourcePath = 'C:\\Users\\owner\\private-project\\.codex\\skills\\review\\SKILL.md'
@@ -162,7 +186,8 @@ describe('evaluation store', () => {
 
   it('prunes expired terminal runs while preserving governed evidence and active work', async () => {
     const store = await temporaryStore()
-    await store.appendRun(summary({ id: 'expired', requestedAt: '2026-07-20T00:00:00.000Z' }))
+    await store.appendRun(summary({ id: 'expired', requestedAt: '2026-07-20T00:00:00.000Z', evidenceHash: 'f'.repeat(64) }))
+    await store.appendDecision('expired', 'reject-candidate')
     await store.appendRun(summary({ id: 'governed', requestedAt: '2026-07-20T00:00:00.000Z' }))
     await store.appendRun(summary({
       id: 'active',
@@ -183,7 +208,7 @@ describe('evaluation store', () => {
 
     expect(result).toEqual({
       removedRuns: 1,
-      removedRecords: 1,
+      removedRecords: 2,
       retainedRuns: 3,
       removedBackups: 1,
       backupFile: expect.stringContaining('.backup-'),

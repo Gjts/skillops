@@ -44,7 +44,8 @@ export function SkillTable({ events, definitionEvents = events, limit, searchabl
       </header>
       <div className="table-scroll">
         <table className="skill-table">
-          <thead><tr><th aria-label={t('skills.expand')} /><th>Skill <span className="sort">↑</span></th><th>{t('common.version')}</th><th>{t('skills.primaryRuntime')}</th><th>{t('nav.runs')} <span className="sort">↓</span></th><th>{t('skills.success')}</th><th>{t('common.cost')}</th><th>{t('charts.trend')}</th></tr></thead>
+          <caption className="sr-only">{t('skills.performance')}</caption>
+          <thead><tr><th aria-label={t('skills.expand')} /><th>{t('common.skill')} <span className="sort">↑</span></th><th>{t('common.version')}</th><th>{t('skills.primaryRuntime')}</th><th>{t('nav.runs')} <span className="sort">↓</span></th><th>{t('skills.success')}</th><th>{t('common.cost')}</th><th>{t('charts.trend')}</th></tr></thead>
           <tbody>
             {visible.map((metric) => {
               const seedDefinition = demo ? skillDefinitionById.get(metric.skillId) : undefined

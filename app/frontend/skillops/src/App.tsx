@@ -1,60 +1,65 @@
 import {
-  Bot,
-  Box,
   CalendarDays,
   ChevronLeft,
   ChevronRight,
   ChevronDown,
   Code2,
-  Download,
-  Lightbulb,
   PlugZap,
-  ShieldCheck,
   Search,
-  Trash2,
   Upload,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 // @ts-expect-error Plain JavaScript schema shared with the local event API.
 import { normalizeEvent } from '../../../shared/event-schema.mjs'
 import { ActivityRail } from './components/ActivityRail'
+import { AgentsPage } from './components/AgentsPage'
 import { ConnectModal } from './components/ConnectModal'
-import { RuntimeDistribution, RunsChart } from './components/Charts'
+import { CommandCenter } from './components/CommandCenter'
 import { EvaluationWorkspace } from './components/EvaluationWorkspace'
 import { GovernancePage } from './components/GovernancePage'
-import { KpiStrip } from './components/KpiStrip'
 import { RegistryPage } from './components/RegistryPage'
 import { correlatedRunEvents, RunDetail } from './components/RunDetail'
 import { Sidebar } from './components/Sidebar'
+import { SettingsPage } from './components/SettingsPage'
 import { TeamPage } from './components/TeamPage'
-import { SkillTable } from './components/SkillTable'
 import { createSeedEvents } from './data/seed'
 import { useI18n } from './i18n/I18nProvider'
 import type { MessageKey } from './i18n/messages'
-import { filterEvents, runtimeLabel, summarize, terminalRuns } from './lib/analytics'
+import { filterEvents, runtimeLabel, terminalRuns } from './lib/analytics'
 import { EventFileError, parseEventFile, type EventFileErrorCode } from './lib/import-events'
 import type { Outcome, PageId, Runtime, RuntimeConnection, SkillEvent } from './types'
 
 const EVENT_REFRESH_MS = 3_000
 const CONNECTION_REFRESH_MS = 5_000
 const pathForPage: Record<PageId, string> = {
-  overview: '/',
-  skills: '/skills',
-  runs: '/runs',
-  evaluations: '/evaluations',
-  registry: '/registry',
-  governance: '/governance',
+  'command-center': '/',
+  agents: '/agents',
+  activity: '/activity',
+  assets: '/assets',
+  benchmarks: '/benchmarks',
+  releases: '/releases',
   team: '/team',
   settings: '/settings',
 }
 const pageForPath = new Map<string, PageId>([
-  ['/', 'overview'],
-  ['/overview', 'overview'],
-  ...Object.entries(pathForPage).map(([page, path]) => [path, page as PageId] as const),
+  ['/', 'command-center'],
+  ['/overview', 'command-center'],
+  ['/agents', 'agents'],
+  ['/activity', 'activity'],
+  ['/runs', 'activity'],
+  ['/assets', 'assets'],
+  ['/skills', 'assets'],
+  ['/registry', 'assets'],
+  ['/benchmarks', 'benchmarks'],
+  ['/evaluations', 'benchmarks'],
+  ['/releases', 'releases'],
+  ['/governance', 'releases'],
+  ['/team', 'team'],
+  ['/settings', 'settings'],
 ])
 
 function currentPage() {
-  return pageForPath.get(window.location.pathname.replace(/\/$/, '') || '/') ?? 'overview'
+  return pageForPath.get(window.location.pathname.replace(/\/$/, '') || '/') ?? 'command-center'
 }
 
 const checkingConnections: RuntimeConnection[] = [
@@ -64,13 +69,13 @@ const checkingConnections: RuntimeConnection[] = [
 ]
 
 const pageTitle: Record<PageId, MessageKey> = {
-  overview: 'nav.overview',
-  skills: 'nav.skills',
-  runs: 'nav.runs',
-  evaluations: 'nav.evaluations',
-  registry: 'nav.registry',
-  governance: 'nav.governance',
-  team: 'nav.team',
+  'command-center': 'nav.commandCenter',
+  agents: 'nav.agents',
+  activity: 'nav.activity',
+  assets: 'nav.assets',
+  benchmarks: 'nav.benchmarks',
+  releases: 'nav.releases',
+  team: 'nav.settings',
   settings: 'nav.settings',
 }
 
@@ -86,10 +91,6 @@ type ImportFeedback =
   | { kind: 'error'; code: EventFileErrorCode; line?: number }
   | { kind: 'error'; code: 'request-failed'; line?: number }
 
-type DataFeedback =
-  | { kind: 'exported'; count: number }
-  | { kind: 'cleared'; count: number; backupFile?: string }
-  | { kind: 'clear-failed'; error?: string }
 
 type RunPageSize = 20 | 50 | 100
 type RunSort = 'timestamp_desc' | 'timestamp_asc'
@@ -176,7 +177,10 @@ function runLocationParams(state: RunLocationState) {
 }
 
 function writeRunLocation(state: RunLocationState, method: 'pushState' | 'replaceState' = 'replaceState') {
-  window.history[method]({}, '', `/runs?${runLocationParams(state)}`)
+  const pathname = window.location.pathname === '/runs' ? '/runs' : '/activity'
+  const params = runLocationParams(state)
+  if (pathname === '/activity') params.set('tab', 'runs')
+  window.history[method]({}, '', `${pathname}?${params}`)
 }
 
 function runsApiPath(state: RunLocationState) {
@@ -311,8 +315,8 @@ export default function App() {
   const { t } = useI18n()
   const [page, setPage] = useState<PageId>(currentPage)
   const [events, setEvents] = useState<SkillEvent[]>([])
-  const [runtime, setRuntime] = useState<Runtime | 'all'>(() => currentPage() === 'runs' ? readRunLocation().runtime : 'all')
-  const [days, setDays] = useState(() => currentPage() === 'runs' ? readRunLocation().days : 7)
+  const [runtime, setRuntime] = useState<Runtime | 'all'>(() => currentPage() === 'activity' ? readRunLocation().runtime : 'all')
+  const [days, setDays] = useState(() => currentPage() === 'activity' ? readRunLocation().days : 7)
   const [connectOpen, setConnectOpen] = useState(false)
   const [connectRuntime, setConnectRuntime] = useState<Runtime>('codex')
   const [requestedRunId, setRequestedRunId] = useState<string | null>(null)
@@ -322,7 +326,6 @@ export default function App() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [runsMode, setRunsMode] = useState<'loading' | 'demo' | 'local'>('loading')
   const [runsLoadError, setRunsLoadError] = useState<string | null>(null)
-  const eventEtag = useRef<string | null>(null)
 
   const loadConnections = useCallback(async () => {
     try {
@@ -339,38 +342,6 @@ export default function App() {
     }
   }, [t])
 
-  useEffect(() => {
-    if (page === 'runs') return
-    let cancelled = false
-    const controller = new AbortController()
-    const load = async (initial: boolean) => {
-      try {
-        const response = await fetch('/api/events', {
-          signal: controller.signal,
-          ...(eventEtag.current ? { headers: { 'If-None-Match': eventEtag.current } } : {}),
-        })
-        if (response.status === 304) return
-        if (!response.ok) throw new Error(t('errors.eventStatus', { status: response.status }))
-        const localEvents = await response.json() as SkillEvent[]
-        if (cancelled) return
-        if (!Array.isArray(localEvents)) throw new Error(t('errors.eventInvalid'))
-        setEvents(localEvents)
-        eventEtag.current = response.headers?.get?.('etag') ?? null
-        setMode('local')
-        setLoadError(null)
-      } catch (error) {
-        if (cancelled) return
-        if (initial) {
-          setEvents(createSeedEvents())
-          setMode('demo')
-          setLoadError(error instanceof Error ? error.message : t('errors.localUnavailable'))
-        }
-      }
-    }
-    void load(true)
-    const interval = window.setInterval(() => { void load(false) }, EVENT_REFRESH_MS)
-    return () => { cancelled = true; controller.abort(); window.clearInterval(interval) }
-  }, [page, t])
 
   useEffect(() => {
     void loadConnections()
@@ -381,7 +352,7 @@ export default function App() {
   useEffect(() => {
     const restorePage = () => {
       const nextPage = currentPage()
-      if (nextPage === 'runs') {
+      if (nextPage === 'activity') {
         const restored = readRunLocation()
         setRuntime(restored.runtime)
         setDays(restored.days)
@@ -396,23 +367,25 @@ export default function App() {
     if (window.location.pathname !== pathForPage[target]) window.history.pushState({}, '', pathForPage[target])
     setPage(target)
   }
+  const openHref = (href: string) => {
+    const url = new URL(href, window.location.origin)
+    window.history.pushState({}, '', `${url.pathname}${url.search}`)
+    const target = pageForPath.get(url.pathname.replace(/\/$/, '') || '/') ?? 'command-center'
+    if (target === 'activity') {
+      const restored = readRunLocation()
+      setRuntime(restored.runtime)
+      setDays(restored.days)
+      setRequestedRunId(url.searchParams.get('run'))
+    }
+    setPage(target)
+  }
 
   const openConnect = (target: Runtime = 'codex') => {
     setConnectRuntime(target)
     setConnectOpen(true)
   }
-  const openRun = (runId: string) => {
-    setRequestedRunId(runId)
-    navigate('runs')
-  }
-  const openCostRuns = () => {
-    window.history.pushState({}, '', '/runs?cost=reported')
-    setPage('runs')
-  }
 
   const filtered = useMemo(() => filterEvents(events, runtime, days), [events, runtime, days])
-  const summary = useMemo(() => summarize(filtered), [filtered])
-  const visibleRuns = useMemo(() => terminalRuns(filtered), [filtered])
 
   const importEvents = async (incoming: SkillEvent[]) => {
     const response = await fetch('/api/import', {
@@ -442,23 +415,26 @@ export default function App() {
     setRunsMode('demo')
     setRunsLoadError(error)
   }, [])
+  const updateCommandCenterMode = useCallback((nextMode: 'loading' | 'local' | 'demo', error?: string) => {
+    setMode(nextMode)
+    setLoadError(error ?? null)
+  }, [])
 
   const clearLocalEvents = async () => {
     const response = await fetch('/api/events', { method: 'DELETE' })
     const result = await response.json() as { removed?: number; backupFile?: string; error?: string }
     if (!response.ok) throw new Error(result.error || t('errors.clearStatus', { status: response.status }))
     setEvents([])
-    eventEtag.current = null
     setMode('local')
     return { removed: result.removed ?? 0, backupFile: result.backupFile }
   }
 
-  const activeMode = page === 'runs' ? runsMode : mode
-  const activeLoadError = page === 'runs' ? runsLoadError : loadError
-  const showEventFilters = page === 'overview' || page === 'skills' || page === 'runs'
-  const modeLabel = page === 'registry' ? t('mode.liveInventory')
-    : page === 'evaluations' ? t('mode.liveEvaluation')
-      : page === 'governance' ? t('mode.liveGovernance')
+  const activeMode = page === 'activity' ? runsMode : page === 'command-center' ? mode : 'local'
+  const activeLoadError = page === 'activity' ? runsLoadError : page === 'command-center' ? loadError : null
+  const showEventFilters = page === 'command-center' || page === 'activity'
+  const modeLabel = page === 'assets' ? t('mode.liveInventory')
+    : page === 'benchmarks' ? t('mode.liveEvaluation')
+      : page === 'releases' ? t('mode.liveGovernance')
         : page === 'team' ? t('mode.liveTeam')
           : activeMode === 'loading' ? t('mode.loadingEvents') : activeMode === 'demo' ? t('mode.demoDataset') : t('mode.localEvents')
 
@@ -475,49 +451,24 @@ export default function App() {
           </div>
         </header>
 
-        {activeLoadError && page !== 'registry' && <div className="data-warning" role="alert">{t('mode.loadWarning', { error: activeLoadError })}</div>}
+        {activeLoadError && page !== 'assets' && page !== 'command-center' && <div className="data-warning" role="alert">{t('mode.loadWarning', { error: activeLoadError })}</div>}
 
-        {page === 'overview' && (
-          <div className="dashboard-layout">
-            <div className="dashboard-content">
-              <KpiStrip {...summary} mode={mode === 'demo' ? 'demo' : 'local'} onViewCostRuns={openCostRuns} />
-              {visibleRuns.length ? <><div className="charts-grid"><RunsChart events={filtered} days={days} /><RuntimeDistribution events={filtered} /></div><SkillTable events={filtered} definitionEvents={events} limit={4} days={days} demo={mode === 'demo'} onViewRun={openRun} />{mode === 'demo' && <Insight onCompare={() => navigate('evaluations')} />}</> : <EmptyActivity runtime={runtime} days={days} onConnect={() => openConnect(runtime === 'all' ? 'codex' : runtime)} onShowAll={runtime === 'all' ? undefined : () => setRuntime('all')} />}
-            </div>
-            <ActivityRail events={filtered} onViewAll={() => navigate('runs')} onSelectRun={(run) => openRun(run.id)} onConnect={() => openConnect(runtime === 'all' ? 'codex' : runtime)} refreshLabel={t('activity.refresh')} />
-          </div>
-        )}
-        {page === 'skills' && <div className="single-page">{visibleRuns.length ? <SkillTable events={filtered} definitionEvents={events} searchable days={days} demo={mode === 'demo'} onViewRun={openRun} /> : <EmptyActivity runtime={runtime} days={days} onConnect={() => openConnect(runtime === 'all' ? 'codex' : runtime)} onShowAll={runtime === 'all' ? undefined : () => setRuntime('all')} />}</div>}
-        {page === 'runs' && <RunsPage events={filtered} mode={runsMode} runtime={runtime} days={days} requestedRunId={requestedRunId} onRequestedRunHandled={() => setRequestedRunId(null)} onRunsAvailable={markRunsAvailable} onRunsRetry={retryRuns} onRunsUnavailable={useRunsDemo} onRuntimeChange={setRuntime} onDaysChange={setDays} onConnect={() => openConnect(runtime === 'all' ? 'codex' : runtime)} onImport={importEvents} />}
-        {page === 'evaluations' && <EvaluationWorkspace />}
-        {page === 'registry' && <RegistryPage events={events} />}
-        {page === 'governance' && <GovernancePage />}
+        {page === 'command-center' && <CommandCenter runtime={runtime} days={days} onOpen={openHref} onModeChange={updateCommandCenterMode} />}
+        {page === 'agents' && <AgentsPage onOpen={openHref} />}
+        {page === 'assets' && <div className="single-page assets-page"><RegistryPage /></div>}
+        {page === 'activity' && <RunsPage events={filtered} mode={runsMode} runtime={runtime} days={days} requestedRunId={requestedRunId} onRequestedRunHandled={() => setRequestedRunId(null)} onRunsAvailable={markRunsAvailable} onRunsRetry={retryRuns} onRunsUnavailable={useRunsDemo} onRuntimeChange={setRuntime} onDaysChange={setDays} onConnect={() => openConnect(runtime === 'all' ? 'codex' : runtime)} onImport={importEvents} />}
+        {page === 'benchmarks' && <EvaluationWorkspace />}
+        {page === 'releases' && <GovernancePage />}
         {page === 'team' && <TeamPage />}
-        {page === 'settings' && <SettingsPage connections={connections} events={events} localData={mode === 'local'} onConnect={openConnect} onRefresh={loadConnections} onClear={clearLocalEvents} />}
+        {page === 'settings' && <SettingsPage connections={connections} onConnect={openConnect} onRefresh={loadConnections} onClear={clearLocalEvents} onNavigate={navigate} />}
       </main>
       {connectOpen && <ConnectModal initialRuntime={connectRuntime} connections={connections} onRefresh={loadConnections} onClose={() => setConnectOpen(false)} />}
     </div>
   )
 }
 
-function EmptyActivity({ runtime, days, onConnect, onShowAll }: { runtime: Runtime | 'all'; days: number; onConnect: () => void; onShowAll?: () => void }) {
-  const { t } = useI18n()
-  const label = runtime === 'all' ? t('empty.anyRuntime') : runtimeLabel[runtime]
-  const target = runtime === 'all' ? 'Codex' : runtimeLabel[runtime]
-  return <section className="panel empty-state" aria-labelledby="empty-activity-title"><span className="empty-state-icon"><PlugZap size={22} /></span><div><h2 id="empty-activity-title">{t('empty.title', { runtime: label })}</h2><p>{t('empty.description', { days })}</p></div><div><button className="button primary" type="button" onClick={onConnect}>{t('empty.connectTarget', { runtime: target })}</button>{onShowAll && <button className="button secondary" type="button" onClick={onShowAll}>{t('empty.showAll')}</button>}</div></section>
-}
 
-function Insight({ onCompare }: { onCompare: () => void }) {
-  const { t } = useI18n()
-  return (
-    <section className="insight-bar">
-      <span className="insight-icon"><Lightbulb size={22} /></span>
-      <div className="insight-label"><strong>{t('insight.title')}</strong><span>{t('insight.recommendation')}</span></div>
-      <p>{t('insight.description')}</p>
-      <button className="button secondary" type="button" onClick={onCompare}>{t('insight.viewSkill')}</button>
-      <button className="button primary" type="button" onClick={onCompare}>{t('insight.compare')}</button>
-    </section>
-  )
-}
+
 
 function RunsPage({ events, mode, runtime, days, requestedRunId, onRequestedRunHandled, onRunsAvailable, onRunsRetry, onRunsUnavailable, onRuntimeChange, onDaysChange, onConnect, onImport }: RunsPageProps) {
   const { formatNumber, t } = useI18n()
@@ -575,7 +526,7 @@ function RunsPage({ events, mode, runtime, days, requestedRunId, onRequestedRunH
 
   useEffect(() => {
     const restore = () => {
-      if (currentPage() !== 'runs') return
+      if (currentPage() !== 'activity') return
       const restored = readRunLocation()
       previousScope.current = `${restored.runtime}:${restored.days}`
       setRunPage(restored.page)
@@ -872,81 +823,4 @@ function RuntimeLifecycle({ counts, events, runtime }: { counts?: RuntimeActivit
     { label: t('runs.subagents'), value: activity.subagents },
   ]
   return <section className="lifecycle-section" aria-label={t('runs.lifecycleActivity', { runtime: runtimeLabel[runtime] })}><h3>{runtimeLabel[runtime]}</h3><div className="codex-lifecycle">{items.map((item) => <div key={item.label}><span>{item.label}</span><strong>{formatNumber(item.value)}</strong></div>)}</div></section>
-}
-
-function SettingsPage({ connections, events, localData, onConnect, onRefresh, onClear }: { connections: RuntimeConnection[]; events: SkillEvent[]; localData: boolean; onConnect: (runtime: Runtime) => void; onRefresh: () => Promise<RuntimeConnection[]>; onClear: () => Promise<{ removed: number; backupFile?: string }> }) {
-  const { formatDateTime, formatNumber, t } = useI18n()
-  const [confirmClear, setConfirmClear] = useState(false)
-  const [dataFeedback, setDataFeedback] = useState<DataFeedback | null>(null)
-  const [clearing, setClearing] = useState(false)
-  const statusFor = (runtime: Runtime) => {
-    const status = connections.find((connection) => connection.runtime === runtime)?.status ?? 'unavailable'
-    return {
-      checking: t('common.checking'),
-      installed: t('common.installed'),
-      'not-installed': t('common.notInstalled'),
-      preview: t('common.preview'),
-      broken: t('common.broken'),
-      error: t('common.configError'),
-      unavailable: t('common.unavailable'),
-    }[status]
-  }
-  const runtimes: Array<{ runtime: Runtime; name: string; detail: string; status: string; broken: boolean; icon: typeof Code2 }> = [
-    { runtime: 'codex', name: 'Codex', detail: t('settings.codexDetail'), status: statusFor('codex'), broken: connections.find((item) => item.runtime === 'codex')?.status === 'broken', icon: Code2 },
-    { runtime: 'claude-code', name: 'Claude Code', detail: t('settings.claudeDetail'), status: statusFor('claude-code'), broken: connections.find((item) => item.runtime === 'claude-code')?.status === 'broken', icon: Bot },
-    { runtime: 'cursor', name: 'Cursor', detail: t('settings.cursorDetail'), status: statusFor('cursor'), broken: connections.find((item) => item.runtime === 'cursor')?.status === 'broken', icon: Box },
-  ]
-  const activityFor = (runtime: Runtime) => {
-    const connection = connections.find((item) => item.runtime === runtime)
-    if (!connection?.eventCount) return t('connect.noActivity')
-    const lastSeen = connection.lastEventAt ? formatDateTime(connection.lastEventAt) : t('settings.timeUnavailable')
-    return t('settings.activityCount', { count: formatNumber(connection.eventCount), time: lastSeen })
-  }
-  const runtimeEvents = events.filter((event) => event.event !== 'skill.discovered')
-  const lastEvent = [...runtimeEvents].sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp))[0]
-  const exportEvents = () => {
-    const contents = events.map((event) => JSON.stringify(event)).join('\n') + (events.length ? '\n' : '')
-    const url = URL.createObjectURL(new Blob([contents], { type: 'application/x-ndjson' }))
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = `skillops-events-${new Date().toISOString().slice(0, 10)}.jsonl`
-    anchor.click()
-    URL.revokeObjectURL(url)
-    setDataFeedback({ kind: 'exported', count: events.length })
-  }
-  const clear = async () => {
-    setClearing(true)
-    try {
-      const result = await onClear()
-      setDataFeedback({ kind: 'cleared', count: result.removed, backupFile: result.backupFile })
-      setConfirmClear(false)
-    } catch (error) {
-      setDataFeedback({ kind: 'clear-failed', error: error instanceof Error ? error.message : undefined })
-    } finally { setClearing(false) }
-  }
-  const dataStatus = dataFeedback?.kind === 'exported'
-    ? t('settings.exported', { count: formatNumber(dataFeedback.count) })
-    : dataFeedback?.kind === 'cleared'
-      ? t('settings.cleared', {
-        count: formatNumber(dataFeedback.count),
-        path: dataFeedback.backupFile ? t('settings.backupPath', { path: dataFeedback.backupFile }) : '',
-      })
-      : dataFeedback?.kind === 'clear-failed'
-        ? t('settings.clearFailed', { error: dataFeedback.error ?? t('common.unknown') })
-        : null
-  return (
-    <div className="single-page settings-page">
-      <div className="page-intro"><div><h2>{t('settings.runtimeConnections')}</h2><p>{t('settings.description')}</p></div><button className="button secondary" type="button" onClick={() => void onRefresh()}>{t('settings.refresh')}</button></div>
-      <section className="panel connection-list">{runtimes.map((runtime) => { const Icon = runtime.icon; return <div className="connection-row" key={runtime.name}><span className="runtime-icon"><Icon size={18} /></span><div><strong>{runtime.name}</strong><span>{runtime.detail}</span><small>{activityFor(runtime.runtime)}</small></div><span className={`connection-status ${runtime.broken ? 'broken' : ''}`}>{runtime.status}</span><button className="button secondary" type="button" aria-label={t('settings.configureRuntime', { runtime: runtime.name })} onClick={() => onConnect(runtime.runtime)}>{t('common.configure')}</button></div> })}</section>
-      <section className="panel data-controls" aria-labelledby="local-data-title">
-        <header><div><h2 id="local-data-title">{t('settings.localData')}</h2><p>{t('settings.localDataDescription')}</p></div><strong>{t('settings.eventCount', { count: formatNumber(events.length) })}</strong></header>
-        <dl><div><dt>{t('settings.storage')}</dt><dd className="mono">data/events.jsonl</dd></div><div><dt>{t('settings.lastRuntimeEvent')}</dt><dd>{lastEvent ? formatDateTime(lastEvent.timestamp) : t('connect.noActivity')}</dd></div><div><dt>{t('settings.contentBoundary')}</dt><dd>{t('settings.noRawContent')}</dd></div></dl>
-        <footer><button className="button secondary" type="button" disabled={!localData} onClick={exportEvents}><Download size={15} />{t('settings.export')}</button><button className="button danger" type="button" disabled={!localData || clearing} onClick={() => setConfirmClear(true)}><Trash2 size={15} />{t('settings.clear')}</button></footer>
-        {!localData && <p className="data-control-note">{t('settings.apiRequired')}</p>}
-        {dataStatus && <p className="data-control-note" role="status">{dataStatus}</p>}
-      </section>
-      {confirmClear && <div className="confirm-clear" role="alertdialog" aria-modal="true" aria-labelledby="confirm-clear-title"><div><h2 id="confirm-clear-title">{t('settings.confirmTitle', { count: formatNumber(events.length) })}</h2><p>{t('settings.confirmDescription')}</p></div><div><button className="button secondary" type="button" onClick={() => setConfirmClear(false)}>{t('common.cancel')}</button><button className="button danger" type="button" disabled={clearing} onClick={() => void clear()}>{clearing ? t('settings.clearing') : t('settings.clearBackup')}</button></div></div>}
-      <section className="privacy-note"><ShieldCheck size={20} /><div><strong>{t('settings.localFirst')}</strong><p>{t('settings.privacy')}</p></div></section>
-    </div>
-  )
 }

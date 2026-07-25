@@ -13,6 +13,11 @@ The installer merges handlers into `~/.codex/hooks.json` (or `$CODEX_HOME/hooks.
 
 Restart Codex, run `/hooks`, review the exact commands, and trust the new SkillOps definitions. Codex intentionally skips new or changed non-managed hooks until they are trusted.
 
+In SkillOps **Settings**, open Codex and click **Begin verification** before
+invoking a known Skill. Finish the turn, then refresh. **Installed** confirms
+configuration only; **Verified** requires a post-boundary non-discovery
+lifecycle event. A `skill.discovered` record never passes this check.
+
 ## Install for one trusted project
 
 Run this from the SkillOps directory and replace the target path:

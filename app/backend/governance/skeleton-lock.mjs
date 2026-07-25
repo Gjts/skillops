@@ -4,6 +4,8 @@ import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { EvaluationError } from '../evaluations/errors.mjs'
 
+const localLockQueues = new Map()
+
 function deployment(capability, channel, allowLegacyApproval = false) {
   const approvedBy = capability.approvals.filter((item) => item.decision === 'approved'
     && item.evidenceHash === capability.evidence?.evidenceHash
@@ -147,10 +149,11 @@ async function removeOwnedLock(filePath, owner, heldInfo) {
   }
 }
 
-export async function withGovernanceFileLock(filePath, operation, attempts = 100, label = 'governance file') {
+async function acquireGovernanceFileLock(filePath, operation, attempts, label) {
   await mkdir(path.dirname(filePath), { recursive: true })
   const owner = { pid: process.pid, token: randomUUID() }
   let handle
+  let windowsAccessError
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       handle = await open(filePath, 'wx')
@@ -164,16 +167,19 @@ export async function withGovernanceFileLock(filePath, operation, attempts = 100
         handle = undefined
         await removeOwnedLock(filePath, owner, heldInfo)
       }
-      const lockContention = error?.code === 'EEXIST' || (
-        process.platform === 'win32' && error?.code === 'EPERM' &&
-        await stat(filePath).then((info) => info.isFile(), () => false)
-      )
-      if (!lockContention) throw error
-      await removeAbandonedLock(filePath)
+      const windowsAccessRace = process.platform === 'win32' && error?.code === 'EPERM'
+      if (windowsAccessRace) windowsAccessError = error
+      if (error?.code !== 'EEXIST' && !windowsAccessRace) throw error
+      if (error?.code === 'EEXIST' || await stat(filePath).then((info) => info.isFile(), () => false)) {
+        await removeAbandonedLock(filePath)
+      }
       await new Promise((resolve) => setTimeout(resolve, 10))
     }
   }
-  if (!handle) throw new EvaluationError(`Timed out waiting for the ${label} lock.`, 503)
+  if (!handle) {
+    if (windowsAccessError && !await stat(filePath).then((info) => info.isFile(), () => false)) throw windowsAccessError
+    throw new EvaluationError(`Timed out waiting for the ${label} lock.`, 503)
+  }
   const heartbeat = setInterval(() => handle.utimes(new Date(), new Date()).catch(() => undefined), 5_000)
   heartbeat.unref()
   try {
@@ -184,6 +190,16 @@ export async function withGovernanceFileLock(filePath, operation, attempts = 100
     await handle.close()
     await removeOwnedLock(filePath, owner, heldInfo)
   }
+}
+
+export function withGovernanceFileLock(filePath, operation, attempts = 100, label = 'governance file') {
+  const previous = localLockQueues.get(filePath) ?? Promise.resolve()
+  const pending = previous.then(() => acquireGovernanceFileLock(filePath, operation, attempts, label))
+  const settled = pending.catch(() => undefined)
+  localLockQueues.set(filePath, settled)
+  return pending.finally(() => {
+    if (localLockQueues.get(filePath) === settled) localLockQueues.delete(filePath)
+  })
 }
 
 

@@ -34,40 +34,71 @@ describe('runtime connection inspection', () => {
 
     const connected = await readRuntimeConnections({ codexHome, claudeHome })
     expect(connected).toEqual([
-      { runtime: 'codex', status: 'installed' },
-      { runtime: 'claude-code', status: 'installed' },
-      { runtime: 'cursor', status: 'preview' },
+      expect.objectContaining({ runtime: 'codex', status: 'installed', configurationStatus: 'installed', detected: true, verificationBoundaryAt: expect.any(String) }),
+      expect.objectContaining({ runtime: 'claude-code', status: 'installed', configurationStatus: 'installed', detected: true, verificationBoundaryAt: expect.any(String) }),
+      expect.objectContaining({ runtime: 'cursor', status: 'preview', configurationStatus: 'preview' }),
     ])
 
     await rm(claudeHook)
-    expect(await readRuntimeConnections({ codexHome, claudeHome })).toContainEqual({
+    expect(await readRuntimeConnections({ codexHome, claudeHome })).toContainEqual(expect.objectContaining({
       runtime: 'claude-code',
       status: 'broken',
-    })
+      configurationStatus: 'broken',
+    }))
 
     await rm(path.join(claudeHome, 'settings.json'))
-    expect(await readRuntimeConnections({ codexHome, claudeHome })).toContainEqual({
+    expect(await readRuntimeConnections({ codexHome, claudeHome })).toContainEqual(expect.objectContaining({
       runtime: 'claude-code',
       status: 'not-installed',
-    })
+      configurationStatus: 'not-installed',
+      detected: false,
+    }))
   })
 
   it('adds checked time and real runtime activity without counting discovery scans', async () => {
     const { enrichRuntimeConnections } = await import('./runtime-connections.mjs')
     const checkedAt = '2026-07-19T13:00:00.000Z'
     const result = enrichRuntimeConnections([
-      { runtime: 'codex', status: 'installed' },
-      { runtime: 'claude-code', status: 'installed' },
+      { runtime: 'codex', status: 'installed', configurationStatus: 'installed', detected: true, verificationBoundaryAt: '2026-07-19T11:30:00.000Z' },
+      { runtime: 'claude-code', status: 'installed', configurationStatus: 'installed', detected: true, verificationBoundaryAt: '2026-07-19T11:30:00.000Z' },
     ], [
-      { id: 'discovery', event: 'skill.discovered', runtime: 'codex', timestamp: '2026-07-19T10:00:00.000Z' },
+      { id: 'discovery', event: 'skill.discovered', runtime: 'codex', skillId: 'new', timestamp: '2026-07-19T12:30:00.000Z' },
       { id: 'old', event: 'session.started', runtime: 'codex', timestamp: '2026-07-19T11:00:00.000Z' },
-      { id: 'new', event: 'skill.completed', runtime: 'codex', timestamp: '2026-07-19T12:00:00.000Z' },
+      { id: 'new', event: 'skill.completed', runtime: 'codex', skillId: 'new', timestamp: '2026-07-19T12:00:00.000Z', outcome: 'success' },
     ], checkedAt)
 
-    expect(result).toEqual([
-      { runtime: 'codex', status: 'installed', checkedAt, eventCount: 2, lastEventAt: '2026-07-19T12:00:00.000Z' },
-      { runtime: 'claude-code', status: 'installed', checkedAt, eventCount: 0 },
-    ])
+    expect(result[0]).toEqual(expect.objectContaining({
+      runtime: 'codex',
+      connectionStage: 'verified',
+      checkedAt,
+      eventCount: 2,
+      verifiedEvidenceAt: '2026-07-19T12:00:00.000Z',
+      lastEventAt: '2026-07-19T12:00:00.000Z',
+      skillUseObserved: true,
+      terminalRunObserved: true,
+    }))
+    expect(result[1]).toEqual(expect.objectContaining({ runtime: 'claude-code', connectionStage: 'installed', eventCount: 0, activityObserved: false }))
+  })
+
+  it('rejects discovery and lifecycle evidence older than the current hook boundary', async () => {
+    const { enrichRuntimeConnections } = await import('./runtime-connections.mjs')
+    const connection = {
+      runtime: 'codex',
+      status: 'installed',
+      configurationStatus: 'installed',
+      detected: true,
+      verificationBoundaryAt: '2026-07-25T12:00:00.000Z',
+    }
+    const old = enrichRuntimeConnections([connection], [
+      { id: 'history', event: 'skill.completed', runtime: 'codex', skillId: 'alpha', outcome: 'success', timestamp: '2026-07-25T11:59:59.000Z' },
+      { id: 'discovery', event: 'skill.discovered', runtime: 'codex', skillId: 'alpha', timestamp: '2026-07-25T12:01:00.000Z' },
+    ], '2026-07-25T12:02:00.000Z')
+    expect(old[0]).toEqual(expect.objectContaining({ connectionStage: 'awaiting-verification', skillUseObserved: false }))
+
+    const current = enrichRuntimeConnections([connection], [
+      { id: 'started', event: 'skill.started', runtime: 'codex', skillId: 'alpha', timestamp: '2026-07-25T12:00:01.000Z' },
+    ], '2026-07-25T12:02:00.000Z')
+    expect(current[0]).toEqual(expect.objectContaining({ connectionStage: 'verified', verifiedEvidenceAt: '2026-07-25T12:00:01.000Z' }))
   })
 
   it('inspects hooks in the Claude directory selected by CC Switch', async () => {
@@ -89,6 +120,6 @@ describe('runtime connection inspection', () => {
       ccSwitchHome,
       environment: {},
       codexHome: path.join(home, '.codex'),
-    })).toContainEqual({ runtime: 'claude-code', status: 'installed' })
+    })).toContainEqual(expect.objectContaining({ runtime: 'claude-code', status: 'installed', configurationStatus: 'installed' }))
   })
 })

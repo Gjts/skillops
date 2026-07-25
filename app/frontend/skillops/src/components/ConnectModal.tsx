@@ -5,16 +5,16 @@ import type { MessageKey } from '../i18n/messages'
 import { runtimeLabel } from '../lib/analytics'
 import type { Runtime, RuntimeConnection } from '../types'
 
-const options: Array<{ runtime: Runtime; icon: typeof Code2; status: MessageKey; detail: MessageKey; command: string }> = [
-  { runtime: 'codex', icon: Code2, status: 'connect.nativeAdapter', detail: 'connect.codexDetail', command: 'npm run codex:install' },
-  { runtime: 'claude-code', icon: Bot, status: 'connect.nativeAdapter', detail: 'connect.claudeDetail', command: 'npm run claude:install' },
-  { runtime: 'cursor', icon: Box, status: 'connect.previewAdapter', detail: 'connect.cursorDetail', command: 'npm run emit -- skill.started --skill frontend-builder --runtime cursor' },
+const options: Array<{ runtime: Runtime; icon: typeof Code2; detail: MessageKey; preflight?: string; install?: string; uninstall?: string }> = [
+  { runtime: 'codex', icon: Code2, detail: 'connect.codexDetail', preflight: 'npm run codex:dry-run', install: 'npm run codex:install', uninstall: 'npm run codex:uninstall' },
+  { runtime: 'claude-code', icon: Bot, detail: 'connect.claudeDetail', preflight: 'npm run claude:dry-run', install: 'npm run claude:install', uninstall: 'npm run claude:uninstall' },
+  { runtime: 'cursor', icon: Box, detail: 'connect.cursorDetail' },
 ]
 
 const fallbackConnections: RuntimeConnection[] = [
-  { runtime: 'codex', status: 'checking', eventCount: 0 },
-  { runtime: 'claude-code', status: 'checking', eventCount: 0 },
-  { runtime: 'cursor', status: 'preview', eventCount: 0 },
+  { runtime: 'codex', status: 'checking', configurationStatus: 'checking', eventCount: 0 },
+  { runtime: 'claude-code', status: 'checking', configurationStatus: 'checking', eventCount: 0 },
+  { runtime: 'cursor', status: 'preview', configurationStatus: 'preview', connectionStage: 'preview-only', eventCount: 0 },
 ]
 
 type ConnectModalProps = {
@@ -27,14 +27,25 @@ type ConnectModalProps = {
 export function ConnectModal({ initialRuntime = 'codex', connections = fallbackConnections, onRefresh = async () => connections, onClose }: ConnectModalProps) {
   const { formatDateTime, formatNumber, t } = useI18n()
   const [selected, setSelected] = useState<Runtime>(initialRuntime)
-  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const [copyState, setCopyState] = useState<{ target: 'preflight' | 'install'; status: 'copied' | 'failed' } | null>(null)
   const [inspectedConnections, setInspectedConnections] = useState(connections)
   const [refreshing, setRefreshing] = useState(false)
+  const [inspectionFailed, setInspectionFailed] = useState(false)
   const dialogRef = useRef<HTMLElement>(null)
   const initialOptionRef = useRef<HTMLButtonElement>(null)
   const previousFocus = useRef<HTMLElement | null>(null)
   const current = options.find((option) => option.runtime === selected)!
-  const connection = inspectedConnections.find((item) => item.runtime === selected) ?? { runtime: selected, status: 'unavailable' as const, eventCount: 0 }
+  const connection: RuntimeConnection = inspectedConnections.find((item) => item.runtime === selected)
+    ?? { runtime: selected, status: 'unavailable', eventCount: 0 }
+  const configurationStatus = connection.configurationStatus ?? connection.status
+  const stage = connection.connectionStage ?? (
+    configurationStatus === 'preview' ? 'preview-only'
+      : configurationStatus === 'broken' || configurationStatus === 'error' ? 'degraded'
+        : configurationStatus === 'installed' && connection.eventCount ? 'verified'
+          : configurationStatus === 'installed' ? 'installed'
+            : 'not-installed'
+  )
+  const staleEvidence = stage === 'awaiting-verification' && connection.lastActivityAt && connection.verificationBoundaryAt
 
   useEffect(() => setInspectedConnections(connections), [connections])
   useEffect(() => {
@@ -57,29 +68,52 @@ export function ConnectModal({ initialRuntime = 'codex', connections = fallbackC
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
   }
-
   const refresh = async () => {
     setRefreshing(true)
-    try { setInspectedConnections(await onRefresh()) } finally { setRefreshing(false) }
-  }
-  const copy = async () => {
+    setInspectionFailed(false)
     try {
-      if (!navigator.clipboard?.writeText) throw new Error('Clipboard API is unavailable.')
-      await navigator.clipboard.writeText(current.command)
-      setCopyState('copied')
+      setInspectedConnections(await onRefresh())
     } catch {
-      setCopyState('failed')
+      setInspectionFailed(true)
+    } finally {
+      setRefreshing(false)
     }
   }
+  const copy = async (target: 'preflight' | 'install', command: string) => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard API is unavailable.')
+      await navigator.clipboard.writeText(command)
+      setCopyState({ target, status: 'copied' })
+    } catch {
+      setCopyState({ target, status: 'failed' })
+    }
+  }
+  const copyLabel = (target: 'preflight' | 'install') => {
+    if (copyState?.target !== target) return t(target === 'preflight' ? 'connect.copyPreflight' : 'connect.copyInstall')
+    if (copyState.status === 'copied') return t(target === 'preflight' ? 'connect.preflightCopied' : 'connect.installCopied')
+    return t(target === 'preflight' ? 'connect.preflightCopyFailed' : 'connect.installCopyFailed')
+  }
+  const configurationMessage = configurationStatus === 'installed'
+    ? t('connect.adapterInstalled')
+    : configurationStatus === 'broken'
+      ? t('connect.adapterBroken')
+      : configurationStatus === 'error'
+        ? t('connect.adapterUnreadable')
+        : configurationStatus === 'checking'
+          ? t('connect.checkingAdapter')
+          : configurationStatus === 'unavailable'
+            ? t('connect.serviceUnavailable')
+            : t('connect.adapterNotInstalled')
+
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section ref={dialogRef} className="modal" role="dialog" aria-modal="true" aria-labelledby="connect-title" onKeyDown={trapFocus} onMouseDown={(event) => event.stopPropagation()}>
+      <section ref={dialogRef} className="modal connection-modal" role="dialog" aria-modal="true" aria-labelledby="connect-title" onKeyDown={trapFocus} onMouseDown={(event) => event.stopPropagation()}>
         <header><div><h2 id="connect-title">{t('connect.title')}</h2><p>{t('connect.description')}</p></div><button type="button" aria-label={t('common.close')} onClick={onClose}><X size={18} /></button></header>
         <div className="runtime-options">
           {options.map((option) => {
             const Icon = option.icon
             return (
-              <button ref={option.runtime === initialRuntime ? initialOptionRef : undefined} className={selected === option.runtime ? 'runtime-option selected' : 'runtime-option'} key={option.runtime} type="button" onClick={() => { setSelected(option.runtime); setCopyState('idle') }}>
+              <button ref={option.runtime === initialRuntime ? initialOptionRef : undefined} className={selected === option.runtime ? 'runtime-option selected' : 'runtime-option'} key={option.runtime} type="button" onClick={() => { setSelected(option.runtime); setCopyState(null); setInspectionFailed(false) }}>
                 <span className={`runtime-icon ${option.runtime}`}><Icon size={18} /></span>
                 <span><strong>{runtimeLabel[option.runtime]}</strong><small>{t(option.detail)}</small></span>
                 {selected === option.runtime && <Check size={17} />}
@@ -87,25 +121,53 @@ export function ConnectModal({ initialRuntime = 'codex', connections = fallbackC
             )
           })}
         </div>
-        <div className="connection-step">
-          <span className="step-label">{t('connect.installStep')}</span>
-          <p>{t('connect.installInstruction', { status: t(current.status) })}</p>
-          <div className="command-box"><code>{current.command}</code><button type="button" onClick={copy} aria-label={copyState === 'copied' ? t('connect.commandCopiedLabel') : copyState === 'failed' ? t('connect.copyFailedLabel') : t('connect.copyCommand')}>{copyState === 'copied' ? <Check size={15} /> : <Clipboard size={15} />}</button></div>
-          {copyState !== 'idle' && <span className={copyState === 'failed' ? 'copy-feedback failed-text' : 'copy-feedback success-text'} role="status" aria-live="polite">{copyState === 'copied' ? t('connect.commandCopied') : t('connect.copyFailed')}</span>}
-        </div>
-        <div className="connection-step verification-step">
-          <span className="step-label">{t('connect.verifyStep')}</span>
-          <p className={connection.status === 'installed' ? 'success-text' : connection.status === 'broken' || connection.status === 'error' ? 'failed-text' : ''}>{connection.status === 'installed' ? t('connect.adapterInstalled') : connection.status === 'broken' ? t('connect.adapterBroken') : connection.status === 'error' ? t('connect.adapterUnreadable') : connection.status === 'preview' ? t('connect.previewUnavailable') : connection.status === 'checking' ? t('connect.checkingAdapter') : connection.status === 'unavailable' ? t('connect.serviceUnavailable') : t('connect.adapterNotInstalled')}</p>
-          <button className="button secondary" type="button" disabled={refreshing} onClick={() => void refresh()}>{refreshing ? t('common.checking') : t('connect.checkInstallation')}</button>
-        </div>
-        <div className="connection-step verification-step">
-          <span className="step-label">{t('connect.activityStep')}</span>
-          <p>{connection.eventCount ? t('connect.eventsRecorded', { count: formatNumber(connection.eventCount) }) : t('connect.noActivity')}</p>
-          {connection.lastEventAt && <small>{t('connect.lastActivity', { time: formatDateTime(connection.lastEventAt) })}</small>}
-          {!connection.eventCount && connection.status === 'installed' && <small>{t('connect.useSkill', { runtime: runtimeLabel[selected] })}</small>}
-          {connection.status === 'installed' && selected !== 'cursor' && <small>{t('connect.removeLater', { command: `npm run ${selected === 'codex' ? 'codex' : 'claude'}:uninstall` })}</small>}
-        </div>
-        <footer><button className="button secondary" type="button" onClick={onClose}>{t('common.cancel')}</button><button className="button primary" type="button" disabled={connection.status !== 'installed'} onClick={onClose}>{t('connect.finish')}</button></footer>
+        {selected === 'cursor' ? (
+          <div className="connection-step"><p>{t('connect.previewUnavailable')}</p></div>
+        ) : (
+          <ol className="connection-workflow">
+            <li>
+              <span className="step-label">{t('connect.preflightStep')}</span>
+              <p>{t('connect.preflightInstruction')}</p>
+              <div className="command-box"><code>{current.preflight}</code><button type="button" onClick={() => void copy('preflight', current.preflight!)} aria-label={copyLabel('preflight')}>{copyState?.target === 'preflight' && copyState.status === 'copied' ? <Check size={15} /> : <Clipboard size={15} />}</button></div>
+            </li>
+            <li>
+              <span className="step-label">{t('connect.reviewStep')}</span>
+              <p>{t('connect.previewSafe')}</p>
+            </li>
+            <li>
+              <span className="step-label">{t('connect.confirmWriteStep')}</span>
+              <p>{t('connect.confirmWrite')}</p>
+              <div className="command-box"><code>{current.install}</code><button type="button" onClick={() => void copy('install', current.install!)} aria-label={copyLabel('install')}>{copyState?.target === 'install' && copyState.status === 'copied' ? <Check size={15} /> : <Clipboard size={15} />}</button></div>
+              {copyState && <span className={copyState.status === 'failed' ? 'copy-feedback failed-text' : 'copy-feedback success-text'} role="status" aria-live="polite">{copyState.status === 'copied' ? t('connect.commandCopied') : t('connect.copyFailed')}</span>}
+            </li>
+            <li>
+              <span className="step-label">{t('connect.restartStep')}</span>
+              <p>{t('connect.restartRuntime', { runtime: runtimeLabel[selected] })}</p>
+            </li>
+            <li>
+              <span className="step-label">{t('connect.inspectStep')}</span>
+              <p className={configurationStatus === 'installed' ? 'success-text' : stage === 'degraded' ? 'failed-text' : ''}>{inspectionFailed ? t('connect.serviceUnavailable') : configurationMessage}</p>
+              {stage === 'degraded' && <small className="failed-text">{t('connect.repair')}</small>}
+              <button className="button secondary" type="button" disabled={refreshing} onClick={() => void refresh()}>{refreshing ? t('common.checking') : t('connect.checkInstallation')}</button>
+            </li>
+            <li>
+              <span className="step-label">{t('connect.triggerStep')}</span>
+              <p>{t('connect.useSkill', { runtime: runtimeLabel[selected] })}</p>
+            </li>
+            <li>
+              <span className="step-label">{t('connect.waitStep')}</span>
+              <p className={stage === 'verified' ? 'success-text' : ''}>{stage === 'verified' ? t('connect.eventsRecorded', { count: formatNumber(connection.eventCount ?? 1) }) : staleEvidence ? t('connect.staleEvidence') : t('connect.waitingEvidence')}</p>
+              {stage !== 'verified' && connection.eventCount ? <small>{t('connect.eventsRecorded', { count: formatNumber(connection.eventCount) })}</small> : null}
+              {connection.lastActivityAt && <small>{t('connect.lastActivity', { time: formatDateTime(connection.lastActivityAt) })}</small>}
+            </li>
+            <li>
+              <span className="step-label">{t('connect.verifiedStep')}</span>
+              <p className={stage === 'verified' ? 'success-text' : ''}>{stage === 'verified' ? t('connect.verifiedEvidence') : t('connect.notVerified')}</p>
+              {current.uninstall && <small>{t('connect.removeLater', { command: current.uninstall })}</small>}
+            </li>
+          </ol>
+        )}
+        <footer><button className="button secondary" type="button" onClick={onClose}>{t('common.cancel')}</button><button className="button primary" type="button" disabled={stage !== 'verified'} onClick={onClose}>{t('connect.finish')}</button></footer>
       </section>
     </div>
   )

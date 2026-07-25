@@ -5,7 +5,7 @@ import { activeProviderRequest, AI_PROVIDERS, createDefaultAiSettings, providerI
 import { evaluationApi } from '../lib/evaluation-api'
 import type { CandidateAnalysis, QuickEvaluationResult } from '../types'
 import { AiSettingsModal } from './AiSettingsModal'
-import { ManagedEvaluations } from './ManagedEvaluations'
+import { ManagedEvaluations, type ManagedEvaluationDraft } from './ManagedEvaluations'
 import { QuickBaselineStage, QuickCandidateSource, QuickEvaluationOnboarding, QuickResultStage, QuickRunStage } from './QuickEvaluationStages'
 import { SkillOpsAssistantDrawer, type AssistantMessage } from './SkillOpsAssistantDrawer'
 
@@ -16,7 +16,7 @@ async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
   return result
 }
 
-function QuickEvaluationWorkspace() {
+function QuickEvaluationWorkspace({ onPrepareManaged }: { onPrepareManaged: (draft: ManagedEvaluationDraft) => void }) {
   const { t } = useI18n()
   const [sourceUrl, setSourceUrl] = useState('')
   const [analysis, setAnalysis] = useState<CandidateAnalysis | null>(null)
@@ -235,7 +235,14 @@ function QuickEvaluationWorkspace() {
             onRun={() => void runEvaluation()}
           />}
 
-          {evaluation && <QuickResultStage evaluation={evaluation} onDiscuss={() => openAssistant(t('quick.whyWinner'))} />}
+          {evaluation && analysis && selectedMatch && <QuickResultStage
+            evaluation={evaluation}
+            onManagedSuite={() => onPrepareManaged({
+              baselineRef: `local-scan:${selectedMatch.runtime}:${selectedMatch.sourcePath}`,
+              candidateRef: `github:${analysis.candidate.sourceUrl}#${encodeURIComponent(analysis.candidate.sourcePath)}`,
+            })}
+            onDiscuss={() => openAssistant(t('quick.whyWinner'))}
+          />}
         </div>
       </div>
 
@@ -264,15 +271,33 @@ function QuickEvaluationWorkspace() {
 export function EvaluationWorkspace() {
   const { t } = useI18n()
   const [tab, setTab] = useState<'quick' | 'suites' | 'history'>('quick')
+  const [draft, setDraft] = useState<ManagedEvaluationDraft | null>(null)
+  const tabs = ['quick', 'suites', 'history'] as const
   return (
     <div className="single-page evaluation-workspace evaluation-hub">
       <div className="evaluation-tabs" role="tablist" aria-label={t('evaluations.workspaceTabs')}>
-        {(['quick', 'suites', 'history'] as const).map((item) => (
-          <button key={item} type="button" role="tab" aria-selected={tab === item} onClick={() => setTab(item)}>{t(item === 'quick' ? 'evaluations.quickTab' : item === 'suites' ? 'evaluations.suitesTab' : 'evaluations.historyTab')}</button>
+        {tabs.map((item, index) => (
+          <button
+            id={`evaluation-tab-${item}`}
+            key={item}
+            type="button"
+            role="tab"
+            tabIndex={tab === item ? 0 : -1}
+            aria-controls={item === 'quick' ? 'evaluation-panel-quick' : 'evaluation-panel-managed'}
+            aria-selected={tab === item}
+            onClick={() => setTab(item)}
+            onKeyDown={(event) => {
+              if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+              event.preventDefault()
+              const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length
+              setTab(tabs[next])
+              ;(event.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="tab"]')[next])?.focus()
+            }}
+          >{t(item === 'quick' ? 'evaluations.quickTab' : item === 'suites' ? 'evaluations.suitesTab' : 'evaluations.historyTab')}</button>
         ))}
       </div>
-      <div role="tabpanel" hidden={tab !== 'quick'}><QuickEvaluationWorkspace /></div>
-      <div role="tabpanel" hidden={tab === 'quick'}><ManagedEvaluations tab={tab === 'history' ? 'history' : 'suites'} /></div>
+      <div id="evaluation-panel-quick" role="tabpanel" aria-labelledby="evaluation-tab-quick" hidden={tab !== 'quick'}><QuickEvaluationWorkspace onPrepareManaged={(next) => { setDraft(next); setTab('suites') }} /></div>
+      <div id="evaluation-panel-managed" role="tabpanel" aria-labelledby={`evaluation-tab-${tab === 'history' ? 'history' : 'suites'}`} hidden={tab === 'quick'}><ManagedEvaluations tab={tab === 'history' ? 'history' : 'suites'} draft={draft} /></div>
     </div>
   )
 }

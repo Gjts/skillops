@@ -100,14 +100,25 @@ silently skipping a probe.
 
 ## Known dependency advisory
 
-As of 2026-07-22, `npm audit` reports 12 transitive entries: five high-severity
-entries through `@huggingface/transformers -> onnxruntime-node -> adm-zip` and
-the nested `sharp` package, plus seven moderate entries through Promptfoo's
-agent dependencies and `@hono/node-server`. npm's offered remediation
-downgrades Promptfoo to `0.120.8`, outside this tested contract, so it has not
-been applied automatically. Re-evaluate the advisories on every Promptfoo
-upgrade and avoid feeding untrusted archive/model artifacts to affected
-optional inference paths.
+As of 2026-07-25, `npm audit --audit-level=critical` exits successfully with
+zero critical findings and reports 20 transitive findings: 13 high and seven
+moderate. The high paths cover optional local-inference archive/image packages
+(`adm-zip` and nested `sharp`), Promptfoo's YAML parser (`js-yaml`), and
+`brace-expansion` below optional Google-auth cleanup code. The moderate paths
+remain in Promptfoo's agent/MCP dependencies and `@hono/node-server`.
+
+SkillOps does not accept request-controlled Promptfoo config files, YAML,
+filesystem patterns, executable providers, archives, images, or local model
+artifacts. It compiles the restricted Suite schema in memory, uses one explicit
+provider bridge, and does not expose Promptfoo's MCP/Hono servers. These
+controls make the reported vulnerable inputs unreachable through supported
+SkillOps requests, but do not remove the installed dependency risk.
+
+The compatible package-lock-only fixes were applied where available. npm's
+remaining offered remediation changes the exact Promptfoo version outside this
+tested contract, so it requires the full upgrade checklist rather than an
+automatic force-fix. Re-evaluate the findings on every Promptfoo upgrade and
+continue to reject untrusted archive/model/config inputs.
 
 ## Official references
 

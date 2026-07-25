@@ -133,7 +133,9 @@ export function TeamPage() {
 
       <section className="panel registry-table-wrap">
         <header className="registry-table-heading"><div><span>{t('team.catalog')}</span><h3>{t('team.assetDirectory')}</h3></div><strong>{t('team.localGit')}</strong></header>
-        <div className="registry-table-scroll"><table className="registry-table team-table"><thead><tr><th>{t('team.artifact')}</th><th>{t('common.version')}</th><th>{t('common.source')}</th><th>{t('common.status')}</th><th>{t('team.owner')}</th><th>{t('team.usedBy')}</th><th>{t('team.evidence')}</th></tr></thead><tbody>
+        <div className="registry-table-scroll"><table className="registry-table team-table">
+          <caption className="sr-only">{t('team.assetDirectory')}</caption>
+          <thead><tr><th>{t('team.artifact')}</th><th>{t('common.version')}</th><th>{t('common.source')}</th><th>{t('common.status')}</th><th>{t('team.owner')}</th><th>{t('team.usedBy')}</th><th>{t('team.evidence')}</th></tr></thead><tbody>
           {catalog.map((item) => <tr key={item.artifactVersionId}><td><strong>{item.artifactId}</strong></td><td><span className="version">{item.version}</span></td><td>{item.source}</td><td><span className={`capability-stage stage-${item.lifecycleStatus}`}>{item.lifecycleStatus}</span></td><td>{item.owner || t('common.notReported')}</td><td>{item.usedByProjectIds.join(', ') || '—'}</td><td><code>{item.evidenceHash?.slice(0, 10) || '—'}</code></td></tr>)}
           {!catalog.length && <tr><td className="registry-empty" colSpan={7}>{t('team.noAssets')}</td></tr>}
         </tbody></table></div>

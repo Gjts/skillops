@@ -3,9 +3,58 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
+function commandCenterSnapshot(events: Array<Record<string, unknown>> = []) {
+  const terminal = events.filter((event) => event.event === 'skill.completed' || event.event === 'skill.failed')
+  const known = terminal.filter((event) => event.outcome === 'success' || event.outcome === 'failed')
+  const successes = known.filter((event) => event.outcome === 'success').length
+  const costed = terminal.filter((event) => typeof event.costUsd === 'number' && Number.isFinite(event.costUsd))
+  const costUsd = costed.length ? costed.reduce((total, event) => total + Number(event.costUsd), 0) : null
+  const observed = new Set(events.filter((event) => event.skillId && ['skill.started', 'skill.completed', 'skill.failed'].includes(String(event.event))).map((event) => `${event.runtime}:${event.skillId}`))
+  const issues = costed.length < terminal.length && terminal.length
+    ? [{ id: 'review-cost-coverage', priority: 70, severity: 'low', href: '/activity?tab=runs&cost=unreported', data: { reported: costed.length, total: terminal.length } }]
+    : []
+  return {
+    generatedAt: new Date().toISOString(),
+    scope: { runtime: 'all', days: 7 },
+    sources: { events: 'ok', connections: 'ok', provider: 'ok' },
+    readiness: { level: 'setup', verifiedRuntimes: [], installedRuntimes: [], providerConfigured: false },
+    metrics: {
+      runs: terminal.length,
+      knownOutcomes: known.length,
+      unknownOutcomes: terminal.length - known.length,
+      successRate: known.length ? successes / known.length * 100 : null,
+      activeSkills: observed.size,
+      costUsd,
+      costReportedRuns: costed.length,
+      costCoverage: terminal.length ? costed.length / terminal.length * 100 : null,
+    },
+    metricDefinitions: { runs: '', successRate: '', activeSkills: '', costUsd: '', costCoverage: '' },
+    issues,
+    nextActions: issues,
+    recentActivity: events.filter((event) => event.event !== 'skill.discovered').slice(0, 8),
+  }
+}
+
+function apiBody(input: string, events: Array<Record<string, unknown>> = []) {
+  const url = new URL(input, 'http://localhost')
+  if (url.pathname === '/api/command-center') return commandCenterSnapshot(events)
+  if (url.pathname === '/api/events' && url.searchParams.get('summary') === '1') {
+    const lastRuntimeEvent = events
+      .filter((event) => event.event !== 'skill.discovered' && typeof event.timestamp === 'string')
+      .sort((left, right) => Date.parse(String(right.timestamp)) - Date.parse(String(left.timestamp)))[0]
+    return { generatedAt: new Date().toISOString(), count: events.length, lastRuntimeEventAt: lastRuntimeEvent?.timestamp ?? null }
+  }
+  if (url.pathname === '/api/events') return events
+  return []
+}
+
+function okResponse(body: unknown) {
+  return { ok: true, status: 200, headers: new Headers(), json: async () => body }
+}
+
 beforeEach(() => {
   window.history.replaceState({}, '', '/')
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => [] }))
+  vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => Promise.resolve(okResponse(apiBody(input)))))
 })
 
 afterEach(() => {
@@ -17,8 +66,8 @@ afterEach(() => {
 describe('SkillOps primary flow', () => {
   it('shows a real empty dataset instead of demo metrics and updates the runtime filter', async () => {
     const { container } = render(<App />)
-    expect(screen.getByRole('heading', { level: 1, name: 'Overview' })).toBeTruthy()
-    expect(screen.getByRole('heading', { name: 'No Skill runs from any runtime' })).toBeTruthy()
+    expect(screen.getByRole('heading', { level: 1, name: 'Command Center' })).toBeTruthy()
+    expect(await screen.findByText('No real activity in the selected scope yet.')).toBeTruthy()
     await screen.findByText('Local events')
     expect(container.querySelector('[data-metric="Skill runs"] strong')?.getAttribute('data-value')).toBe('0')
 
@@ -41,7 +90,7 @@ describe('SkillOps primary flow', () => {
       ok: true,
       status: 200,
       headers: new Headers(),
-      json: async () => input === '/api/events' ? events : [],
+      json: async () => apiBody(input, events),
     })))
 
     const { container } = render(<App />)
@@ -68,7 +117,7 @@ describe('SkillOps primary flow', () => {
       ok: true,
       status: 200,
       headers: new Headers(),
-      json: async () => input === '/api/events' ? events : [],
+      json: async () => apiBody(input, events),
     })))
 
     const { container } = render(<App />)
@@ -77,8 +126,9 @@ describe('SkillOps primary flow', () => {
     expect(within(cost).getByText('$0.03')).toBeTruthy()
     expect(within(cost).getByText('2 of 10 runs include cost metadata')).toBeTruthy()
     fireEvent.click(within(cost).getByRole('button', { name: 'View costed runs' }))
-    expect(window.location.pathname).toBe('/runs')
+    expect(window.location.pathname).toBe('/activity')
     expect(new URLSearchParams(window.location.search).get('cost')).toBe('reported')
+    expect(new URLSearchParams(window.location.search).get('tab')).toBe('runs')
   })
 
   it('renders an explicitly reported zero cost as $0.00', async () => {
@@ -95,7 +145,7 @@ describe('SkillOps primary flow', () => {
       ok: true,
       status: 200,
       headers: new Headers(),
-      json: async () => input === '/api/events' ? events : [],
+      json: async () => apiBody(input, events),
     })))
 
     const { container } = render(<App />)
@@ -108,7 +158,8 @@ describe('SkillOps primary flow', () => {
   it('marks fallback cost as Demo data inside the cost KPI', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('connection refused')))
     const { container } = render(<App />)
-    await screen.findByText('Demo dataset')
+    fireEvent.click(await screen.findByRole('button', { name: 'Use demo dataset' }))
+    await screen.findAllByText('Demo dataset')
     const cost = container.querySelector<HTMLElement>('[data-metric="Reported cost"]')!
     expect(within(cost).getByText('Demo data')).toBeTruthy()
   })
@@ -116,18 +167,19 @@ describe('SkillOps primary flow', () => {
   it('labels demo fallback and explains local API failures', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('connection refused')))
     const { container } = render(<App />)
-    await screen.findByText('Demo dataset')
+    fireEvent.click(await screen.findByRole('button', { name: 'Use demo dataset' }))
+    await screen.findAllByText('Demo dataset')
     expect(screen.getByRole('alert').textContent).toContain('connection refused')
-    expect(container.querySelector('[data-metric="Skill runs"] strong')?.getAttribute('data-value')).toBe('1284')
+    expect(container.querySelector('[data-metric="Skill runs"] strong')?.getAttribute('data-value')).toBe('1,284')
   })
 
   it('navigates between product surfaces', () => {
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: 'Skills' }))
-    expect(screen.getByRole('heading', { level: 1, name: 'Skills' })).toBeTruthy()
-    expect(screen.getByRole('heading', { name: 'No Skill runs from any runtime' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Assets' }))
+    expect(screen.getByRole('heading', { level: 1, name: 'Assets' })).toBeTruthy()
+    expect(screen.getByRole('heading', { level: 2, name: 'Installed Skill inventory' })).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Skill Lab' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Benchmarks' }))
     expect(screen.getByRole('heading', { level: 2, name: 'Compare a new open-source Skill' })).toBeTruthy()
     expect(document.querySelector('.sidebar')?.classList.contains('is-open')).toBe(false)
   })
@@ -135,21 +187,69 @@ describe('SkillOps primary flow', () => {
   it('keeps the active product surface in the URL and restores browser history', async () => {
     window.history.replaceState({}, '', '/runs')
     render(<App />)
-    expect(screen.getByRole('heading', { level: 1, name: 'Runs' })).toBeTruthy()
+    expect(screen.getByRole('heading', { level: 1, name: 'Activity' })).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
     expect(window.location.pathname).toBe('/settings')
     window.history.pushState({}, '', '/skills')
     await act(async () => { window.dispatchEvent(new PopStateEvent('popstate')) })
-    expect(screen.getByRole('heading', { level: 1, name: 'Skills' })).toBeTruthy()
+    expect(screen.getByRole('heading', { level: 1, name: 'Assets' })).toBeTruthy()
   })
 
-  it('aborts an in-flight full event read when navigation enters Runs', async () => {
-    let eventSignal: AbortSignal | undefined
+  it('uses the personal developer IA while preserving legacy routes', async () => {
+    window.history.replaceState({}, '', '/runs?query=failed')
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => {
+      const pathname = new URL(input, 'http://localhost').pathname
+      const body = pathname === '/api/runs'
+        ? { items: [], page: 1, pageSize: 20, totalItems: 0, totalPages: 0, hasPrevious: false, hasNext: false }
+        : pathname === '/api/capabilities' ? { items: [] } : []
+      return Promise.resolve({ ok: true, status: 200, headers: new Headers(), json: async () => body })
+    }))
+    render(<App />)
+
+    expect(screen.getByRole('heading', { level: 1, name: 'Activity' })).toBeTruthy()
+    const mainNavigation = screen.getByRole('navigation', { name: 'Main navigation' })
+    expect(within(mainNavigation).getByRole('button', { name: 'Command Center' })).toBeTruthy()
+    expect(within(mainNavigation).getByRole('button', { name: 'Agents' })).toBeTruthy()
+    expect(within(mainNavigation).getByRole('button', { name: 'Assets' })).toBeTruthy()
+    expect(within(mainNavigation).getByRole('button', { name: 'Benchmarks' })).toBeTruthy()
+    expect(within(mainNavigation).getByRole('button', { name: 'Releases' })).toBeTruthy()
+    expect(within(mainNavigation).queryByRole('button', { name: 'Team' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Benchmarks' }))
+    expect(window.location.pathname).toBe('/benchmarks')
+    expect(screen.getByRole('heading', { level: 1, name: 'Benchmarks' })).toBeTruthy()
+
+    window.history.pushState({}, '', '/governance')
+    await act(async () => { window.dispatchEvent(new PopStateEvent('popstate')) })
+    expect(screen.getByRole('heading', { level: 1, name: 'Releases' })).toBeTruthy()
+  })
+
+  it('closes mobile navigation with Escape and restores focus', () => {
+    render(<App />)
+    const toggle = screen.getByRole('button', { name: 'Toggle navigation' })
+    fireEvent.click(toggle)
+    const sidebar = document.querySelector('.sidebar') as HTMLElement
+    expect(sidebar.classList.contains('is-open')).toBe(true)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(sidebar.getAttribute('role')).toBe('dialog')
+    expect(sidebar.getAttribute('aria-modal')).toBe('true')
+    const firstNavigationItem = screen.getByRole('button', { name: 'Command Center' })
+    expect(document.activeElement).toBe(firstNavigationItem)
+    fireEvent.keyDown(firstNavigationItem, { key: 'Tab', shiftKey: true })
+    expect(sidebar.contains(document.activeElement)).toBe(true)
+    fireEvent.keyDown(sidebar, { key: 'Escape' })
+    expect(sidebar.classList.contains('is-open')).toBe(false)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(document.activeElement).toBe(toggle)
+  })
+
+  it('aborts an in-flight aggregate read when navigation enters Runs', async () => {
+    let overviewSignal: AbortSignal | undefined
     vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string, init?: RequestInit) => {
       const url = new URL(input, 'http://localhost')
-      if (url.pathname === '/api/events') {
-        eventSignal = init?.signal ?? undefined
+      if (url.pathname === '/api/command-center') {
+        overviewSignal = init?.signal ?? undefined
         return Promise.race<Response>([])
       }
       if (url.pathname === '/api/runs') {
@@ -160,16 +260,16 @@ describe('SkillOps primary flow', () => {
           json: async () => ({ items: [], page: 1, pageSize: 20, totalItems: 0, totalPages: 0, hasPrevious: false, hasNext: false }),
         })
       }
-      return Promise.resolve({ ok: true, status: 200, headers: new Headers(), json: async () => [] })
+      return Promise.resolve(okResponse([]))
     }))
 
     render(<App />)
     await act(async () => { await Promise.resolve() })
-    expect(eventSignal?.aborted).toBe(false)
+    expect(overviewSignal?.aborted).toBe(false)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Runs' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Activity' }))
 
-    expect(eventSignal?.aborted).toBe(true)
+    expect(overviewSignal?.aborted).toBe(true)
   })
 
   it('loads Governance directly and exposes it in primary navigation', async () => {
@@ -181,17 +281,14 @@ describe('SkillOps primary flow', () => {
       json: async () => input === '/api/capabilities' ? { items: [] } : [],
     })))
     render(<App />)
-    expect(screen.getByRole('heading', { level: 1, name: 'Governance' })).toBeTruthy()
-    expect(await screen.findByRole('heading', { level: 2, name: 'Capability governance' })).toBeTruthy()
+    expect(screen.getByRole('heading', { level: 1, name: 'Releases' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { level: 2, name: 'Release pipeline' })).toBeTruthy()
   })
 
-  it('polls the event API so newly recorded runs appear without reloading', async () => {
+  it('polls the aggregate API so newly recorded runs appear without reloading', async () => {
     vi.useFakeTimers()
-    let events: object[] = []
-    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => Promise.resolve({
-      ok: true,
-      json: async () => input === '/api/events' ? events : [],
-    })))
+    let events: Array<Record<string, unknown>> = []
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => Promise.resolve(okResponse(apiBody(input, events)))))
     render(<App />)
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
     expect(screen.getByText('Local events')).toBeTruthy()
@@ -199,7 +296,6 @@ describe('SkillOps primary flow', () => {
 
     await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
     expect(screen.getAllByText('polled-skill').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('unversioned').length).toBeGreaterThan(0)
     expect(screen.getByText('Refreshes every 3s')).toBeTruthy()
   })
 
@@ -464,7 +560,7 @@ describe('SkillOps primary flow', () => {
     }))
     vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => {
       const url = new URL(input, 'http://localhost')
-      if (url.pathname === '/api/events') return Promise.resolve({ ok: true, status: 200, headers: new Headers(), json: async () => runs })
+      if (url.pathname === '/api/command-center') return Promise.resolve(okResponse(commandCenterSnapshot(runs)))
       if (url.pathname === '/api/runs') {
         const page = Number(url.searchParams.get('page'))
         return Promise.resolve({
@@ -500,7 +596,7 @@ describe('SkillOps primary flow', () => {
     window.history.replaceState({}, '', '/')
     await act(async () => { window.dispatchEvent(new PopStateEvent('popstate')) })
 
-    expect(screen.getByRole('heading', { level: 1, name: 'Overview' })).toBeTruthy()
+    expect(screen.getByRole('heading', { level: 1, name: 'Command Center' })).toBeTruthy()
     expect((screen.getByLabelText('Runtime') as HTMLSelectElement).value).toBe('codex')
     expect((screen.getByLabelText('Date range') as HTMLSelectElement).value).toBe('30')
   })
@@ -657,7 +753,7 @@ describe('SkillOps primary flow', () => {
     }
     const fetchMock = vi.fn().mockImplementation((input: string) => {
       const url = new URL(input, 'http://localhost')
-      if (url.pathname === '/api/events') return Promise.race<Response>([])
+      if (url.pathname === '/api/command-center') return available ? Promise.resolve(okResponse(commandCenterSnapshot([liveRun]))) : Promise.race<Response>([])
       if (url.pathname !== '/api/runs') return Promise.resolve({ ok: true, status: 200, headers: new Headers(), json: async () => [] })
       if (!available) return Promise.reject(new Error('connection refused'))
       return Promise.resolve({
@@ -679,9 +775,10 @@ describe('SkillOps primary flow', () => {
     expect(screen.getByText('Local events')).toBeTruthy()
     expect(screen.getByText('recovered-skill')).toBeTruthy()
     expect(fetchMock.mock.calls.some(([input]) => new URL(input, 'http://localhost').pathname === '/api/events')).toBe(false)
-    fireEvent.click(screen.getByRole('button', { name: 'Overview' }))
-    expect(screen.getByText('Demo dataset')).toBeTruthy()
-    expect(screen.queryByText('Local events')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Command Center' }))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(screen.getByText('Local events')).toBeTruthy()
+    expect(screen.queryByText('Demo dataset')).toBeNull()
   })
 
   it('reports bounded query validation without replacing local state with Demo data', async () => {
@@ -716,8 +813,8 @@ describe('SkillOps primary flow', () => {
     let runAttempts = 0
     vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => {
       const url = new URL(input, 'http://localhost')
-      if (url.pathname === '/api/events') {
-        return Promise.resolve({ ok: true, status: 200, headers: new Headers(), json: async () => [liveRun] })
+      if (url.pathname === '/api/command-center') {
+        return Promise.resolve(okResponse(commandCenterSnapshot([liveRun])))
       }
       if (url.pathname === '/api/runs') {
         runAttempts += 1
@@ -735,7 +832,7 @@ describe('SkillOps primary flow', () => {
     render(<App />)
     await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
     expect(screen.getByText('Local events')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Runs' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Activity' }))
     await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
     expect(screen.getByRole('alert').textContent).toContain('temporary runs failure')
 
@@ -917,61 +1014,13 @@ describe('SkillOps primary flow', () => {
 
   it('opens the live Skill Lab and its persisted AI settings', () => {
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: 'Skill Lab' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Benchmarks' }))
     expect(screen.getByRole('textbox', { name: 'Candidate GitHub URL' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Configure AI' }))
     expect(screen.getByRole('dialog', { name: 'AI settings' })).toBeTruthy()
     expect(screen.getByText('Saved API keys are written to the local SkillOps data file.')).toBeTruthy()
   })
 
-  it('shows every real Skill row on the unbounded Skills page', async () => {
-    const now = new Date().toISOString()
-    const localEvents = ['one', 'two', 'three'].map((skillId) => ({
-      id: skillId,
-      event: 'skill.completed',
-      skillId,
-      skillVersion: '1.0.0',
-      runtime: 'codex',
-      timestamp: now,
-      outcome: 'success',
-    }))
-    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => Promise.resolve({
-      ok: true,
-      json: async () => input === '/api/events' ? localEvents : [],
-    })))
-    render(<App />)
-    await screen.findByText('Local events')
-    fireEvent.click(screen.getByRole('button', { name: 'Skills' }))
-    expect(screen.getByText('one')).toBeTruthy()
-    expect(screen.getByText('two')).toBeTruthy()
-    expect(screen.getByText('three')).toBeTruthy()
-    const unreportedRow = screen.getByText('one').closest('tr') as HTMLElement
-    expect(within(unreportedRow).getByText('Not reported')).toBeTruthy()
-  })
-
-  it('keeps cross-runtime Skill activity attached to the matching definition source', async () => {
-    const now = new Date().toISOString()
-    const localEvents = [
-      { id: 'codex-definition', event: 'skill.discovered', skillId: 'shared-skill', runtime: 'codex', timestamp: now, sourcePath: 'C:\\Users\\dev\\.codex\\skills\\shared-skill\\SKILL.md', source: 'global' },
-      { id: 'claude-definition', event: 'skill.discovered', skillId: 'shared-skill', runtime: 'claude-code', timestamp: now, sourcePath: 'C:\\Users\\dev\\.claude\\skills\\shared-skill\\SKILL.md', source: 'global' },
-      { id: 'codex-run', event: 'skill.completed', skillId: 'shared-skill', runtime: 'codex', timestamp: now, outcome: 'success' },
-      { id: 'claude-run', event: 'skill.completed', skillId: 'shared-skill', runtime: 'claude-code', timestamp: now, outcome: 'success' },
-    ]
-    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => Promise.resolve({
-      ok: true,
-      json: async () => input === '/api/events' ? localEvents : [],
-    })))
-    render(<App />)
-    await screen.findByText('Local events')
-    fireEvent.click(screen.getByRole('button', { name: 'Skills' }))
-
-    const skillRows = screen.getAllByText('shared-skill').map((cell) => cell.closest('tr') as HTMLElement)
-    expect(skillRows).toHaveLength(2)
-    const codexRow = skillRows.find((row) => within(row).queryByText('Codex'))!
-    fireEvent.click(within(codexRow).getByRole('button', { name: 'Expand Skill details' }))
-    expect(screen.getByText('C:\\Users\\dev\\.codex\\skills\\shared-skill\\SKILL.md')).toBeTruthy()
-    expect(screen.queryByText('C:\\Users\\dev\\.claude\\skills\\shared-skill\\SKILL.md')).toBeNull()
-  })
 
   it('opens the runtime connection flow and changes adapters', () => {
     render(<App />)
@@ -991,22 +1040,21 @@ describe('SkillOps primary flow', () => {
     fireEvent.change(screen.getByLabelText('Runtime'), { target: { value: 'cursor' } })
     fireEvent.click(screen.getByRole('button', { name: 'Connect runtime' }))
 
-    expect(within(screen.getByRole('dialog', { name: 'Connect a runtime' })).getByText('npm run emit -- skill.started --skill frontend-builder --runtime cursor')).toBeTruthy()
+    const dialog = screen.getByRole('dialog', { name: 'Connect a runtime' })
+    expect(within(dialog).getByText('Preview adapter is not installable yet')).toBeTruthy()
+    expect(within(dialog).queryByText(/npm run .*install/)).toBeNull()
   })
 
   it('uses inspected hook status and configures the selected runtime', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => Promise.resolve({
-      ok: true,
-      json: async () => input === '/api/events'
-        ? [{ id: 'old-codex-event', event: 'session.started', runtime: 'codex', timestamp: new Date().toISOString() }]
-        : input === '/api/connections'
-          ? [
-              { runtime: 'codex', status: 'not-installed' },
-              { runtime: 'claude-code', status: 'installed' },
-              { runtime: 'cursor', status: 'preview' },
-            ]
-          : [],
-    })))
+    const oldEvents = [{ id: 'old-codex-event', event: 'session.started', runtime: 'codex', timestamp: new Date().toISOString() }]
+    const inspectedConnections = [
+      { runtime: 'codex', status: 'not-installed' },
+      { runtime: 'claude-code', status: 'installed' },
+      { runtime: 'cursor', status: 'preview' },
+    ]
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => Promise.resolve(okResponse(
+      input === '/api/connections' ? inspectedConnections : apiBody(input, oldEvents),
+    ))))
     render(<App />)
     await screen.findByText('Local events')
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
@@ -1018,32 +1066,39 @@ describe('SkillOps primary flow', () => {
 
     expect(within(codexRow).getByRole('button', { name: 'Configure Codex' })).toBeTruthy()
     expect(within(claudeRow).getByText('No runtime activity recorded')).toBeTruthy()
-    expect(screen.getByRole('heading', { name: 'Local event data' })).toBeTruthy()
+    expect(await screen.findByText('1 events')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Export JSONL' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Clear event data' }))
-    expect(screen.getByRole('alertdialog', { name: 'Clear 1 local events?' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    const clearButton = screen.getByRole('button', { name: 'Clear event data' })
+    clearButton.focus()
+    fireEvent.click(clearButton)
+    const clearDialog = screen.getByRole('alertdialog', { name: 'Clear 1 local events?' })
+    expect(document.activeElement).toBe(within(clearDialog).getByRole('button', { name: 'Cancel' }))
+    fireEvent.keyDown(clearDialog, { key: 'Escape' })
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(document.activeElement).toBe(clearButton)
     fireEvent.click(within(claudeRow).getByRole('button', { name: 'Configure Claude Code' }))
     expect(within(screen.getByRole('dialog', { name: 'Connect a runtime' })).getByText('npm run claude:install')).toBeTruthy()
   })
 
   it('uses scanner source metadata for project Skills', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => [{
-        id: 'discovered-project',
-        event: 'skill.discovered',
-        skillId: 'project-only-skill',
-        skillVersion: '1.0.0',
-        runtime: 'claude-code',
-        timestamp: '2020-01-01T00:00:00.000Z',
-        source: 'project',
-        sourcePath: '/workspace/project/.claude/skills/project-only-skill/SKILL.md',
-      }],
+    const scannedEvents = [{
+      id: 'discovered-project',
+      event: 'skill.discovered',
+      skillId: 'project-only-skill',
+      skillVersion: '1.0.0',
+      runtime: 'claude-code',
+      timestamp: '2020-01-01T00:00:00.000Z',
+      source: 'project',
+      sourcePath: '/workspace/project/.claude/skills/project-only-skill/SKILL.md',
+    }]
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => {
+      const pathname = new URL(input, 'http://localhost').pathname
+      const body = pathname === '/api/scan' ? scannedEvents : apiBody(input, scannedEvents)
+      return Promise.resolve(okResponse(body))
     }))
     render(<App />)
     await screen.findByText('Local events')
-    fireEvent.click(screen.getByRole('button', { name: 'Registry' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Assets' }))
     const row = (await screen.findByText('project-only-skill')).closest('tr')!
     expect(within(row).getAllByText('Project').length).toBeGreaterThan(0)
   })
@@ -1066,7 +1121,7 @@ describe('SkillOps primary flow', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: 'Registry' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Assets' }))
     expect(await screen.findByText('freshly-scanned-skill')).toBeTruthy()
     expect(fetchMock).toHaveBeenCalledWith('/api/scan', { method: 'POST' })
   })
@@ -1083,7 +1138,7 @@ describe('SkillOps primary flow', () => {
       json: async () => input === '/api/scan' ? scan : [],
     })))
     const { container } = render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: 'Registry' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Assets' }))
     expect(screen.queryByLabelText('Date range')).toBeNull()
     expect(container.querySelector('.topbar .runtime-select')).toBeNull()
 

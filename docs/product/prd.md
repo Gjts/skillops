@@ -1,8 +1,8 @@
-# PRD: SkillOps local Skill observability
+# PRD: SkillOps Personal AI Developer OS
 
 > Version: v0.3.2-rc.1
-> Status: implemented local + Git release candidate
-> Last reviewed: 2026-07-22
+> Status: implemented local + Git Limited Preview; external RC gates open
+> Last reviewed: 2026-07-25
 
 ## 1. Product statement
 
@@ -63,6 +63,10 @@ loopback binding, export, retention, and removal behavior.
 - Discover public GitHub Skill candidates and rank overlap with enabled local definitions.
 - Run an in-memory, blinded, task-specific A/B evaluation in prompt-only or bounded read-only agent mode.
 - Provide contextual assistant chat without exposing local Skill paths or Skill-definition contents.
+- Present a personal-developer IA with bounded Command Center, Agents, Activity,
+  Assets, Benchmarks, Releases, and Settings read models.
+- Keep legacy product URLs compatible while storing restorable filter/tab/page
+  state in canonical URLs.
 
 ### 4.2 Product quality goals
 
@@ -139,7 +143,7 @@ Acceptance:
 
 ### 7.2 Inspect installed definitions
 
-1. User opens Registry.
+1. User opens Assets.
 2. SkillOps performs a live filesystem scan through `POST /api/scan`.
 3. User chooses Combined, Codex, Claude Code, or Cursor workspace.
 4. User filters by global/project/plugin source, provider, enabled state, search,
@@ -163,7 +167,7 @@ Acceptance:
 2. User explicitly invokes a Skill in Codex or Claude Code.
 3. The runtime adapter emits match/start/terminal lifecycle evidence where the
    runtime signal permits it.
-4. User finds the run in Runs or executes the recording-check script.
+4. User finds the run in Activity or executes the recording-check script.
 
 Acceptance:
 
@@ -187,74 +191,94 @@ Acceptance:
 
 ## 8. Surface requirements
 
-### 8.1 Overview — `/`
+### 8.1 Command Center — `/`
 
 Implemented:
 
-- runtime and time-range filters;
-- run, success-rate, active-Skill, and reported-cost summaries;
-- daily run chart, runtime distribution, top Skill table, and recent activity;
-- empty-state connection guidance;
-- explicit local/demo data mode.
+- deterministic readiness, issue, and next-action projection from
+  `GET /api/command-center`;
+- runtime and 7/14/30-day scope;
+- honest run, outcome coverage, active-Skill, and reported-cost metrics;
+- bounded recent activity and explicit partial/unavailable source states;
+- empty-state connection and provider guidance.
 
-### 8.2 Skills — `/skills`
-
-Implemented:
-
-- terminal run metrics grouped by runtime and Skill name;
-- search, expandable definition details, version and latest run metadata;
-- lifecycle-only and evaluated outcome distinctions.
-
-### 8.3 Runs — `/runs`
+### 8.2 Agents — `/agents`
 
 Implemented:
 
-- terminal execution timeline;
-- search by Skill, event ID, or project;
-- pagination in groups of 20;
-- correlated run detail;
-- atomic JSON or JSONL import.
+- separate **Observed Activity** and **Definitions** tabs;
+- runtime, date, search, and 50-row server pagination state in the URL;
+- definition and lifecycle evidence joined by runtime-aware identity without
+  counting discovery as execution;
+- bounded Agent detail evidence timeline.
 
-### 8.4 Evaluations — `/evaluations`
-
-Implemented as Skill Lab:
-
-- public GitHub candidate discovery with multi-Skill repository selection;
-- deterministic comparison against enabled local definitions;
-- explicit local baseline selection;
-- task and acceptance-criteria input;
-- sequential baseline/candidate prompt-only or read-only agent runs plus a final blind judge call;
-- candidate SHA-256 pinning between analysis and execution;
-- in-memory result/output display and contextual assistant chat;
-- nine page-memory providers with editable model/Base URL and compatible reasoning effort;
-- no promotion, rollout, installation, definition mutation, or result persistence.
-
-Separate Suites and History tabs retain this Quick Compare path. Managed Suite
-summaries survive reload, but API keys, suite case bodies, prompts, workspace
-excerpts, raw outputs, and provider error bodies are not copied into evidence
-storage. The Governance route binds exact evidence and independent approval to
-Candidate, Ready, Canary, Stable, supersede, and rollback transitions.
-
-### 8.5 Registry — `/registry`
+### 8.3 Activity — `/activity`
 
 Implemented:
 
-- live scan and rescan;
-- runtime-first workspace separation;
-- source and provider categories;
-- unique Skill and definition counts;
-- health filters for duplicate, conflict, disabled, and missing metadata;
-- exact local source paths.
+- terminal run timeline from one validated 20/50/100-row `/api/runs` page;
+- search plus runtime, project, outcome, date, reported-cost, and sort filters;
+- correlated on-demand detail in a bounded 200-event window;
+- atomic JSON/JSONL import and deletion-aware bounded polling.
 
-### 8.6 Settings — `/settings`
+Legacy `/runs` redirects to the canonical Activity route.
+
+### 8.4 Assets — `/assets`
 
 Implemented:
 
-- connection status and real activity counts;
-- installation command guidance;
-- JSONL export;
-- confirmed clear with local backup;
-- local privacy boundary explanation.
+- live installed-definition scan and unified Artifact Registry;
+- runtime-first source/provider/type/status/issue filters;
+- duplicate/conflict/disabled/missing and desired-versus-observed drift facts;
+- 50-row client pagination over the bounded scan result;
+- reviewed conflict preview, apply, authoritative rescan, and undo.
+
+Legacy `/skills` and `/registry` URLs remain compatible.
+
+### 8.5 Benchmarks — `/benchmarks`
+
+Implemented:
+
+- memory-only Quick Compare with public GitHub candidate discovery, deterministic
+  local overlap, explicit task/criteria, sequential blinded A/B, and bounded
+  read-only agent mode;
+- Managed Suite list, preflight, asynchronous run, History, sanitized case
+  evidence/report, cancellation, and validated Candidate continuation;
+- provider settings saved only after explicit confirmation to the dedicated
+  local AI settings file.
+
+Legacy `/evaluations` remains compatible. Quick Compare cannot create a
+Capability or bind governed evidence.
+
+### 8.6 Releases — `/releases`
+
+Implemented:
+
+- existing Capability stages grouped as Candidate, Evaluating, Blocked, Ready,
+  Canary, Stable, Deprecated, and Rolled back;
+- immutable Artifact/evidence hashes, freshness/gate checks, independent
+  approval, preview, confirmation, authoritative rescan, and rollback;
+- no parallel release state machine and no PromptHub authority over Stable.
+
+Legacy `/governance` remains compatible.
+
+### 8.7 Settings — `/settings`
+
+Implemented:
+
+- runtime configuration truth, connection stage, activity, repair, and
+  uninstall guidance;
+- AI provider/model/endpoint status with explicit save and no secret echo;
+- bounded event summary, direct normalized JSONL export, confirmed backup-first
+  clear, data-path/retention/privacy explanation;
+- system/light/dark appearance plus existing themes under an experimental
+  chooser; Advanced product links remain separately collapsible.
+
+### 8.8 Advanced routes
+
+Team, Audit, Policies, Templates, and PromptHub retain their existing routes
+under the collapsed **Advanced** navigation group. They do not replace the
+personal developer loop or imply a hosted multi-tenant service.
 
 ## 9. Functional requirements
 
@@ -303,14 +327,18 @@ local paths or receive either package's private body.
 
 ### FR-8 Local AI evaluation settings
 
-AI credentials and settings are saved only after an explicit Skill Lab Save into
-local `data/ai-settings.json` via loopback `GET`/`PUT /api/ai-settings`. They
-are never written to browser storage, events, logs, backups, or exports. The
-local server may hold a key, task, Skill contents, requested workspace excerpts,
-generated output, or chat message for the current request, but must not append
-evaluation content to another store. Credentialed endpoints require HTTPS;
-keyless Ollama HTTP is restricted to loopback. Evaluation results are
-task-specific evidence and never mutate lifecycle-event outcomes automatically.
+AI credentials and settings are saved only after an explicit Skill Lab or
+Settings Save into local `data/ai-settings.json` via loopback
+`GET`/`PUT /api/ai-settings`. They are never written to browser storage,
+events, logs, backups, or exports. The current page may receive a saved key in
+request memory for provider execution or update, but the settings dialog
+replaces it with a fixed mask before rendering and never reveals the full
+stored value. The local server may hold a key, task, Skill contents, requested
+workspace excerpts, generated output, or chat message for the current request,
+but must not append evaluation content to another store. Credentialed endpoints
+require HTTPS; keyless Ollama HTTP is restricted to loopback. Evaluation
+results are task-specific evidence and never mutate lifecycle-event outcomes
+automatically.
 
 ### FR-9 Evaluation integrity and agent boundary
 
@@ -340,11 +368,12 @@ telemetry merely to measure SkillOps itself.
 
 | Measure | Definition | Initial target |
 | --- | --- | --- |
-| Setup completion | Adapter installed and at least one runtime event observed | User can verify in one session |
+| Verified first value | Installed adapter plus one post-boundary non-discovery lifecycle | User can verify in one session |
 | Scan correctness | Definitions grouped by correct runtime/source/provider | No known category mixing |
 | Outcome coverage | Evaluated terminal runs / all terminal runs | Reported honestly, no fixed target |
 | Hook safety | Host-runtime tasks blocked by telemetry failure | 0 |
 | Privacy regressions | Forbidden content persisted by built-in adapters | 0 |
+| Performance acceptance | Deterministic 100k events / 5k definitions fixture | Command Center warm p95 ≤ 750 ms; Activity p95 ≤ 500 ms; UI ready p95 ≤ 120 ms |
 | Test health | Automated tests passing on supported Node version | 100% |
 
 ## 11. Risks and mitigations
@@ -391,14 +420,15 @@ control.
 
 - [x] Local development and production-style start commands work.
 - [x] Codex and Claude Code adapters can be previewed, installed, verified, and removed.
-- [x] Registry separates runtime, source, provider, type, enabled state, and issues.
+- [x] Assets separates runtime, source, provider, type, enabled state, and issues.
 - [x] Real lifecycle records are distinct from installed/discovered definitions.
 - [x] Unknown lifecycle outcomes do not inflate success rate.
-- [x] Import, export, clear, and backup workflows exist.
-- [x] Event polling supports ETag/304 responses.
-- [x] Local API and SPA routes pass smoke verification.
-- [x] Skill Lab compares public candidates with live local definitions.
-- [x] Explicitly persisted local AI settings, hash-pinned blinded A/B results, bounded read-only agent mode, and contextual chat exist.
+- [x] Import, direct normalized export, clear, and backup workflows exist.
+- [x] Event polling supports ETag/304 and primary pages consume bounded projections.
+- [x] Canonical and legacy SPA routes pass production smoke verification.
+- [x] Quick Compare stays memory-only; only Managed Suite evidence can continue a validated Candidate.
+- [x] Explicit local AI settings, hash-pinned blinded A/B, bounded read-only agent mode, and contextual chat exist.
+- [x] Managed Suite evidence, independent approval, release preview/apply/rescan, and rollback exist.
+- [x] Deterministic large-fixture performance and browser readiness checks exist.
 - [ ] Cursor native adapter is implemented.
-- [x] Multi-case evaluation confidence, report export, and real version promotion exist.
 - [ ] Automatic retention and event-store compaction policy exist.

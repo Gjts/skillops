@@ -67,18 +67,22 @@ describe('Claude Code hook installer', () => {
     const { stdout } = await runInstaller(['--dry-run', '--claude-home', claudeHome])
     expect(stdout).not.toContain(secret)
     expect(stdout).toContain('[REDACTED]')
+    expect(stdout).toContain('will be backed up')
   })
 
   it('merges idempotently and removes only SkillOps handlers', async () => {
     const claudeHome = await temporaryDirectory('skillops-claude-home-')
     const settingsFile = path.join(claudeHome, 'settings.json')
-    await writeFile(settingsFile, JSON.stringify({
+    const original = JSON.stringify({
       permissions: { allow: ['Read'] },
       hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo existing' }] }] },
-    }))
+    })
+    await writeFile(settingsFile, original)
 
-    await updateInstallation({ claudeHome })
-    await updateInstallation({ claudeHome })
+    const first = await updateInstallation({ claudeHome })
+    const second = await updateInstallation({ claudeHome })
+    expect(await readFile(first.backup, 'utf8')).toBe(original)
+    expect(second).toEqual(expect.objectContaining({ changed: false, backup: undefined }))
     const installed = JSON.parse(await readFile(settingsFile, 'utf8'))
     expect(installed.permissions.allow).toEqual(['Read'])
     expect(installed.hooks.PreToolUse.flatMap((group) => group.hooks).filter((hook) => hook.command.includes('skillops-claude-hook'))).toHaveLength(2)

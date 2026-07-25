@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { artifactContentHash } from '../evaluations/artifact-definition.mjs'
 import { artifactPackageHash, readArtifactPackage } from '../evaluations/artifact-package.mjs'
 import { createSkeletonInstaller } from './skeleton-installer.mjs'
@@ -76,6 +76,21 @@ describe('project skeleton installer', () => {
     expect(applied).toEqual(expect.objectContaining({ applied: true, contentHash: capability.artifact.contentHash, rollback: { restored: false } }))
     expect(await readFile(targetFile, 'utf8')).toBe(candidate)
     expect((await readdir(root)).filter((name) => name.includes('backup'))).toHaveLength(1)
+  })
+
+  it('rejects an expired preview without changing the target', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime('2026-07-25T12:00:00.000Z')
+    try {
+      const { targetFile, current, capability, installer } = await setup()
+      const preview = await installer.preview(capability)
+      vi.advanceTimersByTime(10 * 60_000 + 1)
+
+      await expect(installer.apply(preview.previewToken, applyInput(preview))).rejects.toThrow('missing or expired')
+      expect(await readFile(targetFile, 'utf8')).toBe(current)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('does not apply a preview whose target conflicts with the evaluated Stable baseline', async () => {

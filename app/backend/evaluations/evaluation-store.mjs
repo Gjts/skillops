@@ -9,6 +9,7 @@ import { withGovernanceFileLock } from '../governance/skeleton-lock.mjs'
 const RUN_STATUSES = new Set(['queued', 'running', 'completed', 'failed', 'cancelled', 'interrupted'])
 const RUN_MODES = new Set(['quick', 'suite', 'redteam'])
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'interrupted'])
+const MANAGED_DECISIONS = new Set(['create-candidate', 'keep-baseline', 'reject-candidate', 'collect-more-evidence'])
 const DEFAULT_WARNING_BYTES = 50 * 1024 * 1024
 
 function text(value, label, maxLength = 4_000, { optional = false } = {}) {
@@ -191,6 +192,21 @@ export function computeEvaluationEvidenceHash(summary) {
   return createHash('sha256').update(canonicalJson(normalized), 'utf8').digest('hex')
 }
 
+function sanitizeEvaluationDecision(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new EvaluationError('Evaluation decision record is invalid.', 500)
+  const candidateHash = text(value.candidateHash, 'Decision candidate hash', 64)
+  if (!/^[a-f0-9]{64}$/.test(candidateHash) || !MANAGED_DECISIONS.has(value.decision)) {
+    throw new EvaluationError('Evaluation decision record is invalid.', 500)
+  }
+  return {
+    runId: text(value.runId, 'Decision run ID', 200),
+    artifactId: text(value.artifactId, 'Decision Artifact ID', 300),
+    candidateHash,
+    decision: value.decision,
+    decidedAt: iso(value.decidedAt, 'Decision time'),
+  }
+}
+
 function parseRecords(contents) {
   const lines = contents.split('\n')
   const records = []
@@ -222,12 +238,19 @@ export function createEvaluationStore(options = {}) {
   async function latestState() {
     const runs = new Map()
     const cases = new Map()
+    const decisions = new Map()
     for (const record of await records()) {
       if (record?.schemaVersion !== undefined && ![1, 2].includes(record.schemaVersion)) {
         throw new EvaluationError('Evaluation store record schema is unsupported.', 500)
       }
       if (record?.type === 'run') runs.set(record.summary?.id, sanitizeEvaluationRunSummary(persistedSummary(record)))
       else if (record?.type === 'cases') cases.set(record.runId, sanitizeEvaluationCases(record.cases))
+      else if (record?.type === 'decision') {
+        const decision = sanitizeEvaluationDecision(record.decision)
+        const history = decisions.get(decision.runId) || []
+        history.push(decision)
+        decisions.set(decision.runId, history)
+      }
     }
     for (const run of runs.values()) {
       if (run.status !== 'completed' || !run.casesHash) continue
@@ -236,7 +259,13 @@ export function createEvaluationStore(options = {}) {
         throw new EvaluationError('Evaluation store case evidence does not match its immutable summary.', 500)
       }
     }
-    return { runs, cases }
+    for (const [runId, history] of decisions) {
+      const run = runs.get(runId)
+      if (!run || history.some((decision) => decision.artifactId !== run.candidate.artifactId || decision.candidateHash !== run.candidate.contentHash)) {
+        throw new EvaluationError('Evaluation decision does not match its authoritative run.', 500)
+      }
+    }
+    return { runs, cases, decisions }
   }
 
   async function repairTrailingNewline() {
@@ -301,6 +330,32 @@ export function createEvaluationStore(options = {}) {
     async getCases(runId) {
       return (await latestState()).cases.get(runId) || []
     },
+    async appendDecision(runId, decision) {
+      const id = text(runId, 'Run ID', 200)
+      if (!MANAGED_DECISIONS.has(decision)) throw new EvaluationError('Managed evaluation decision is invalid.', 422)
+      return serialized(async () => {
+        const state = await latestState()
+        const run = state.runs.get(id)
+        if (!run) throw new EvaluationError('Evaluation run was not found.', 404)
+        if (run.mode !== 'suite' || run.status !== 'completed' || !run.evidenceHash) {
+          throw new EvaluationError('Only completed Managed Suite evidence can receive a decision.', 409)
+        }
+        const previous = state.decisions.get(id)?.at(-1)
+        if (previous?.decision === decision) return { decision: previous, reused: true }
+        const record = sanitizeEvaluationDecision({
+          runId: id,
+          artifactId: run.candidate.artifactId,
+          candidateHash: run.candidate.contentHash,
+          decision,
+          decidedAt: new Date().toISOString(),
+        })
+        await appendRecord({ type: 'decision', decision: record })
+        return { decision: record, reused: false }
+      })
+    },
+    async getDecision(runId) {
+      return (await latestState()).decisions.get(runId)?.at(-1) || null
+    },
     async listRuns(filters = {}) {
       const limit = Math.min(100, Math.max(1, Number(filters.limit) || 20))
       let items = [...(await latestState()).runs.values()]
@@ -346,7 +401,7 @@ export function createEvaluationStore(options = {}) {
         if (removedRunIds.size) {
           const all = await records()
           const kept = all.filter((record) => {
-            const runId = record?.type === 'run' ? record.summary?.id : record?.type === 'cases' ? record.runId : null
+            const runId = record?.type === 'run' ? record.summary?.id : ['cases', 'decision'].includes(record?.type) ? record.runId || record.decision?.runId : null
             if (!removedRunIds.has(runId)) return true
             removedRecords += 1
             return false

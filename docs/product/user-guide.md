@@ -1,6 +1,6 @@
 # SkillOps user guide
 
-> Applies to: v0.3.2-rc.1 local + Git release candidate
+> Applies to: v0.3.2-rc.1 local + Git Limited Preview
 
 ## 1. What SkillOps can tell you
 
@@ -60,7 +60,7 @@ To verify end to end:
 2. Record the current time.
 3. Explicitly invoke one known Skill in Codex or Claude Code.
 4. Finish the turn.
-5. Open Runs and search for the Skill name.
+5. Open Activity and search for the Skill name.
 6. Confirm the runtime, timestamp, session, detection method, and terminal event.
 
 Command-line verification:
@@ -77,21 +77,24 @@ to isolate one session.
 
 ## 4. Read the dashboard
 
-### Overview
+### Command Center
 
-Use runtime and date filters to inspect terminal runs. The success rate may be
-blank or marked lifecycle-only when no run has an evaluated outcome. Reported
-cost sums only terminal Runtime Skill runs that contain a finite `costUsd`;
-missing cost is shown as unreported, while an explicit zero remains `$0.00`.
-Promptfoo and Provider Evaluation cost stays in Evaluation evidence and is not
-added to the Runtime KPI.
+Use runtime and date filters to inspect a bounded deterministic projection from
+`GET /api/command-center`. Readiness separates installed configuration from
+verified post-install lifecycle evidence. Issues and next actions link to the
+relevant filtered page; they do not claim that an AI inferred causality.
+Success rate is unavailable when no run has a known outcome. Reported cost sums
+only terminal Runtime Skill runs with finite `costUsd`; missing cost is
+unreported, and explicit zero remains `$0.00`.
 
-### Skills
+### Agents
 
-Shows execution metrics grouped by runtime and Skill name. One name used in
-both Codex and Claude Code remains two runtime-specific rows.
+The **Observed Activity** tab shows runtime-scoped Agent lifecycle projections;
+the **Definitions** tab shows installed Agent files. Discovery alone never
+creates observed activity. Runtime, time, search, and page state stay in the
+URL, and `GET /api/agents` returns one bounded 50-row page at a time.
 
-### Runs
+### Activity
 
 Shows `skill.completed` and `skill.failed` events. The page requests only the
 current 20, 50, or 100 rows from `GET /api/runs`. Opening a run then requests
@@ -107,7 +110,7 @@ timestamp/ID, moves an out-of-range page after deletions, and retries the local
 API from Demo mode without downloading `/api/events` or inserting rows into a
 page already being read.
 
-### Skill Lab
+### Benchmarks
 
 Use Skill Lab to compare a public GitHub Skill with enabled definitions already
 on this machine:
@@ -152,10 +155,13 @@ the in-memory conversation for the current page session.
 AI settings support OpenAI, Gemini, Anthropic, Azure OpenAI, Ollama,
 OpenRouter, MiniMax, GLM, and DeepSeek. After you click **Save settings**,
 provider configuration including API keys is stored in the local SkillOps data
-directory as `ai-settings.json` and restored when Skill Lab reloads. Settings
-are not written to browser storage. Credentialed provider endpoints require HTTPS; keyless Ollama HTTP is
+directory as `ai-settings.json` and restored when Skill Lab reloads. A saved
+key is shown only as a fixed mask in the settings dialog; revealing the field
+never returns the full stored value. Settings are not written to browser
+storage. Credentialed provider endpoints require HTTPS; keyless Ollama HTTP is
 accepted only on a loopback address. A custom Base URL receives the configured
-key, so use only an endpoint you trust. OpenAI-compatible transports expose
+key, so use only an endpoint you trust.
+OpenAI-compatible transports expose
 `none`, `low`, `medium`, `high`, `xhigh`, and `max` reasoning efforts when the
 selected model supports them. GPT-5.6 defaults to Medium when the field is left
 at provider default; its Chat Completions tool calls require **None**, so Skill
@@ -167,7 +173,7 @@ They are sent to the selected model provider, whose data policy applies.
 Read-only agent mode additionally sends only workspace excerpts requested
 through its bounded tool interface.
 
-### Registry
+### Assets
 
 Choose a runtime workspace before interpreting counts:
 
@@ -214,15 +220,33 @@ other direct Skill or its containing plugin. Do not edit or delete files inside
 a runtime plugin cache by hand. A cross-runtime shared name is informational,
 not a conflict.
 
+### Releases
+
+Quick Compare can carry an in-memory Candidate draft into Managed Suites, but it
+cannot create a Capability or bind governed evidence. A completed Managed Suite
+can nominate the exact baseline/candidate/evidence hashes. Releases preserves
+the authoritative Capability stages, blocks stale or insufficient evidence,
+requires an independent reviewer for approval, and uses preview, confirmation,
+authoritative rescan, and rollback for filesystem changes.
+
 ### Settings
 
-Inspect config status, last activity, and event count. Export downloads the
-normalized local JSONL data. Clear creates a timestamped backup before emptying
-the active file.
+Settings groups runtime connections, AI Providers, Appearance, Data & Privacy,
+and links to the existing Advanced controls. Runtime rows keep configuration
+truth, connection stage, real activity, and last verified evidence separate.
+Provider status shows the active model and endpoint without echoing a saved key.
+System, Light, and Dark are the stable appearance choices; the remaining
+catalog stays available under **Experimental themes**.
+
+The data section reads only a bounded count/latest-activity summary. Export
+streams normalized JSONL directly from the loopback backend. Clear requires
+confirmation and creates a timestamped backup before replacing the active file.
+The page explicitly reports the lack of automatic retention and application-level
+encryption.
 
 ## 5. Import event data
 
-Runs accepts either a JSON array or newline-delimited JSON. Every event is
+Activity accepts either a JSON array or newline-delimited JSON. Every event is
 validated before anything is written. If one event is invalid, the entire
 import is rejected. Existing IDs and duplicates inside the import batch are
 not appended again.
@@ -269,6 +293,10 @@ needed.
 Skill Lab evaluation content is separate from `data/events.jsonl`: tasks, chat
 messages, and generated output are not written there. Saved AI provider settings
 may exist beside that store in `data/ai-settings.json`.
+
+SkillOps does not manage encryption at rest. Protect the data directory, event
+exports, and retained backups with operating-system permissions and disk
+encryption.
 
 ### Managed Suites, governance, and local Prompt privacy
 

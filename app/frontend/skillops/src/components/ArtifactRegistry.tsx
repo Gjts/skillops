@@ -306,6 +306,7 @@ export function ArtifactRegistry({ inventory = [], inventoryIssues = new Map(), 
       {filtered.length ? (
         <div className="artifact-table-wrap">
           <table className="artifact-table">
+            <caption className="sr-only">{t('registry.artifactsTitle')}</caption>
             <thead><tr><th>{t('registry.artifact')}</th><th>{t('common.type')}</th><th>{t('registry.owner')}</th><th>{t('common.status')}</th><th>{t('common.version')}</th><th>{t('registry.installations')}</th></tr></thead>
             <tbody>{filtered.map((artifact) => {
               const versions = versionsByArtifact.get(artifact.id) || []

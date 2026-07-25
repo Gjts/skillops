@@ -60,6 +60,15 @@ generated answers, judge rationales, chat messages, and workspace excerpts stay
 out of persistent SkillOps storage and exist only in browser/request memory for
 the current interaction. Credentials are never written to the event store,
 exports, diagnostics, or logs. Browser storage is not used for credentials.
+The only product browser-persistence keys are `skillops.locale.v1` and
+`skillops.theme.v2` (plus one-time migration of `skillops.theme.v1`). Event,
+evaluation, evidence, Agent, run, provider, and credential values must not be
+written to `localStorage`, `sessionStorage`, IndexedDB, or browser Cache Storage.
+`GET /api/ai-settings` is the sole approved browser response that may contain a
+saved key so the current page can run or update the selected provider. The
+settings modal replaces each saved key with a fixed mask before rendering; its
+reveal control never receives the stored value. The response is `no-store` and
+the value remains request/page memory only.
 When the user selects read-only agent mode, requested allowed workspace excerpts
 also exist in request memory and are transmitted to that provider; they are
 never appended to SkillOps storage.
@@ -139,6 +148,14 @@ temporary files removed before return and are never copied to SkillOps data,
 Team exports, telemetry, or API responses.
 
 The shared event allowlist is a persistence control, not merely a display filter.
+
+Primary pages use bounded projections instead of the full event feed. Settings
+reads only a count/latest-activity summary and starts a backend-normalized JSONL
+download; it does not materialize the complete store in React state before
+export. The deterministic performance harness writes only fixture parameters,
+fixture hash, environment versions, aggregate timings, and memory measurements
+to the ignored local `data/performance-report.json`; it does not copy fixture
+events, prompts, source, errors, or credentials into the report.
 
 ## 5. Data flow and storage
 
@@ -231,7 +248,7 @@ text; Skill code is not executed.
 - assistant context excludes local paths and local Skill file contents;
 - Answer A/B ordering is stable-blinded before judging;
 - a judge winner that contradicts its normalized scores is rejected;
-- credentials are not echoed in success payloads or persisted error records;
+- evaluation and assistant success payloads do not echo credentials, and persisted error records never contain them;
 - credentialed custom Base URLs require HTTPS and reject embedded credentials,
   query strings, and fragments; keyless Ollama HTTP must use loopback;
 - remote candidate and provider response bodies are byte-bounded while streaming.

@@ -43,9 +43,9 @@ SPA fallback, path traversal protection, and loopback binding.
 
 ### `event-store.mjs`
 
-Owns event reads/appends/imports, ETag versioning, backups, clearing, selective
-removal, discovery deduplication, lock coordination, and deterministic IDs for
-legacy JSONL rows that lack one.
+Owns event reads/appends/imports, ETag versioning, version-keyed in-memory read
+caching, backups, clearing, selective removal, discovery deduplication, lock
+coordination, and deterministic IDs for legacy JSONL rows that lack one.
 
 ### `runs-api.mjs`
 
@@ -54,6 +54,18 @@ event-store I/O, filters terminal Skill runs, preserves stable timestamp/ID
 ordering, and returns 20/50/100-row pages plus scoped lifecycle counts.
 `GET /api/runs/~:id` returns one terminal run in a bounded 200-event
 correlation window, preserving the selected run and reporting total/truncation metadata.
+
+### `command-center.mjs`
+
+Owns the deterministic Command Center aggregate, truth labels, source status,
+bounded recent activity, readiness, and prioritized actions. Cache entries are
+keyed by event-store version, runtime, time window, and a short TTL.
+
+### `agents-api.mjs`
+
+Joins live Agent definitions with Agent lifecycle events into separate,
+runtime-aware Definitions and Observed Activity projections. List responses are
+fixed at 50 rows; detail responses include a bounded 20-event timeline.
 
 ### `skill-scanner.mjs`
 
@@ -120,22 +132,40 @@ write, process, or network tool. Model rounds and total tool calls are capped.
 
 ## 4. HTTP contract
 
-All successful JSON responses use `Content-Type: application/json`.
+Successful structured responses use `Content-Type: application/json`.
+`GET /api/events?download=1` is the explicit JSONL download exception.
 Evaluation and assistant POST handlers additionally reject non-loopback Host
 headers, cross-site or mismatched browser Origins, and non-JSON content types
 before scanning local inventory or contacting a provider.
 
 ### `GET /api/events`
 
-Before reading, performs an incremental Codex Desktop sync. Returns the event
-array and an ETag derived from file size and modification time. A matching
-`If-None-Match` returns `304` with an empty body.
+Before reading, performs an incremental Codex Desktop sync. The compatibility
+form returns the normalized event array and an ETag derived from the store
+version; matching `If-None-Match` returns `304`. `summary=1` returns only count,
+generated time, and latest non-discovery activity time. `download=1` streams the
+normalized store as an attachment and never returns unknown persisted fields.
 
 Responses:
 
-- `200`: JSON array;
-- `304`: unchanged;
+- `200`: JSON array, bounded summary object, or normalized JSONL attachment;
+- `304`: unchanged compatibility feed;
+- `400`: conflicting query modes;
 - `500`: read or sync failure.
+
+### `GET /api/command-center`
+
+Validates runtime plus a 7d/14d/30d window and returns one deterministic,
+bounded aggregate. It contains metric definitions and provenance, source
+availability, readiness, prioritized issues/actions, and at most five recent
+records; it never contains the full event array.
+
+### `GET /api/agents`
+
+Validates tab, runtime, time window, query, and page before returning one 50-row
+page. `/api/agents/:id` returns one matching projection with at most 20 recent
+lifecycle events. Discovery remains definition evidence and cannot create an
+Observed Activity item.
 
 ### `GET /api/runs`
 

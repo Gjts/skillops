@@ -31,16 +31,16 @@ function response(body: unknown, status = 200) {
   return Promise.resolve({ ok: status >= 200 && status < 300, status, json: async () => body })
 }
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.history.replaceState({}, '', '/') })
 
 describe('governance UI', () => {
   it('shows the pipeline, evidence provenance, and stale state', async () => {
     vi.stubGlobal('fetch', vi.fn().mockReturnValue(response({ items: [capability('blocked', true)] })))
     render(<GovernancePage />)
-    expect((await screen.findAllByText('review-skill')).length).toBe(2)
+    expect((await screen.findAllByText('review-skill')).length).toBeGreaterThanOrEqual(2)
     expect(screen.getByText('Evidence is stale')).toBeTruthy()
     expect(screen.getByText('cccccccccccc')).toBeTruthy()
-    expect(screen.getByRole('list', { name: 'Governance pipeline' })).toBeTruthy()
+    expect(screen.getByRole('list', { name: 'Release pipeline' })).toBeTruthy()
   })
 
   it('sends an in-memory reviewer token for independent approval', async () => {
@@ -114,6 +114,7 @@ describe('governance UI', () => {
   it('rebinds stale Canary evidence before exposing release controls', async () => {
     vi.stubGlobal('fetch', vi.fn().mockReturnValue(response({ items: [capability('canary', true)] })))
     render(<GovernancePage />)
+    fireEvent.click(await screen.findByText('Advanced evidence binding'))
     expect(await screen.findByRole('button', { name: 'Validate and bind' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Preview promotion' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Preview installation' })).toBeNull()
@@ -127,6 +128,7 @@ describe('governance UI', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
     const view = render(<GovernancePage />)
+    fireEvent.click(await screen.findByText('Advanced evidence binding'))
     expect(await screen.findByRole('button', { name: 'Validate and bind' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Preview restoration' })).toBeNull()
     view.unmount()
@@ -225,5 +227,41 @@ describe('governance UI', () => {
     fireEvent.click(apply)
     expect(await screen.findByRole('button', { name: 'Preview restoration' })).toBeTruthy()
     expect(fetchMock).toHaveBeenCalledWith('/api/capabilities/cap-1/deprecate', expect.objectContaining({ body: expect.stringContaining('"confirm":true') }))
+  })
+
+  it('opens a managed Candidate deep link with release evidence, channel history, and scoped audit', async () => {
+    const baseline = { ...artifact, version: '1.0.0', sourceRef: 'github:https://github.com/acme/review#v1/SKILL.md', contentHash: 'b'.repeat(64) }
+    const selected = {
+      ...capability('ready'),
+      id: 'cap-target',
+      artifact: { ...artifact, version: '3.0.0', sourceRef: 'github:https://github.com/acme/review#v3/SKILL.md' },
+      baseline,
+    }
+    const previousStable = { ...capability('stable'), id: 'cap-stable', artifact: { ...artifact, version: '2.0.0' } }
+    window.history.replaceState({}, '', '/releases?capability=cap-target')
+    const fetchMock = vi.fn((input: string) => {
+      if (input === '/api/capabilities') return response({ items: [{ ...capability('candidate'), id: 'cap-first' }, selected, previousStable] })
+      if (input === '/api/evaluation-runs/run-1') return response({
+        id: 'run-1', status: 'completed', gateResult: 'passed', evidenceFresh: true,
+        metrics: { casesPassed: 4, casesTotal: 4 }, gates: [{ id: 'quality', status: 'passed', blocking: true }],
+      })
+      if (input === '/api/capabilities/cap-target/audit') return response({ items: [{
+        id: 'audit-1', action: 'evidence.bound', actor: 'Evaluator', outcome: 'committed',
+        capabilityId: 'cap-target', fromStage: 'candidate', toStage: 'ready', at: '2026-07-21T00:00:00.000Z',
+      }] })
+      return response({ error: { message: 'Not found' } }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<GovernancePage />)
+
+    expect(await screen.findByRole('heading', { name: 'Release pipeline' })).toBeTruthy()
+    expect(screen.getAllByText('Ready for independent review').length).toBeGreaterThan(0)
+    expect(await screen.findByText('4 evaluated cases')).toBeTruthy()
+    expect(screen.getByText('Previous Stable')).toBeTruthy()
+    expect(screen.getAllByText('2.0.0').length).toBeGreaterThan(0)
+    expect(screen.getByRole('region', { name: 'Release comparison' })).toBeTruthy()
+    expect(within(screen.getByRole('region', { name: 'Audit timeline' })).getByText('Evidence bound')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Independent approval' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText('Advanced release tools').closest('details')?.open).toBe(false)
   })
 })

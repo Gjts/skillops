@@ -32,6 +32,12 @@ Restart Claude Code after installation, then run `/hooks` to verify that the Ski
 npm run dev
 ```
 
+In SkillOps **Settings**, open Claude Code and click **Begin verification**
+before invoking a known Skill. Finish the turn, then refresh. **Installed**
+confirms configuration only; **Verified** requires a post-boundary
+non-discovery lifecycle event. A `skill.discovered` record never passes this
+check.
+
 ## What is observed
 
 | Claude Code signal | SkillOps event | Detection |

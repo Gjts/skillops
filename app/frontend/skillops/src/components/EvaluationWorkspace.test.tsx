@@ -58,6 +58,15 @@ function mockApi(handlers: Record<string, (init?: RequestInit) => Promise<unknow
       }
       return Promise.resolve({ ok: true, status: 200, json: async () => createDefaultAiSettings() })
     }
+    if (input === '/api/evaluation-suites') {
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ items: [{
+        id: 'suite-1', name: 'Quality suite', version: '1.0.0', owner: 'qa', sensitivity: 'synthetic',
+        artifactKind: 'skill', repeats: 1, caseCount: 1, suiteHash: 'c'.repeat(64), datasetHash: null, datasetId: null,
+      }] }) })
+    }
+    if (input === '/api/evaluation-runs?limit=50') {
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ items: [] }) })
+    }
     if (input === '/api/evaluations/compare') {
       if (handlers['/api/evaluations/compare']) return Promise.resolve(handlers['/api/evaluations/compare'](init))
       return Promise.resolve({ ok: true, status: 200, json: async () => analysis })
@@ -245,6 +254,13 @@ describe('EvaluationWorkspace', () => {
 
   it('analyzes a candidate, configures a session provider, runs A/B, and chats about the result', async () => {
     render(<EvaluationWorkspace />)
+    const quickTab = screen.getByRole('tab', { name: 'Quick Compare' })
+    quickTab.focus()
+    fireEvent.keyDown(quickTab, { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(screen.getByRole('tab', { name: 'Suites' }))
+    expect(screen.getByRole('tab', { name: 'Suites' }).getAttribute('aria-selected')).toBe('true')
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowLeft' })
+    expect(document.activeElement).toBe(quickTab)
     fireEvent.change(screen.getByRole('textbox', { name: 'Candidate GitHub URL' }), { target: { value: analysis.candidate.sourceUrl } })
     fireEvent.click(screen.getByRole('button', { name: 'Find matches' }))
 
@@ -282,6 +298,12 @@ describe('EvaluationWorkspace', () => {
     expect(await screen.findByText('Candidate wins')).toBeTruthy()
     expect(screen.getByText('91')).toBeTruthy()
     expect(screen.getByText(/higher-risk path/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Run Managed Suite' }))
+    expect(screen.getByRole('tab', { name: 'Suites' }).getAttribute('aria-selected')).toBe('true')
+    expect((screen.getByRole('textbox', { name: 'Baseline reference' }) as HTMLInputElement).value).toBe('local-scan:codex:C:\\skills\\security-scan\\SKILL.md')
+    expect((screen.getByRole('textbox', { name: 'Candidate reference' }) as HTMLInputElement).value).toBe('github:https://github.com/example/security-review#skills%2Fsecurity-review%2FSKILL.md')
+    expect(screen.getByText(/draft remains in this page memory/i)).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: 'Quick Compare' }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Discuss result' }))
     const assistant = screen.getByRole('complementary', { name: /SkillOps assistant, Context: security-review/ })

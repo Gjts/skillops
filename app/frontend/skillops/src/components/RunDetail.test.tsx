@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, createEvent, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { SkillEvent } from '../types'
 import { correlatedRunEvents, RunDetail } from './RunDetail'
@@ -46,6 +46,9 @@ describe('run detail', () => {
     expect(screen.getByText('3 events')).toBeTruthy()
     expect(screen.getByText('$0.04')).toBeTruthy()
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close run detail' }))
+    const tab = createEvent.keyDown(document.activeElement as HTMLElement, { key: 'Tab' })
+    fireEvent(document.activeElement as HTMLElement, tab)
+    expect(tab.defaultPrevented).toBe(true)
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(closed).toBe(true)
   })

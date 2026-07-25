@@ -165,6 +165,14 @@ try {
   const eventEtag = eventsResponse.headers.get('etag')
   const unchangedEvents = await fetch(`http://127.0.0.1:${port}/api/events`, { headers: { 'If-None-Match': eventEtag } })
   if (!eventEtag || unchangedEvents.status !== 304) throw new Error('Unchanged event polling did not use a lightweight 304 response.')
+  const summaryResponse = await fetch(`http://127.0.0.1:${port}/api/events?summary=1`)
+  const summary = await summaryResponse.json()
+  if (!summaryResponse.ok || summary.count !== events.length || 'items' in summary) throw new Error('Event summary API did not keep the browser response bounded.')
+  const exportResponse = await fetch(`http://127.0.0.1:${port}/api/events?download=1`)
+  const exportedEvents = (await exportResponse.text()).trim().split('\n').filter(Boolean)
+  if (!exportResponse.ok || exportedEvents.length !== events.length || !exportResponse.headers.get('content-disposition')?.includes('skillops-events-')) {
+    throw new Error('Normalized event export did not return a complete JSONL download.')
+  }
 
   const scanResponse = await fetch(`http://127.0.0.1:${port}/api/scan?source=smoke`, { method: 'POST' })
   const inventory = await scanResponse.json()
@@ -388,6 +396,8 @@ try {
   if (created.outcome !== 'unknown') throw new Error('Lifecycle-only completion was incorrectly marked successful.')
   if (JSON.stringify(created).includes('must-not-be-stored')) throw new Error('Unknown event fields were not removed.')
   if ((await readFile(path.join(smokeData, 'events.jsonl'), 'utf8')).includes('must-not-be-stored')) throw new Error('Sensitive unknown fields reached the event store.')
+  const updatedSummary = await fetch(`http://127.0.0.1:${port}/api/events?summary=1`).then((response) => response.json())
+  if (updatedSummary.count !== events.length + 1) throw new Error('Event summary cache did not invalidate after append.')
 
   const crossSiteEvent = await fetch(`http://127.0.0.1:${port}/api/events`, {
     method: 'POST',

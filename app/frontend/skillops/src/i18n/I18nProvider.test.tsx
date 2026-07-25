@@ -91,13 +91,13 @@ describe('SkillOps internationalization', () => {
     render(<I18nProvider><App /></I18nProvider>)
 
     fireEvent.change(screen.getByLabelText('Language'), { target: { value: 'ja' } })
-    expect(screen.getByRole('heading', { level: 1, name: '概要' })).toBeTruthy()
+    expect(screen.getByRole('heading', { level: 1, name: 'コマンドセンター' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '設定' })).toBeTruthy()
-    expect(screen.getByRole('heading', { name: 'どのランタイムからの Skill 実行はありません' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'アセット' })).toBeTruthy()
     expect(document.documentElement.lang).toBe('ja')
   })
 
-  it('retranslates import feedback and the live Skill Lab mode', async () => {
+  it('retranslates import feedback and the live Benchmarks mode', async () => {
     window.localStorage.setItem('skillops.locale.v1', 'en')
     window.history.replaceState({}, '', '/runs')
     let stored: object[] = []
@@ -118,8 +118,8 @@ describe('SkillOps internationalization', () => {
     expect(screen.getByText('新しいイベント1件をローカルイベントストアにインポートしました。').getAttribute('role')).toBe('status')
 
     fireEvent.change(screen.getByLabelText('言語'), { target: { value: 'fr' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Skill Lab' }))
-    expect(screen.getByRole('heading', { level: 1, name: 'Skill Lab' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Benchmarks' }))
+    expect(screen.getByRole('heading', { level: 1, name: 'Benchmarks' })).toBeTruthy()
     expect(screen.getByText('Évaluation en direct')).toBeTruthy()
   })
 
@@ -146,7 +146,7 @@ describe('SkillOps internationalization', () => {
     fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File([], 'empty.json')] } })
     expect((await screen.findByRole('alert')).textContent).toBe('导入失败：所选事件文件为空。')
 
-    fireEvent.click(screen.getByRole('button', { name: '注册表' }))
+    fireEvent.click(screen.getByRole('button', { name: '资产' }))
     const row = (await screen.findByText('project-fallback')).closest('tr') as HTMLElement
     expect(within(row).getAllByText('项目')).toHaveLength(3)
     expect(within(row).queryByText('Project')).toBeNull()

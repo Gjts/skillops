@@ -2,7 +2,7 @@
 
 > Version: v0.3.2-rc.1
 > Baseline date: 2026-07-20
-> Product state: local + Git release candidate
+> Product state: local + Git Limited Preview; P0 implemented, external RC gates open
 
 This directory is the source of truth for SkillOps product intent, implemented
 behavior, architecture, operations, privacy, and planned work. Its information
@@ -26,6 +26,7 @@ local-first runtime observability product.
 | Local Prompt contributor | [Prompt Registry contract](develop/integrations/prompt-registry.md) |
 | Local operator | [Getting started](develop/operations/getting_started.md) |
 | Tester | [Testing and QA](develop/operations/testing.md) |
+| Release reviewer | [Release Candidate evidence](develop/operations/rc-evidence/v0.3.2-rc.1.md) |
 | Someone diagnosing a failure | [Troubleshooting](develop/operations/troubleshooting.md) |
 | Team governing duplicate/conflicting Skills | [Registry health and collision handling](develop/operations/registry-health.md) |
 | Security or privacy reviewer | [Privacy and security](develop/security/privacy-security.md) |
@@ -55,6 +56,8 @@ docs/
    ├─ operations/
    │  ├─ getting_started.md
    │  ├─ testing.md
+   │  ├─ rc-evidence/
+   │  │  └─ v0.3.2-rc.1.md
    │  ├─ registry-health.md
    │  └─ troubleshooting.md
    ├─ security/
