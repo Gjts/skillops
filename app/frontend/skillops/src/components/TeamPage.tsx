@@ -1,17 +1,14 @@
-import { Archive, RefreshCw, ShieldCheck, Users } from 'lucide-react'
+import { Archive, ChevronLeft, ChevronRight, RefreshCw, ShieldCheck, Users } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
+
+const TEAM_PAGE_SIZE = 20
 
 type TeamState = {
   revision: number
   team: { id: string; name: string } | null
-  workspaces: Array<{ id: string; name: string }>
-  projects: Array<{ id: string; name: string; artifactIds: string[]; template: { id: string; version: string; status: string; candidateVersion: string | null } | null }>
-  environments: Array<{ id: string; name: string; channel: string }>
-  members: Array<{ id: string; displayName: string; role: string; status: string }>
-  devices: Array<{ id: string; name: string; status: string; lastSeenAt: string | null }>
-  policyPacks: Array<{ id: string; version: string }>
-  exceptions: Array<{ id: string; projectId: string; policyId: string; status: string }>
+  counts: { workspaces: number; projects: number; environments: number; activeMembers: number; activeDevices: number; policyPacks: number; exceptions: number }
+  lastCollectorAt: string | null
   capabilities: { deployment: string; networkApi: boolean; sso: boolean; scim: boolean }
   templateAdoption: { totalProjects: number; adoptedProjects: number; currentProjects: number; driftedProjects: number; pendingUpgradeProjects: number; adoptionRatePct: number }
 }
@@ -28,9 +25,22 @@ type CatalogItem = {
   evidenceHash: string | null
 }
 
-type TeamQueues = {
-  approvalInbox: Array<{ capabilityId: string; artifactId: string; owner: string; evidenceHash: string | null }>
-  releaseQueue: Array<{ capabilityId: string; artifactId: string; stage: string; targetSkeleton: string }>
+type ApprovalItem = { capabilityId: string; artifactId: string; owner: string; evidenceHash: string | null }
+type ReleaseItem = { capabilityId: string; artifactId: string; stage: string; targetSkeleton: string }
+
+type PageEnvelope<T> = {
+  items: T[]
+  page: number
+  pageSize: number
+  totalItems: number
+  totalPages: number
+  hasPrevious: boolean
+  hasNext: boolean
+  revision: number
+}
+
+function emptyPage<T>(): PageEnvelope<T> {
+  return { items: [], page: 1, pageSize: TEAM_PAGE_SIZE, totalItems: 0, totalPages: 0, hasPrevious: false, hasNext: false, revision: 0 }
 }
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
@@ -43,8 +53,12 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
 export function TeamPage() {
   const { formatDateTime, formatNumber, t } = useI18n()
   const [state, setState] = useState<TeamState | null>(null)
-  const [catalog, setCatalog] = useState<CatalogItem[]>([])
-  const [queues, setQueues] = useState<TeamQueues>({ approvalInbox: [], releaseQueue: [] })
+  const [catalog, setCatalog] = useState<PageEnvelope<CatalogItem>>(emptyPage)
+  const [approvals, setApprovals] = useState<PageEnvelope<ApprovalItem>>(emptyPage)
+  const [releases, setReleases] = useState<PageEnvelope<ReleaseItem>>(emptyPage)
+  const [catalogPage, setCatalogPage] = useState(1)
+  const [approvalPage, setApprovalPage] = useState(1)
+  const [releasePage, setReleasePage] = useState(1)
   const [teamId, setTeamId] = useState('local-team')
   const [teamName, setTeamName] = useState('Local Team')
   const [busy, setBusy] = useState(true)
@@ -58,20 +72,29 @@ export function TeamPage() {
       const next = await json<TeamState>('/api/team')
       setState(next)
       if (next.team) {
-        const [catalogResult, queueResult] = await Promise.all([
-          json<{ items: CatalogItem[] }>('/api/team/catalog'),
-          json<TeamQueues>('/api/team/queues'),
+        const [catalogResult, approvalResult, releaseResult] = await Promise.all([
+          json<PageEnvelope<CatalogItem>>(`/api/team/catalog?page=${catalogPage}&pageSize=${TEAM_PAGE_SIZE}`),
+          json<PageEnvelope<ApprovalItem>>(`/api/team/queues?kind=approval&page=${approvalPage}&pageSize=${TEAM_PAGE_SIZE}`),
+          json<PageEnvelope<ReleaseItem>>(`/api/team/queues?kind=release&page=${releasePage}&pageSize=${TEAM_PAGE_SIZE}`),
         ])
-        setCatalog(catalogResult.items)
-        setQueues(queueResult)
+        setCatalog(catalogResult)
+        setApprovals(approvalResult)
+        setReleases(releaseResult)
+        if (catalogResult.page > Math.max(1, catalogResult.totalPages)) setCatalogPage(Math.max(1, catalogResult.totalPages))
+        if (approvalResult.page > Math.max(1, approvalResult.totalPages)) setApprovalPage(Math.max(1, approvalResult.totalPages))
+        if (releaseResult.page > Math.max(1, releaseResult.totalPages)) setReleasePage(Math.max(1, releaseResult.totalPages))
       } else {
-        setCatalog([])
-        setQueues({ approvalInbox: [], releaseQueue: [] })
+        setCatalog(emptyPage())
+        setApprovals(emptyPage())
+        setReleases(emptyPage())
+        setCatalogPage(1)
+        setApprovalPage(1)
+        setReleasePage(1)
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t('team.loadFailed'))
     } finally { setBusy(false) }
-  }, [t])
+  }, [approvalPage, catalogPage, releasePage, t])
 
   useEffect(() => { void load() }, [load])
 
@@ -125,10 +148,10 @@ export function TeamPage() {
       {status && <div className="import-status" role="status">{status}</div>}
 
       <section className="registry-summary" aria-label={t('team.summary')}>
-        <article className="registry-metric"><span>{t('team.assets')}</span><strong>{formatNumber(catalog.length)}</strong><p>{t('team.assetsHint')}</p></article>
-        <article className="registry-metric"><span>{t('team.members')}</span><strong>{formatNumber(state.members.filter((item) => item.status === 'active').length)}</strong><p>{t('team.rolesHint')}</p></article>
-        <article className="registry-metric"><span>{t('team.approvals')}</span><strong>{formatNumber(queues.approvalInbox.length)}</strong><p>{t('team.approvalsHint')}</p></article>
-        <article className="registry-metric"><span>{t('team.releases')}</span><strong>{formatNumber(queues.releaseQueue.length)}</strong><p>{t('team.releasesHint')}</p></article>
+        <article className="registry-metric"><span>{t('team.assets')}</span><strong>{formatNumber(catalog.totalItems)}</strong><p>{t('team.assetsHint')}</p></article>
+        <article className="registry-metric"><span>{t('team.members')}</span><strong>{formatNumber(state.counts.activeMembers)}</strong><p>{t('team.rolesHint')}</p></article>
+        <article className="registry-metric"><span>{t('team.approvals')}</span><strong>{formatNumber(approvals.totalItems)}</strong><p>{t('team.approvalsHint')}</p></article>
+        <article className="registry-metric"><span>{t('team.releases')}</span><strong>{formatNumber(releases.totalItems)}</strong><p>{t('team.releasesHint')}</p></article>
       </section>
 
       <section className="panel registry-table-wrap">
@@ -136,35 +159,51 @@ export function TeamPage() {
         <div className="registry-table-scroll"><table className="registry-table team-table">
           <caption className="sr-only">{t('team.assetDirectory')}</caption>
           <thead><tr><th>{t('team.artifact')}</th><th>{t('common.version')}</th><th>{t('common.source')}</th><th>{t('common.status')}</th><th>{t('team.owner')}</th><th>{t('team.usedBy')}</th><th>{t('team.evidence')}</th></tr></thead><tbody>
-          {catalog.map((item) => <tr key={item.artifactVersionId}><td><strong>{item.artifactId}</strong></td><td><span className="version">{item.version}</span></td><td>{item.source}</td><td><span className={`capability-stage stage-${item.lifecycleStatus}`}>{item.lifecycleStatus}</span></td><td>{item.owner || t('common.notReported')}</td><td>{item.usedByProjectIds.join(', ') || '—'}</td><td><code>{item.evidenceHash?.slice(0, 10) || '—'}</code></td></tr>)}
-          {!catalog.length && <tr><td className="registry-empty" colSpan={7}>{t('team.noAssets')}</td></tr>}
+          {catalog.items.map((item) => <tr key={item.artifactVersionId}><td><strong>{item.artifactId}</strong></td><td><span className="version">{item.version}</span></td><td>{item.source}</td><td><span className={`capability-stage stage-${item.lifecycleStatus}`}>{item.lifecycleStatus}</span></td><td>{item.owner || t('common.notReported')}</td><td>{item.usedByProjectIds.join(', ') || '—'}</td><td><code>{item.evidenceHash?.slice(0, 10) || '—'}</code></td></tr>)}
+          {!catalog.items.length && <tr><td className="registry-empty" colSpan={7}>{t('team.noAssets')}</td></tr>}
         </tbody></table></div>
+        <Pagination page={catalog.page} totalPages={catalog.totalPages} busy={busy} onPage={setCatalogPage} previousLabel={t('common.previousPage')} nextLabel={t('common.nextPage')} pageLabel={t('common.pageOf', { page: formatNumber(catalog.page), count: formatNumber(catalog.totalPages) })} />
       </section>
 
       <div className="team-grid">
-        <Queue title={t('team.approvalInbox')} empty={t('team.noApprovals')} items={queues.approvalInbox.map((item) => ({ id: item.capabilityId, title: item.artifactId, detail: item.owner, status: item.evidenceHash ? t('team.evidenceBound') : t('team.evidenceMissing') }))} />
-        <Queue title={t('team.releaseQueue')} empty={t('team.noReleases')} items={queues.releaseQueue.map((item) => ({ id: item.capabilityId, title: item.artifactId, detail: item.targetSkeleton, status: item.stage }))} />
+        <Queue title={t('team.approvalInbox')} empty={t('team.noApprovals')} items={approvals.items.map((item) => ({ id: item.capabilityId, title: item.artifactId, detail: item.owner, status: item.evidenceHash ? t('team.evidenceBound') : t('team.evidenceMissing') }))} totalItems={approvals.totalItems} page={approvals.page} totalPages={approvals.totalPages} busy={busy} onPage={setApprovalPage} previousLabel={t('common.previousPage')} nextLabel={t('common.nextPage')} pageLabel={t('common.pageOf', { page: formatNumber(approvals.page), count: formatNumber(approvals.totalPages) })} />
+        <Queue title={t('team.releaseQueue')} empty={t('team.noReleases')} items={releases.items.map((item) => ({ id: item.capabilityId, title: item.artifactId, detail: item.targetSkeleton, status: item.stage }))} totalItems={releases.totalItems} page={releases.page} totalPages={releases.totalPages} busy={busy} onPage={setReleasePage} previousLabel={t('common.previousPage')} nextLabel={t('common.nextPage')} pageLabel={t('common.pageOf', { page: formatNumber(releases.page), count: formatNumber(releases.totalPages) })} />
       </div>
 
       <section className="panel team-entities">
         <header><ShieldCheck size={18} /><div><h3>{t('team.controlPlane')}</h3><p>{t('team.controlPlaneDescription')}</p></div></header>
         <dl className="governance-metadata">
-          <div><dt>{t('team.workspaces')}</dt><dd>{formatNumber(state.workspaces.length)}</dd></div>
-          <div><dt>{t('team.projects')}</dt><dd>{formatNumber(state.projects.length)}</dd></div>
-          <div><dt>{t('team.environments')}</dt><dd>{formatNumber(state.environments.length)}</dd></div>
-          <div><dt>{t('team.devices')}</dt><dd>{formatNumber(state.devices.filter((item) => item.status === 'active').length)}</dd></div>
-          <div><dt>{t('team.policyPacks')}</dt><dd>{formatNumber(state.policyPacks.length)}</dd></div>
-          <div><dt>{t('team.exceptions')}</dt><dd>{formatNumber(state.exceptions.length)}</dd></div>
+          <div><dt>{t('team.workspaces')}</dt><dd>{formatNumber(state.counts.workspaces)}</dd></div>
+          <div><dt>{t('team.projects')}</dt><dd>{formatNumber(state.counts.projects)}</dd></div>
+          <div><dt>{t('team.environments')}</dt><dd>{formatNumber(state.counts.environments)}</dd></div>
+          <div><dt>{t('team.devices')}</dt><dd>{formatNumber(state.counts.activeDevices)}</dd></div>
+          <div><dt>{t('team.policyPacks')}</dt><dd>{formatNumber(state.counts.policyPacks)}</dd></div>
+          <div><dt>{t('team.exceptions')}</dt><dd>{formatNumber(state.counts.exceptions)}</dd></div>
           <div><dt>{t('team.templateAdoption')}</dt><dd>{formatNumber(state.templateAdoption.adoptionRatePct)}%</dd></div>
           <div><dt>{t('team.templateDrift')}</dt><dd>{formatNumber(state.templateAdoption.driftedProjects)}</dd></div>
           <div><dt>{t('team.templateUpgrades')}</dt><dd>{formatNumber(state.templateAdoption.pendingUpgradeProjects)}</dd></div>
         </dl>
-        {state.devices.some((item) => item.lastSeenAt) && <p className="team-last-seen">{t('team.lastCollector', { time: formatDateTime(state.devices.filter((item) => item.lastSeenAt).sort((left, right) => Date.parse(right.lastSeenAt!) - Date.parse(left.lastSeenAt!))[0].lastSeenAt!) })}</p>}
+        {state.lastCollectorAt && <p className="team-last-seen">{t('team.lastCollector', { time: formatDateTime(state.lastCollectorAt) })}</p>}
       </section>
     </div>
   )
 }
 
-function Queue({ title, empty, items }: { title: string; empty: string; items: Array<{ id: string; title: string; detail: string; status: string }> }) {
-  return <section className="panel capability-list"><header><h3>{title}</h3><span>{items.length}</span></header><div>{items.map((item) => <article className="capability-item" key={item.id}><div><strong>{item.title}</strong><span>{item.detail}</span></div><span className={`capability-stage stage-${item.status}`}>{item.status}</span></article>)}{!items.length && <p className="governance-empty">{empty}</p>}</div></section>
+type PaginationProps = {
+  page: number
+  totalPages: number
+  busy: boolean
+  onPage: (page: number) => void
+  previousLabel: string
+  nextLabel: string
+  pageLabel: string
+}
+
+function Pagination({ page, totalPages, busy, onPage, previousLabel, nextLabel, pageLabel }: PaginationProps) {
+  if (totalPages <= 1) return null
+  return <nav className="runs-pagination-bar registry-pagination" aria-label={pageLabel}><div className="pagination-controls"><button type="button" aria-label={previousLabel} disabled={busy || page <= 1} onClick={() => onPage(Math.max(1, page - 1))}><ChevronLeft size={15} /></button><span role="status" aria-live="polite">{pageLabel}</span><button type="button" aria-label={nextLabel} disabled={busy || page >= totalPages} onClick={() => onPage(Math.min(totalPages, page + 1))}><ChevronRight size={15} /></button></div></nav>
+}
+
+function Queue({ title, empty, items, totalItems, ...pagination }: { title: string; empty: string; items: Array<{ id: string; title: string; detail: string; status: string }>; totalItems: number } & PaginationProps) {
+  return <section className="panel capability-list"><header><h3>{title}</h3><span>{totalItems}</span></header><div>{items.map((item) => <article className="capability-item" key={item.id}><div><strong>{item.title}</strong><span>{item.detail}</span></div><span className={`capability-stage stage-${item.status}`}>{item.status}</span></article>)}{!items.length && <p className="governance-empty">{empty}</p>}</div><Pagination {...pagination} /></section>
 }

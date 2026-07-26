@@ -3,6 +3,7 @@ import { createArtifactResolver } from '../evaluations/artifact-resolver.mjs'
 import { createEvaluationStore } from '../evaluations/evaluation-store.mjs'
 import { EvaluationError } from '../evaluations/errors.mjs'
 import { assertLocalApiRequest, readEvaluationJsonBody } from '../evaluations/request-guard.mjs'
+import { createPageEnvelope } from '../page-envelope.mjs'
 import { createTeamControlPlane } from '../team-control-plane.mjs'
 import { createGovernanceService } from './governance-service.mjs'
 import { resolveAuthenticatedGovernancePrincipal, resolveGovernancePrincipal } from './principal.mjs'
@@ -16,6 +17,35 @@ function onlyKeys(value, allowed, label) {
 
 function method(request, expected) {
   if (request.method !== expected) throw new EvaluationError('Method not allowed.', 405)
+}
+
+function query(request) {
+  return new URL(request.url || '/', 'http://127.0.0.1').searchParams
+}
+
+function compareCapabilities(left, right) {
+  const leftCreatedAt = typeof left.createdAt === 'string' ? left.createdAt : ''
+  const rightCreatedAt = typeof right.createdAt === 'string' ? right.createdAt : ''
+  if (leftCreatedAt !== rightCreatedAt) return leftCreatedAt > rightCreatedAt ? -1 : 1
+  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0
+}
+
+function limitedQuery(search, name) {
+  const value = search.get(name)
+  if (value === null) return null
+  if (!value.trim() || value.length > 200) throw new EvaluationError(`${name} is invalid.`, 400)
+  return value.trim()
+}
+
+function withReleaseTarget(item, lock) {
+  const target = lock.targets?.[item.targetKey || item.targetSkeleton]
+  return {
+    ...item,
+    releaseTarget: {
+      stableCapabilityId: target?.stable?.capabilityId || null,
+      previousStableCapabilityId: target?.previous?.[0]?.capabilityId || null,
+    },
+  }
 }
 
 function capabilityRoute(pathname) {
@@ -67,14 +97,34 @@ export async function handleGovernanceApi(request, response, pathname, options =
       method(request, 'GET')
       principal = await resolveAuthenticatedGovernancePrincipal(request, options)
       await authorize('Viewer')
-      sendJson(response, 200, { items: await governance.listAudit() })
+      const search = query(request)
+      const result = await governance.audit.page({
+        page: search.get('page'),
+        pageSize: search.get('pageSize'),
+      })
+      sendJson(response, 200, { ...result, generatedAt: new Date().toISOString() })
     } else if (collection && request.method === 'GET') {
       await authorize('Viewer')
-      sendJson(response, 200, { items: await governance.list() })
+      const [items, lock] = await Promise.all([governance.list(), governance.lockState()])
+      const search = query(request)
+      const evaluationRunId = limitedQuery(search, 'evaluationRunId')
+      const filtered = evaluationRunId
+        ? items.filter((item) => item.originEvaluationRunId === evaluationRunId || item.latestEvidenceRunId === evaluationRunId)
+        : items
+      const result = createPageEnvelope(filtered, {
+        page: search.get('page'),
+        pageSize: search.get('pageSize'),
+        compare: compareCapabilities,
+      })
+      sendJson(response, 200, {
+        ...result,
+        items: result.items.map((item) => withReleaseTarget(item, lock)),
+        generatedAt: new Date().toISOString(),
+      })
     } else if (collection) {
       method(request, 'POST')
       await authorize('Developer')
-      const body = onlyKeys(await readEvaluationJsonBody(request), new Set(['artifact', 'sourceRef', 'baseline', 'targetSkeleton', 'projectId', 'policyId']), 'Capability nomination')
+      const body = onlyKeys(await readEvaluationJsonBody(request), new Set(['artifact', 'sourceRef', 'baseline', 'targetSkeleton', 'projectId', 'policyId', 'evaluationRunId']), 'Capability nomination')
       const targetSkeleton = body.targetSkeleton || (body.sourceRef?.startsWith('local-scan:') ? body.sourceRef : null)
       if (!targetSkeleton) throw new EvaluationError('Capability nomination requires an explicit target skeleton.', 422)
       if (Boolean(body.artifact) === Boolean(body.sourceRef)) throw new EvaluationError('Capability nomination requires exactly one artifact or sourceRef.', 422)
@@ -84,6 +134,7 @@ export async function handleGovernanceApi(request, response, pathname, options =
         ...(body.baseline ? { baseline: body.baseline } : {}),
         ...(body.policyId ? { policyId: body.policyId } : {}),
         ...(body.projectId ? { projectId: body.projectId } : {}),
+        ...(body.evaluationRunId ? { originEvaluationRunId: body.evaluationRunId } : {}),
         owner: principal.id,
         ownerIdentityAssurance: principal.assurance,
         targetSkeleton,
@@ -97,13 +148,22 @@ export async function handleGovernanceApi(request, response, pathname, options =
     } else if (!route.action) {
       method(request, 'GET')
       await authorize('Viewer')
-      sendJson(response, 200, await governance.get(route.id))
+      const [item, lock] = await Promise.all([governance.get(route.id), governance.lockState()])
+      sendJson(response, 200, withReleaseTarget(item, lock))
     } else if (route.action === 'audit') {
       method(request, 'GET')
+      principal = await resolveAuthenticatedGovernancePrincipal(request, options)
       await authorize('Viewer')
-      sendJson(response, 200, { items: await governance.listAudit({ capabilityId: route.id }) })
+      const search = query(request)
+      const result = await governance.audit.page({
+        capabilityId: route.id,
+        page: search.get('page'),
+        pageSize: search.get('pageSize'),
+      })
+      sendJson(response, 200, { ...result, generatedAt: new Date().toISOString() })
     } else {
       method(request, 'POST')
+      if (route.action === 'approve') principal = await resolveAuthenticatedGovernancePrincipal(request, options)
       if (route.action === 'evaluate') {
         const capability = await governance.get(route.id)
         await authorize(capability?.stage === 'canary' ? 'Maintainer' : 'Developer')

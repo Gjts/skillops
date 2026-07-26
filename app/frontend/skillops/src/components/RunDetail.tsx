@@ -104,6 +104,7 @@ export function RunDetail({ run, events, totalEvents = events.length, truncated 
           {run.error && <section className="run-error"><h3>{t('common.error')}</h3><p>{demoErrorKey ? t(demoErrorKey) : run.error}</p></section>}
           <section className="run-timeline" aria-labelledby="run-timeline-title">
             <div><h3 id="run-timeline-title">{t('detail.timeline')}</h3><span>{truncated ? `${formatNumber(timeline.length)} / ${formatNumber(totalEvents)}` : formatNumber(timeline.length)} {t(totalEvents === 1 ? 'common.event' : 'common.events')}</span></div>
+            <p className="timeline-truncation">{t('detail.timelineBoundary')}</p>
             {truncated && <p className="timeline-truncation" role="status">{t('detail.timelineTruncated', { shown: formatNumber(timeline.length), total: formatNumber(totalEvents) })}</p>}
             <ol>{timeline.map((event) => <li key={event.id}><span className="timeline-node" /><div><strong>{eventLabel(event, t)}</strong><time dateTime={event.timestamp}>{formatTime(event.timestamp)}</time><small>{event.toolName || event.subagentType || event.reason || event.startSource || (event.detectionMethod ? t(detectionKeys[event.detectionMethod]) : undefined) || t('common.normalizedRuntimeEvent')}</small></div></li>)}</ol>
           </section>

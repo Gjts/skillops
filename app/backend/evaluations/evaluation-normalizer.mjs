@@ -136,6 +136,7 @@ export function normalizePromptfooEvaluation(raw, context) {
   const candidateCostUsd = sumNullable(caseSummaries.map((item) => item.candidate.costUsd))
   const baselineP95LatencyMs = p95(caseSummaries.map((item) => item.baseline.latencyMs))
   const candidateP95LatencyMs = p95(caseSummaries.map((item) => item.candidate.latencyMs))
+  const eligibleCases = suite.cases.length * repeats * models.length
   const requestedAt = context.requestedAt || new Date().toISOString()
   const completedAt = context.completedAt || new Date().toISOString()
   return {
@@ -160,6 +161,8 @@ export function normalizePromptfooEvaluation(raw, context) {
         scoreDeltaPp: candidateScore - baselineScore,
         casesPassed: candidatePassed.length,
         casesTotal: caseSummaries.length,
+        eligibleCases,
+        suiteCaseCoveragePct: caseSummaries.length / eligibleCases * 100,
         passRatePct: caseSummaries.length ? candidatePassed.length / caseSummaries.length * 100 : null,
         regressionRatePct: baselinePassed.length ? regressions / baselinePassed.length * 100 : null,
         baselineTokens,

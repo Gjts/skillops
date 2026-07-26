@@ -1,6 +1,6 @@
 export type Runtime = 'codex' | 'claude-code' | 'cursor'
 export type ConnectionStatus = 'checking' | 'installed' | 'not-installed' | 'broken' | 'preview' | 'error' | 'unavailable'
-export type ConnectionStage = 'not-installed' | 'installed' | 'awaiting-verification' | 'verified' | 'degraded' | 'preview-only'
+export type ConnectionStage = 'not-detected' | 'detected' | 'installed' | 'awaiting-verification' | 'verified' | 'degraded' | 'preview-only'
 
 export interface RuntimeConnection {
   runtime: Runtime
@@ -119,15 +119,54 @@ export interface SkillScanMetadata {
     directory: string
     source: InstalledSkill['source']
     configurationSource: ConfigurationSource
-    state: 'scanned' | 'missing' | 'inaccessible' | 'error'
+    state: 'scanned' | 'partial' | 'missing' | 'inaccessible' | 'error'
   }>
   errors: Array<{ code: string; path: string; runtime: Runtime; message: string }>
   observability: Array<{ runtime: Runtime; state: 'complete' | 'partial'; reason?: string }>
 }
 
 export interface SkillScanResponse {
+  generatedAt: string
+  sourceStatus?: 'complete' | 'partial'
   definitions: Array<Partial<InstalledSkill>>
-  scan: SkillScanMetadata
+  scan: SkillScanMetadata | null
+  page: {
+    page: number
+    pageSize: number
+    totalItems: number
+    totalPages: number
+    hasPrevious: boolean
+    hasNext: boolean
+  }
+  aggregates: {
+    totalDefinitions: number
+    sharedSkillCount: number
+    enabledDefinitionCount: number
+    runtimes: Array<{
+      runtime: Runtime
+      count: number
+      unique: number
+      sources: Array<{ value: InstalledSkill['source']; count: number }>
+    }>
+    metrics: {
+      uniqueEnabledSkills: number
+      enabledDefinitions: number
+      pluginEnabledSkills: number
+      disabledSkills: number
+    }
+    attention: {
+      attention: number
+      conflict: number
+      duplicate: number
+      disabled: number
+      missing: number
+    }
+    sources: Array<{ value: InstalledSkill['source']; count: number }>
+    providers: Array<{ provider: string; count: number }>
+    visibleRuntimes: Array<{ runtime: Runtime; count: number }>
+  }
+  definitionIssues: Record<string, Array<'conflict' | 'duplicate' | 'disabled' | 'missing'>>
+  sharedDefinitionKeys: string[]
 }
 
 export interface SkillMetric {

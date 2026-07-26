@@ -35,7 +35,7 @@ export function connectionStage({ configurationStatus, detected = false, eventCo
   if (configurationStatus === 'broken' || configurationStatus === 'error') return 'degraded'
   if (configurationStatus !== 'installed') return detected ? 'detected' : 'not-detected'
   if (verifiedEvidenceAt) return 'verified'
-  return eventCount ? 'awaiting-verification' : 'installed'
+  return 'awaiting-verification'
 }
 
 export function evidenceState({ definitionIssue = false, lastObservedAt, openStartAt, now = Date.now(), recentWindowMs = 15 * 60_000, telemetryGapMs = recentWindowMs }) {

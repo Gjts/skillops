@@ -143,6 +143,40 @@ describe('conflict resolution service', () => {
     expect(await readFile(globalFile, 'utf8')).toBe(globalContents)
   })
 
+  it.each([
+    ['partial', '{"recordId":', 'partial trailing record'],
+    ['complete corruption', 'not-json', 'history is malformed'],
+    ['semantic corruption', '{"foo":"bar"}\n', 'history is malformed'],
+  ])('rejects %s conflict history before applying filesystem changes', async (_label, tail, message) => {
+    const { service, serviceOptions, globalFile, globalContents } = await fixture()
+    const plan = await service.preview({ action: 'rename', runtime: 'codex', sourcePath: globalFile, newName: 'review-renamed' })
+    const historyFile = path.join(serviceOptions.dataDir, 'conflict-actions.jsonl')
+    let filesystemMutations = 0
+    filesystemRace.afterBackup = () => { filesystemMutations += 1 }
+    await mkdir(serviceOptions.dataDir, { recursive: true })
+    await writeFile(historyFile, tail, 'utf8')
+
+    await expect(service.apply(plan.previewToken, { confirm: true, confirmedDefinitionKey: plan.definitionKey })).rejects.toThrow(message)
+
+    expect(filesystemMutations).toBe(0)
+    expect(await readFile(historyFile, 'utf8')).toBe(tail)
+    expect(await readFile(globalFile, 'utf8')).toBe(globalContents)
+  })
+
+  it('refuses undo reads from partial or corrupt conflict history without changing either file', async () => {
+    const { service, serviceOptions, globalFile } = await fixture()
+    const { result } = await planAndApply(service, { action: 'remove', runtime: 'codex', sourcePath: globalFile })
+    const historyFile = path.join(serviceOptions.dataDir, 'conflict-actions.jsonl')
+    const validHistory = await readFile(historyFile, 'utf8')
+
+    for (const [tail, message] of [['{"recordId":', 'partial trailing record'], ['not-json', 'history is malformed'], ['{"foo":"bar"}\n', 'history is malformed']]) {
+      await writeFile(historyFile, `${validHistory}${tail}`, 'utf8')
+      await expect(createConflictService(serviceOptions).undo(result.recordId)).rejects.toThrow(message)
+      expect(await readFile(historyFile, 'utf8')).toBe(`${validHistory}${tail}`)
+      await expect(stat(globalFile)).rejects.toMatchObject({ code: 'ENOENT' })
+    }
+  })
+
   it('disables through one managed Codex section, backs it up, verifies, and undoes byte-for-byte', async () => {
     const { service, scan, globalFile, configFile } = await fixture()
     const originalConfig = await readFile(configFile, 'utf8')

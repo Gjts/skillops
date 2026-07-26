@@ -5,6 +5,7 @@ import { EvaluationError } from '../evaluations/errors.mjs'
 import { assertLocalApiRequest, readEvaluationJsonBody } from '../evaluations/request-guard.mjs'
 import { initializeGovernanceServices } from '../governance/governance-api.mjs'
 import { resolveGovernancePrincipal } from '../governance/principal.mjs'
+import { createPageEnvelope } from '../page-envelope.mjs'
 import { createSecureCredentialStore } from '../secure-credential-store.mjs'
 import { createPromptHubConnector } from './prompthub-connector.mjs'
 
@@ -111,6 +112,7 @@ export async function handlePromptHubApi(request, response, pathname, options = 
   try {
     const bodyMethod = ['POST', 'PUT'].includes(request.method)
     assertLocalApiRequest(request, { requireJson: bodyMethod })
+    const query = new URL(request.url || pathname, 'http://127.0.0.1').searchParams
     const services = options.promptHubServices || await initializePromptHubServices(options)
     const authorize = async (minimumRole) => {
       const principal = await resolveGovernancePrincipal(request, options)
@@ -155,7 +157,15 @@ export async function handlePromptHubApi(request, response, pathname, options = 
       sendJson(response, 200, await changeCredential(false, principal, () => services.credentialStore.remove('prompthub')))
     } else if (projects) {
       method(request, 'GET')
-      sendJson(response, 200, { items: await services.connector.listArtifacts() })
+      sendJson(response, 200, {
+        generatedAt: new Date().toISOString(),
+        ...createPageEnvelope(await services.connector.listArtifacts(), {
+          page: query.get('page') ?? undefined,
+          pageSize: query.get('pageSize') ?? undefined,
+          compare: (left, right) => String(left.name ?? '').localeCompare(String(right.name ?? ''), 'en-US')
+            || String(left.remoteId ?? '').localeCompare(String(right.remoteId ?? ''), 'en-US'),
+        }),
+      })
     } else if (version) {
       method(request, 'POST')
       const body = onlyKeys(await readEvaluationJsonBody(request), new Set(['projectId', 'revision', 'contentHash', 'branch']), 'PromptHub version request')
@@ -189,7 +199,15 @@ export async function handlePromptHubApi(request, response, pathname, options = 
       ))
     } else if (drift) {
       method(request, 'GET')
-      sendJson(response, 200, { items: await services.connector.compareState() })
+      sendJson(response, 200, {
+        generatedAt: new Date().toISOString(),
+        ...createPageEnvelope(await services.connector.compareState(), {
+          page: query.get('page') ?? undefined,
+          pageSize: query.get('pageSize') ?? undefined,
+          compare: (left, right) => String(left.remoteId ?? '').localeCompare(String(right.remoteId ?? ''), 'en-US')
+            || String(left.type ?? '').localeCompare(String(right.type ?? ''), 'en-US'),
+        }),
+      })
     } else {
       method(request, 'POST')
       const body = onlyKeys(await readEvaluationJsonBody(request), new Set(['artifact']), 'PromptHub publish request')

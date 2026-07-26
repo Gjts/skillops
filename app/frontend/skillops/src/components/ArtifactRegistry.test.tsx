@@ -17,6 +17,7 @@ afterEach(() => {
 
 describe('Artifact Registry UI', () => {
   it('filters kind-scoped assets, inspects immutable versions, compares metadata, and previews Candidates', async () => {
+    window.history.replaceState({}, '', '/assets')
     const snapshot = {
       schemaVersion: 1,
       generatedAt: '2026-07-22T01:00:00.000Z',
@@ -48,7 +49,31 @@ describe('Artifact Registry UI', () => {
     let importCalls = 0
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
       const url = String(input)
-      if (url === '/api/artifacts') return response(snapshot)
+      if (url.startsWith('/api/artifacts?')) {
+        const params = new URL(url, 'http://127.0.0.1').searchParams
+        const selectedArtifacts = snapshot.artifacts.filter((artifact) => !params.get('kind') || artifact.kind === params.get('kind'))
+        const selectedIds = new Set(selectedArtifacts.map((artifact) => artifact.id))
+        return response({
+          ...snapshot,
+          artifacts: selectedArtifacts,
+          versions: snapshot.versions.filter((version) => selectedIds.has(version.artifactId)),
+          installations: snapshot.installations.filter((installation) => selectedIds.has(installation.artifactId)),
+          page: 1,
+          pageSize: 50,
+          totalItems: selectedArtifacts.length,
+          totalPages: selectedArtifacts.length ? 1 : 0,
+          hasPrevious: false,
+          hasNext: false,
+          stats: { totalArtifacts: snapshot.artifacts.length, driftedInstallations: 1 },
+          facets: {
+            kinds: [{ value: 'prompt', count: 1 }, { value: 'skill', count: 1 }],
+            sources: [{ value: 'github', count: 1 }, { value: 'local-scan', count: 1 }, { value: 'prompt-registry', count: 1 }],
+            statuses: [{ value: 'ready', count: 1 }, { value: 'stable', count: 1 }],
+            runtimes: [{ value: 'codex', count: 2 }],
+            owners: [{ value: 'design', count: 1 }, { value: 'platform', count: 1 }],
+          },
+        })
+      }
       if (url === '/api/artifacts/diff') {
         diffCalls += 1
         return diffCalls === 1
@@ -71,10 +96,10 @@ describe('Artifact Registry UI', () => {
 
     fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'prompt' } })
     await waitFor(() => expect(screen.queryByText('skill:review')).toBeNull())
-    expect(screen.getAllByText('prompt:review')).toHaveLength(2)
+    await waitFor(() => expect(screen.getAllByText('prompt:review')).toHaveLength(2))
     fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'all' } })
 
-    fireEvent.click(screen.getAllByText('skill:review')[0])
+    fireEvent.click((await screen.findAllByText('skill:review'))[0])
     expect(await screen.findByText('Immutable versions')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Compare versions' }))
     fireEvent.change(screen.getByLabelText('Left version'), { target: { value: 'skill:review@b' } })
@@ -94,5 +119,144 @@ describe('Artifact Registry UI', () => {
     resolveFirstImport(await response({ mode: 'preview', persisted: false, version: { ...snapshot.versions[0], id: 'skill:first@candidate', artifactId: 'skill:first', sourceArtifactId: 'first', status: 'candidate' }, currentVersionIds: [], diff: null }))
     await waitFor(() => expect(screen.queryByText('skill:first')).toBeNull())
     expect(screen.getByText('Preview only; Stable was not changed.')).toBeTruthy()
+  })
+
+  it('drives filters and stable pagination from the server and restores Artifact URL state', async () => {
+    window.history.replaceState({}, '', '/assets?tab=skills&artifactPage=2')
+    const artifacts = Array.from({ length: 51 }, (_, index) => ({
+      id: `skill:artifact-${String(index).padStart(3, '0')}`,
+      artifactId: `artifact-${String(index).padStart(3, '0')}`,
+      kind: 'skill',
+      name: `artifact-${String(index).padStart(3, '0')}`,
+      owner: index % 2 ? 'design' : 'platform',
+      status: 'stable',
+      createdAt: null,
+      updatedAt: null,
+      versionIds: [`skill:artifact-${String(index).padStart(3, '0')}@1`],
+    }))
+    const requested: string[] = []
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input)
+      requested.push(url)
+      const parsed = new URL(url, 'http://127.0.0.1')
+      const query = (parsed.searchParams.get('query') || '').toLowerCase()
+      const page = Number(parsed.searchParams.get('page') || 1)
+      const pageSize = Number(parsed.searchParams.get('pageSize') || 50)
+      const filtered = artifacts.filter((artifact) => !query || artifact.name.includes(query))
+      const visible = filtered.slice((page - 1) * pageSize, page * pageSize)
+      return response({
+        schemaVersion: 1,
+        generatedAt: '2026-07-22T01:00:00.000Z',
+        artifacts: visible,
+        versions: visible.map((artifact) => ({
+          id: `${artifact.id}@1`,
+          artifactId: artifact.id,
+          sourceArtifactId: artifact.artifactId,
+          kind: 'skill',
+          version: '1.0.0',
+          contentHash: hash('a'),
+          gitCommit: null,
+          schemaVersion: 1,
+          runtimeTargets: ['codex'],
+          compatibility: { codex: 'supported', 'claude-code': 'supported', cursor: 'unsupported' },
+          dependencies: [],
+          source: 'local-scan',
+          sourceRef: `local-scan:${artifact.id}`,
+          status: 'stable',
+          createdAt: null,
+        })),
+        installations: [],
+        compatibility: { skill: { codex: 'supported', 'claude-code': 'supported', cursor: 'unsupported' } },
+        warnings: [],
+        page,
+        pageSize,
+        totalItems: filtered.length,
+        totalPages: Math.ceil(filtered.length / pageSize),
+        hasPrevious: page > 1,
+        hasNext: page * pageSize < filtered.length,
+        stats: { totalArtifacts: artifacts.length, driftedInstallations: 0 },
+        facets: {
+          kinds: [{ value: 'skill', count: 51 }],
+          sources: [{ value: 'local-scan', count: 51 }],
+          statuses: [{ value: 'stable', count: 51 }],
+          runtimes: [{ value: 'codex', count: 51 }],
+          owners: [{ value: 'design', count: 25 }, { value: 'platform', count: 26 }],
+        },
+      })
+    }))
+
+    render(<ArtifactRegistry />)
+
+    expect((await screen.findAllByText('artifact-050')).length).toBeGreaterThan(0)
+    expect(screen.queryByText('artifact-000')).toBeNull()
+    expect(requested[0]).toContain('page=2')
+    expect(window.location.search).toContain('tab=skills')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Previous page' }))
+    expect((await screen.findAllByText('artifact-000')).length).toBeGreaterThan(0)
+    expect(window.location.search).not.toContain('artifactPage=2')
+
+    fireEvent.change(screen.getByLabelText('Search Artifacts'), { target: { value: 'artifact-010' } })
+    await waitFor(() => expect(requested.at(-1)).toContain('query=artifact-010'))
+    expect((await screen.findAllByText('artifact-010')).length).toBeGreaterThan(0)
+    expect(window.location.search).toContain('artifactQuery=artifact-010')
+
+    await waitFor(() => {
+      window.history.pushState({}, '', '/assets?tab=skills&artifactQuery=artifact-020')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+      expect(requested.at(-1)).toContain('query=artifact-020')
+    })
+    expect((await screen.findAllByText('artifact-020')).length).toBeGreaterThan(0)
+    expect(window.location.search).toContain('tab=skills')
+
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'skill' } })
+    fireEvent.change(screen.getByLabelText('Source'), { target: { value: 'local-scan' } })
+    fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'stable' } })
+    fireEvent.change(screen.getByLabelText('Runtime'), { target: { value: 'codex' } })
+    fireEvent.change(screen.getByLabelText('Owner'), { target: { value: 'platform' } })
+    await waitFor(() => {
+      expect(requested.at(-1)).toContain('kind=skill')
+      expect(requested.at(-1)).toContain('source=local-scan')
+      expect(requested.at(-1)).toContain('status=stable')
+      expect(requested.at(-1)).toContain('runtime=codex')
+      expect(requested.at(-1)).toContain('owner=platform')
+    })
+    expect(window.location.search).toContain('artifactKind=skill')
+    expect(window.location.search).toContain('artifactSource=local-scan')
+    expect(window.location.search).toContain('artifactStatus=stable')
+    expect(window.location.search).toContain('artifactRuntime=codex')
+    expect(window.location.search).toContain('artifactOwner=platform')
+  })
+
+  it('refreshes an already-current scan token when remounted after a Registry mutation', async () => {
+    window.history.replaceState({}, '', '/assets?tab=skills')
+    const requested: Array<{ url: string; method: string }> = []
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      requested.push({ url: String(input), method: init?.method || 'GET' })
+      return response({
+        schemaVersion: 1,
+        generatedAt: '2026-07-22T01:00:00.000Z',
+        sourceStatus: 'complete',
+        artifacts: [],
+        versions: [],
+        installations: [],
+        compatibility: {},
+        warnings: [],
+        page: 1,
+        pageSize: 50,
+        totalItems: 0,
+        totalPages: 0,
+        hasPrevious: false,
+        hasNext: false,
+        stats: { totalArtifacts: 0, driftedInstallations: 0 },
+        facets: { kinds: [], sources: [], statuses: [], runtimes: [], owners: [] },
+      })
+    }))
+
+    render(<ArtifactRegistry refreshToken="scan-after-apply" />)
+
+    await waitFor(() => expect(requested).toHaveLength(1))
+    expect(requested[0].url).toContain('/api/artifacts/refresh?')
+    expect(requested[0].method).toBe('POST')
   })
 })

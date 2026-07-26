@@ -149,6 +149,7 @@ describe('theme accessibility', () => {
     expect(fontSizes.filter((size) => size < 12)).toEqual([])
     expect(styles).toMatch(/--font-body:\s*14px/)
     expect(styles).toMatch(/body\s*{[^}]*font-size:\s*var\(--font-body\)/s)
+    expect(styles).toMatch(/\.page-intro p\s*{[^}]*font-size:\s*(?:var\(--font-body\)|1(?:4|[5-9])px)/s)
     expect(styles).toMatch(/--target-min:\s*36px/)
     expect(styles).toMatch(/--target-min-mobile:\s*44px/)
     expect(styles).toMatch(/@media \(max-width: 700px\)\s*{[^}]*min-height:\s*var\(--target-min-mobile\) !important/s)

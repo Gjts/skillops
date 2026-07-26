@@ -78,9 +78,9 @@ Invoke-RestMethod -Method Get -Uri 'http://127.0.0.1:5173/api/connections'
 Live inventory:
 
 ```powershell
-$skills = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:5173/api/scan'
-$skills.Count
-$skills | Group-Object runtime, source | Select-Object Name, Count
+$inventory = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:5173/api/scan?pageSize=100'
+$inventory.page.totalItems
+$inventory.definitions | Group-Object runtime, source | Select-Object Name, Count
 ```
 
 Real recording check:

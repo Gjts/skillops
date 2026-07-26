@@ -17,11 +17,40 @@ const fallbackConnections: RuntimeConnection[] = [
   { runtime: 'cursor', status: 'preview', configurationStatus: 'preview', connectionStage: 'preview-only', eventCount: 0 },
 ]
 
+const PREFLIGHT_TIMEOUT_MS = 8_000
+
 type ConnectModalProps = {
   initialRuntime?: Runtime
   connections?: RuntimeConnection[]
   onRefresh?: () => Promise<RuntimeConnection[]>
   onClose: () => void
+}
+
+type SetupPreflight = {
+  node: { version: string; supported: boolean }
+  git: { available: boolean }
+  localApi: { available: boolean }
+  dataDirectory: { available: boolean; writable: boolean }
+  runtimes: {
+    available: boolean
+    items: Array<{ runtime: Runtime; adapterReferenceHealth: 'healthy' | 'not-configured' | 'unhealthy' | 'unknown' | 'unsupported' }>
+  }
+}
+
+function isSetupPreflight(value: unknown): value is SetupPreflight {
+  const result = value as SetupPreflight
+  return Boolean(result
+    && typeof result.node?.version === 'string'
+    && typeof result.node.supported === 'boolean'
+    && typeof result.git?.available === 'boolean'
+    && typeof result.localApi?.available === 'boolean'
+    && typeof result.dataDirectory?.available === 'boolean'
+    && typeof result.dataDirectory.writable === 'boolean'
+    && typeof result.runtimes?.available === 'boolean'
+    && Array.isArray(result.runtimes.items)
+    && result.runtimes.items.every((item) => item
+      && ['codex', 'claude-code', 'cursor'].includes(item.runtime)
+      && ['healthy', 'not-configured', 'unhealthy', 'unknown', 'unsupported'].includes(item.adapterReferenceHealth)))
 }
 
 export function ConnectModal({ initialRuntime = 'codex', connections = fallbackConnections, onRefresh = async () => connections, onClose }: ConnectModalProps) {
@@ -31,6 +60,10 @@ export function ConnectModal({ initialRuntime = 'codex', connections = fallbackC
   const [inspectedConnections, setInspectedConnections] = useState(connections)
   const [refreshing, setRefreshing] = useState(false)
   const [inspectionFailed, setInspectionFailed] = useState(false)
+  const [preflight, setPreflight] = useState<SetupPreflight | null>(null)
+  const [preflightError, setPreflightError] = useState(false)
+  const [preflightAttempt, setPreflightAttempt] = useState(0)
+  const [reviewConfirmed, setReviewConfirmed] = useState(false)
   const dialogRef = useRef<HTMLElement>(null)
   const initialOptionRef = useRef<HTMLButtonElement>(null)
   const previousFocus = useRef<HTMLElement | null>(null)
@@ -41,13 +74,43 @@ export function ConnectModal({ initialRuntime = 'codex', connections = fallbackC
   const stage = connection.connectionStage ?? (
     configurationStatus === 'preview' ? 'preview-only'
       : configurationStatus === 'broken' || configurationStatus === 'error' ? 'degraded'
-        : configurationStatus === 'installed' && connection.eventCount ? 'verified'
-          : configurationStatus === 'installed' ? 'installed'
-            : 'not-installed'
+        : configurationStatus === 'installed' ? 'awaiting-verification'
+            : connection.detected ? 'detected' : 'not-detected'
   )
   const staleEvidence = stage === 'awaiting-verification' && connection.lastActivityAt && connection.verificationBoundaryAt
+  const selectedAdapterHealth = preflight?.runtimes.items.find((item) => item.runtime === selected)?.adapterReferenceHealth
+  const adapterReady = selectedAdapterHealth === 'healthy' || selectedAdapterHealth === 'not-configured'
+  const adapterInstallable = adapterReady || selectedAdapterHealth === 'unhealthy'
+  const preflightCanInstall = Boolean(preflight?.node.supported
+    && preflight.git.available
+    && preflight.localApi.available
+    && preflight.dataDirectory.available
+    && preflight.dataDirectory.writable
+    && preflight.runtimes.available
+    && adapterInstallable)
 
   useEffect(() => setInspectedConnections(connections), [connections])
+  useEffect(() => {
+    const controller = new AbortController()
+    let mounted = true
+    const timeout = window.setTimeout(() => controller.abort(), PREFLIGHT_TIMEOUT_MS)
+    setPreflight(null)
+    setPreflightError(false)
+    setReviewConfirmed(false)
+    void fetch('/api/setup/preflight', { signal: controller.signal })
+      .then(async (response) => {
+        const body: unknown = await response.json()
+        if (controller.signal.aborted || !response.ok || !isSetupPreflight(body)) throw new Error('Preflight unavailable.')
+        setPreflight(body)
+      })
+      .catch(() => { if (mounted) setPreflightError(true) })
+      .finally(() => window.clearTimeout(timeout))
+    return () => {
+      mounted = false
+      window.clearTimeout(timeout)
+      controller.abort()
+    }
+  }, [preflightAttempt])
   useEffect(() => {
     previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     initialOptionRef.current?.focus()
@@ -73,6 +136,7 @@ export function ConnectModal({ initialRuntime = 'codex', connections = fallbackC
     setInspectionFailed(false)
     try {
       setInspectedConnections(await onRefresh())
+      setPreflightAttempt((value) => value + 1)
     } catch {
       setInspectionFailed(true)
     } finally {
@@ -113,7 +177,7 @@ export function ConnectModal({ initialRuntime = 'codex', connections = fallbackC
           {options.map((option) => {
             const Icon = option.icon
             return (
-              <button ref={option.runtime === initialRuntime ? initialOptionRef : undefined} className={selected === option.runtime ? 'runtime-option selected' : 'runtime-option'} key={option.runtime} type="button" onClick={() => { setSelected(option.runtime); setCopyState(null); setInspectionFailed(false) }}>
+              <button ref={option.runtime === initialRuntime ? initialOptionRef : undefined} className={selected === option.runtime ? 'runtime-option selected' : 'runtime-option'} key={option.runtime} type="button" onClick={() => { setSelected(option.runtime); setCopyState(null); setInspectionFailed(false); setReviewConfirmed(false) }}>
                 <span className={`runtime-icon ${option.runtime}`}><Icon size={18} /></span>
                 <span><strong>{runtimeLabel[option.runtime]}</strong><small>{t(option.detail)}</small></span>
                 {selected === option.runtime && <Check size={17} />}
@@ -128,16 +192,36 @@ export function ConnectModal({ initialRuntime = 'codex', connections = fallbackC
             <li>
               <span className="step-label">{t('connect.preflightStep')}</span>
               <p>{t('connect.preflightInstruction')}</p>
+              {!preflight && !preflightError && <small aria-live="polite">{t('common.checking')}</small>}
+              {preflightError && <div role="alert"><span>{t('connect.preflightUnavailable')}</span><button className="text-button" type="button" onClick={() => setPreflightAttempt((value) => value + 1)}>{t('cc.retry')}</button></div>}
+              {preflight && <ul className="preflight-results" aria-label={t('connect.preflightResults')}>
+                {[
+                  { label: `Node.js ${preflight.node.version}`, ready: preflight.node.supported, status: t(preflight.node.supported ? 'connect.preflightReady' : 'connect.preflightAttention') },
+                  { label: 'Git', ready: preflight.git.available, status: t(preflight.git.available ? 'connect.preflightReady' : 'connect.preflightAttention') },
+                  { label: 'Local API', ready: preflight.localApi.available, status: t(preflight.localApi.available ? 'connect.preflightReady' : 'connect.preflightAttention') },
+                  {
+                    label: t('connect.preflightDataDirectory'),
+                    ready: preflight.dataDirectory.available && preflight.dataDirectory.writable,
+                    status: t(!preflight.dataDirectory.available ? 'common.unavailable' : preflight.dataDirectory.writable ? 'connect.preflightReady' : 'connect.preflightReadOnly'),
+                  },
+                  { label: t('connect.preflightAdapter', { runtime: runtimeLabel[selected] }), ready: adapterReady, status: t(adapterReady ? 'connect.preflightReady' : 'connect.preflightAttention') },
+                ].map(({ label, ready, status }) => <li key={label}><span>{label}</span><strong className={ready ? 'success-text' : 'failed-text'}>{status}</strong></li>)}
+              </ul>}
               <div className="command-box"><code>{current.preflight}</code><button type="button" onClick={() => void copy('preflight', current.preflight!)} aria-label={copyLabel('preflight')}>{copyState?.target === 'preflight' && copyState.status === 'copied' ? <Check size={15} /> : <Clipboard size={15} />}</button></div>
             </li>
             <li>
               <span className="step-label">{t('connect.reviewStep')}</span>
               <p>{t('connect.previewSafe')}</p>
+              <label className="review-confirmation">
+                <input type="checkbox" checked={reviewConfirmed} disabled={!preflightCanInstall} onChange={(event) => setReviewConfirmed(event.target.checked)} />
+                {t('connect.reviewConfirmed')}
+              </label>
+              {!preflightCanInstall && <small className="failed-text">{t('connect.installLocked')}</small>}
             </li>
             <li>
               <span className="step-label">{t('connect.confirmWriteStep')}</span>
               <p>{t('connect.confirmWrite')}</p>
-              <div className="command-box"><code>{current.install}</code><button type="button" onClick={() => void copy('install', current.install!)} aria-label={copyLabel('install')}>{copyState?.target === 'install' && copyState.status === 'copied' ? <Check size={15} /> : <Clipboard size={15} />}</button></div>
+              {reviewConfirmed && preflightCanInstall && <div className="command-box"><code>{current.install}</code><button type="button" onClick={() => void copy('install', current.install!)} aria-label={copyLabel('install')}>{copyState?.target === 'install' && copyState.status === 'copied' ? <Check size={15} /> : <Clipboard size={15} />}</button></div>}
               {copyState && <span className={copyState.status === 'failed' ? 'copy-feedback failed-text' : 'copy-feedback success-text'} role="status" aria-live="polite">{copyState.status === 'copied' ? t('connect.commandCopied') : t('connect.copyFailed')}</span>}
             </li>
             <li>

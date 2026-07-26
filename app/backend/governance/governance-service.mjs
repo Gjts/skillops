@@ -5,7 +5,7 @@ import { canonicalJson } from '../evaluations/suite-registry.mjs'
 import { computeEvaluationEvidenceHash, sanitizePersistedArtifact } from '../evaluations/evaluation-store.mjs'
 import { EvaluationError } from '../evaluations/errors.mjs'
 import { DEFAULT_GATE_POLICY, evaluateGatePolicy, evaluateRedteamGatePolicy, gatePolicyHash, normalizeGatePolicy } from './capability-policy.mjs'
-import { createGovernanceAuditLog } from './governance-audit.mjs'
+import { createGovernanceAuditLog, governanceCapabilityStateHash } from './governance-audit.mjs'
 import { createCapabilityRegistry, sanitizeCapability } from './capability-registry.mjs'
 import { createSkeletonLock } from './skeleton-lock.mjs'
 import { createSkeletonInstaller } from './skeleton-installer.mjs'
@@ -94,6 +94,49 @@ export function createGovernanceService(options = {}) {
   async function projectRootFor(projectId) {
     return typeof resolveProjectRoot === 'function' ? resolveProjectRoot(projectId) : null
   }
+  async function legacyCandidateOrigin(capability) {
+    if (!capability || capability.originEvaluationRunId || !capability.latestEvidenceRunId) return null
+    const decision = await evaluations.getDecision(capability.latestEvidenceRunId)
+    if (decision?.decision !== 'create-candidate') return null
+    const run = await evaluations.getRun(capability.latestEvidenceRunId)
+    if (!validRunEvidence(run) || run.mode !== 'suite') {
+      throw new EvaluationError('Legacy Candidate origin evidence is invalid.', 409)
+    }
+    assertCandidate(run, capability, 'Candidate Decision')
+    return run
+  }
+
+  async function candidateOrigin(capability) {
+    if (!capability?.originEvaluationRunId) return legacyCandidateOrigin(capability)
+    const [run, decision] = await Promise.all([
+      evaluations.getRun(capability.originEvaluationRunId),
+      evaluations.getDecision(capability.originEvaluationRunId),
+    ])
+    if (!validRunEvidence(run) || run.mode !== 'suite' || decision?.decision !== 'create-candidate') {
+      throw new EvaluationError('Release Candidate origin requires a final create-candidate Decision.', 409)
+    }
+    assertCandidate(run, capability, 'Candidate Decision')
+    return run
+  }
+  async function requireReleaseProvenance(capability) {
+    if (capability?.evidence && capability.latestEvidenceRunId !== capability.evidence.qualityRunId) {
+      throw new EvaluationError('Capability latest evidence run does not match its quality evidence binding.', 409)
+    }
+    const origin = await candidateOrigin(capability)
+    if (!origin) {
+      throw new EvaluationError('Release Candidate origin requires a final create-candidate Decision.', 409)
+    }
+    if (!capability.latestEvidenceRunId) {
+      throw new EvaluationError('Release Candidate evidence requires a final create-candidate Decision.', 409)
+    }
+    if (capability.latestEvidenceRunId !== origin.id) {
+      const decision = await evaluations.getDecision(capability.latestEvidenceRunId)
+      if (decision?.decision !== 'create-candidate') {
+        throw new EvaluationError('Release Candidate evidence requires a final create-candidate Decision.', 409)
+      }
+    }
+    return origin
+  }
   let actions = Promise.resolve()
 
   function serialize(operation) {
@@ -136,7 +179,7 @@ export function createGovernanceService(options = {}) {
             if (!previousCapability) current.splice(index, 1)
             else current[index] = previousCapability
             return current
-          })
+          }, undefined, { allowOriginChange: true })
         } catch (caught) { recoveryError = caught }
       }
       if (prepared) await audit.fail(prepared).catch(() => undefined)
@@ -201,7 +244,7 @@ export function createGovernanceService(options = {}) {
         capabilities[index] = change.before
       }
       return capabilities
-    })
+    }, undefined, { allowOriginChange: true })
   }
 
   async function cleanupEvictedRecoveries(beforeTarget, afterTarget) {
@@ -244,6 +287,12 @@ export function createGovernanceService(options = {}) {
 
   async function evidenceStale(capability) {
     if (!capability.evidence) return false
+    try {
+      await requireReleaseProvenance(capability)
+    } catch (error) {
+      if (error instanceof EvaluationError && error.status === 409) return true
+      throw error
+    }
     const currentPolicy = await policyFor(capability)
     if (capability.evidence.policyHash !== gatePolicyHash(currentPolicy)
       || capability.evidence.candidateHash !== capability.artifact.contentHash
@@ -297,10 +346,12 @@ export function createGovernanceService(options = {}) {
 
   async function requireFresh(capability, stage) {
     if (capability.stage !== stage) throw new EvaluationError(`Capability must be ${stage} before this action.`, 409)
+    await requireReleaseProvenance(capability)
     if (!capability.evidence || await evidenceStale(capability)) throw new EvaluationError('Capability evidence is stale or unavailable.', 409)
     await requireProjectBinding(capability)
   }
   async function requireRequalified(capability) {
+    await requireReleaseProvenance(capability)
     if (!capability.evidence || await evidenceStale(capability)) throw new EvaluationError('Capability evidence is stale or unavailable.', 409)
     await requireProjectBinding(capability)
     if (!capability.approvals.some((item) => trustedApproval(item, capability.evidence.evidenceHash))) {
@@ -339,6 +390,7 @@ export function createGovernanceService(options = {}) {
 
   async function assertRestorableCapability(capability, deployment, label) {
     if (capability?.stage === 'superseded' && !capability.requalifiesStage) {
+      await requireReleaseProvenance(capability)
       return assertLockedCapability(capability, deployment, label, true)
     }
     if (!['deprecated', 'superseded'].includes(capability?.requalifiesStage)) {
@@ -661,6 +713,30 @@ export function createGovernanceService(options = {}) {
     return false
   }
 
+  async function assertPendingForwardRelease(record, capability, target) {
+    const deployment = record.action === 'canary.started' ? target?.canary : target?.stable
+    await requireProjectBinding(capability)
+    if (record.action === 'stable.restored' && capability.stage !== record.toStage) {
+      await assertRestorableCapability(capability, deployment, 'Pending Stable restore')
+      return
+    }
+    await requireReleaseProvenance(capability)
+    if (record.action !== 'stable.restored') {
+      if (!capability.evidence || await evidenceStale(capability)) {
+        throw new EvaluationError('Capability evidence is stale or unavailable.', 409)
+      }
+      if (record.action === 'canary.started') {
+        if (capability.ownerIdentityAssurance === 'unverified-legacy') {
+          throw new EvaluationError('A trusted server-resolved owner is required before Canary.', 409)
+        }
+        if (!capability.artifact.gitCommit) {
+          throw new EvaluationError('Canary releases require an immutable Git commit.', 409)
+        }
+      }
+    }
+    assertLockedCapability(capability, deployment, 'Pending release', true)
+  }
+
   async function reconcilePendingGovernance() {
     await skeletonLock.transaction(async () => {
       let capabilities = await registry.list()
@@ -698,13 +774,17 @@ export function createGovernanceService(options = {}) {
         const { record, capability } = item
         if (!capability || !auditArtifactMatches(record, capability)) continue
         const evidenceMatches = record.evidenceHash === (capability.evidence?.evidenceHash || null)
+        const stateMatches = !record.capabilityStateHash || record.capabilityStateHash === governanceCapabilityStateHash(capability)
         const target = lock.targets[capabilityTargetKey(capability)]
         const lockAction = record.action === 'canary.started' || record.action.startsWith('stable.')
         const lockMatches = lockConfirmsAudit(record, capability, target, pending)
         if (lockAction && lockMatches && evidenceMatches) {
+          if (['canary.started', 'stable.installed', 'stable.promoted', 'stable.restored'].includes(record.action)) {
+            await assertPendingForwardRelease(record, capability, target)
+          }
           stages.set(capability.id, record.toStage)
           committed.add(record.transactionId)
-        } else if (!lockAction && capability.stage === record.toStage && evidenceMatches) {
+        } else if (!lockAction && capability.stage === record.toStage && evidenceMatches && stateMatches) {
           committed.add(record.transactionId)
         } else if (lockAction && capability.stage === record.toStage) {
           throw new EvaluationError('Governance state is inconsistent with the project lock.', 500)
@@ -741,8 +821,26 @@ export function createGovernanceService(options = {}) {
     },
     nominate(input) {
       return serializeRelease(async () => {
-        const artifact = normalizeArtifactDefinition(input?.artifact)
+        let artifact = normalizeArtifactDefinition(input?.artifact)
+        let originEvaluationRunId = input?.originEvaluationRunId
+          ? identity(input.originEvaluationRunId, 'Origin evaluation run ID')
+          : null
+        let originRun = null
+        if (originEvaluationRunId) {
+          const [run, decision] = await Promise.all([
+            evaluations.getRun(originEvaluationRunId),
+            evaluations.getDecision(originEvaluationRunId),
+          ])
+          if (!validRunEvidence(run) || run.mode !== 'suite' || decision?.decision !== 'create-candidate') {
+            throw new EvaluationError('A final create-candidate Decision is required for this Managed Suite run.', 409)
+          }
+          assertArtifact(run.candidate, artifact, 'Candidate Decision')
+          artifact = normalizeArtifactDefinition(run.candidate)
+          originRun = run
+        }
         const requestedBaseline = input?.baseline ? normalizeArtifactDefinition(input.baseline) : null
+        if (originRun && requestedBaseline) assertArtifact(originRun.baseline, requestedBaseline, 'Candidate Decision baseline')
+        const authoritativeBaseline = originRun ? normalizeArtifactDefinition(originRun.baseline) : requestedBaseline
         const requestedTarget = targetIdentity(input?.targetSkeleton)
         const projectId = input?.projectId == null ? null : identity(input.projectId, 'Project ID').toLocaleLowerCase('en-US')
         const projectRoot = await projectRootFor(projectId)
@@ -753,8 +851,8 @@ export function createGovernanceService(options = {}) {
           : projectRoot && installer.targetKey
             ? await installer.targetKey(targetSkeleton, projectRoot)
             : null
-        if (requestedBaseline && stable) assertArtifact(requestedBaseline, stable.artifact, 'Candidate baseline')
-        const baseline = stable?.artifact || requestedBaseline
+        if (authoritativeBaseline && stable) assertArtifact(authoritativeBaseline, stable.artifact, 'Candidate baseline')
+        const baseline = stable?.artifact || authoritativeBaseline
         if ([artifact, baseline].some((item) => item?.source === 'prompthub')) {
           throw new EvaluationError('PromptHub capability versions must be imported into Git before nomination.', 422)
         }
@@ -769,6 +867,15 @@ export function createGovernanceService(options = {}) {
           && item.policyId === policyId
           && item.projectId === projectId
           && canonicalJson(item.artifact) === canonicalJson(artifact))
+        const legacyOriginRun = await legacyCandidateOrigin(existing)
+        if (legacyOriginRun) {
+          if (originEvaluationRunId && originEvaluationRunId !== legacyOriginRun.id) {
+            throw new EvaluationError('This Release Candidate already belongs to another Managed Suite run.', 409)
+          }
+          if (requestedBaseline) assertArtifact(legacyOriginRun.baseline, requestedBaseline, 'Candidate Decision baseline')
+          if (stable) assertArtifact(legacyOriginRun.baseline, stable.artifact, 'Candidate Decision baseline')
+          originEvaluationRunId = legacyOriginRun.id
+        }
         const reclaimingCanary = existing?.stage === 'canary' && existing.ownerIdentityAssurance === 'unverified-legacy'
         let beforeTarget
         let afterTarget
@@ -780,7 +887,7 @@ export function createGovernanceService(options = {}) {
           }
           const result = await auditedMutation('candidate.nominated', owner, existing?.stage || null, (beforeCommit) => registry.nominate({
             artifact,
-            baseline,
+            baseline: legacyOriginRun ? normalizeArtifactDefinition(legacyOriginRun.baseline) : baseline,
             owner,
             ownerIdentityAssurance,
             targetSkeleton,
@@ -788,6 +895,7 @@ export function createGovernanceService(options = {}) {
             targetKey,
             projectId,
             policyId,
+            originEvaluationRunId,
           }, beforeCommit))
           return { ...result, capability: await publicCapability(result.capability) }
         } catch (error) {
@@ -833,6 +941,19 @@ export function createGovernanceService(options = {}) {
         if (!validRunEvidence(quality) || quality.mode !== 'suite' || !quality.suiteHash) {
           throw new EvaluationError('Only completed Managed Suite evidence can be bound.', 409)
         }
+        if ((await registry.list()).some((item) => item.id !== capabilityId
+          && (item.originEvaluationRunId === quality.id || item.latestEvidenceRunId === quality.id))) {
+          throw new EvaluationError('This Managed Suite run is already bound to another Release Candidate.', 409)
+        }
+        const qualityDecision = await evaluations.getDecision(quality.id)
+        if (qualityDecision?.decision !== 'create-candidate') {
+          throw new EvaluationError('Release Candidate evidence requires a final create-candidate Decision for this Managed Suite run.', 409)
+        }
+        const existingOrigin = await candidateOrigin(capability)
+        let originEvaluationRunId = existingOrigin?.id || null
+        if (!originEvaluationRunId) {
+          originEvaluationRunId = quality.id
+        }
         assertCandidate(quality, capability, 'Quality evidence')
         const stable = await currentStable(capability.targetSkeleton, capability.projectRoot)
         const baseline = normalizeArtifactDefinition(quality.baseline)
@@ -868,17 +989,29 @@ export function createGovernanceService(options = {}) {
         const actor = identity(input?.actor, 'Operator')
         const requalifiesStage = capability.requalifiesStage
           || (['deprecated', 'superseded'].includes(capability.stage) ? capability.stage : null)
-        const update = (current) => ({
-          ...current,
-          baseline,
-          stage: evaluated.gateResult === 'passed' ? 'ready' : 'blocked',
-          requalifiesStage,
-          latestEvidenceRunId: quality.id,
-          evidence: nextEvidence,
-          approvals: [],
-        })
+        const update = (current) => {
+          if (!current.originEvaluationRunId
+            && current.latestEvidenceRunId !== capability.latestEvidenceRunId) {
+            throw new EvaluationError('Capability evidence changed while origin provenance was being preserved.', 409)
+          }
+          return {
+            ...current,
+            baseline,
+            stage: evaluated.gateResult === 'passed' ? 'ready' : 'blocked',
+            requalifiesStage,
+            originEvaluationRunId: current.originEvaluationRunId || originEvaluationRunId,
+            latestEvidenceRunId: quality.id,
+            evidence: nextEvidence,
+            approvals: [],
+          }
+        }
         if (capability.stage !== 'canary') {
-          const updated = await auditedMutation('evidence.bound', actor, capability.stage, (beforeCommit) => registry.update(capabilityId, update, beforeCommit))
+          const updated = await auditedMutation('evidence.bound', actor, capability.stage, (beforeCommit) => registry.update(
+            capabilityId,
+            update,
+            beforeCommit,
+            { allowOriginClaim: true },
+          ))
           return publicCapability(updated)
         }
         const beforeLock = await skeletonLock.read()
@@ -905,7 +1038,7 @@ export function createGovernanceService(options = {}) {
               fromStage: capability.stage,
               toStage: next.stage,
             })
-          })
+          }, { allowOriginClaim: true })
           await audit.commit(prepared)
           return publicCapability(updated)
         } catch (error) {
@@ -943,7 +1076,7 @@ export function createGovernanceService(options = {}) {
         if (!capability) throw new EvaluationError('Capability was not found.', 404)
         const hasTrustedApproval = capability.approvals.some((item) => trustedApproval(item, capability.evidence?.evidenceHash))
         if (capability.stage === 'approved' && !hasTrustedApproval) {
-          if (!capability.evidence || await evidenceStale(capability)) throw new EvaluationError('Capability evidence is stale or unavailable.', 409)
+          await requireFresh(capability, 'approved')
         } else {
           await requireFresh(capability, 'ready')
         }

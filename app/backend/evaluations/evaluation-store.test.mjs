@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -21,7 +21,7 @@ function summary(overrides = {}) {
     baseline: artifact('baseline', 'a'.repeat(64)), candidate: artifact('candidate', 'b'.repeat(64)),
     engine: { name: 'promptfoo', version: '0.121.19' }, provider: { id: 'openai', model: 'gpt-test' },
     metrics: {
-      baselineScore: 75, candidateScore: 90, scoreDeltaPp: 15, casesPassed: 2, casesTotal: 2,
+      baselineScore: 75, candidateScore: 90, scoreDeltaPp: 15, casesPassed: 2, casesTotal: 2, eligibleCases: 2, suiteCaseCoveragePct: 100,
       passRatePct: 100, regressionRatePct: 0, baselineTokens: null, candidateTokens: null,
       baselineCostUsd: null, candidateCostUsd: null, costDeltaPct: null,
       baselineP95LatencyMs: 10, candidateP95LatencyMs: 11, latencyDeltaPct: 10,
@@ -57,31 +57,88 @@ describe('evaluation store', () => {
     expect((await store.getCases(saved.id))[0].candidate.assertions[0]).toEqual({
       label: 'required', type: 'contains', blocking: true, pass: true, score: 1,
     })
+    expect(saved.metrics).toEqual(expect.objectContaining({ eligibleCases: 2, suiteCaseCoveragePct: 100 }))
     expect(await store.health()).toEqual(expect.objectContaining({ warning: true, automaticDeletion: false }))
   })
 
   it('persists only authoritative managed decision metadata and makes retries idempotent', async () => {
     const store = await temporaryStore()
+    await mkdir(path.join(store.dataDir, 'evaluation-index.json'))
     await store.appendRun(summary({ evidenceHash: 'f'.repeat(64) }))
 
     const first = await store.appendDecision('run-1', 'create-candidate')
     expect(first).toEqual({
       decision: {
-        runId: 'run-1',
+        decisionId: expect.stringMatching(/^decision_[a-f0-9]{64}$/),
+        evaluationRunId: 'run-1',
         artifactId: 'candidate',
-        candidateHash: 'b'.repeat(64),
+        candidateRefHash: 'b'.repeat(64),
         decision: 'create-candidate',
-        decidedAt: expect.any(String),
+        recordedAt: expect.any(String),
       },
       reused: false,
     })
     expect(await store.appendDecision('run-1', 'create-candidate')).toEqual({ decision: first.decision, reused: true })
-    const revised = await store.appendDecision('run-1', 'collect-more-evidence')
-    expect(revised.reused).toBe(false)
-    expect(await store.getDecision('run-1')).toEqual(revised.decision)
-    expect(Object.keys(revised.decision).sort()).toEqual(['artifactId', 'candidateHash', 'decidedAt', 'decision', 'runId'])
+    await expect(store.appendDecision('run-1', 'collect-more-evidence')).rejects.toMatchObject({ status: 409 })
+    expect(await store.getDecision('run-1')).toEqual(first.decision)
+    expect(Object.keys(first.decision).sort()).toEqual(['artifactId', 'candidateRefHash', 'decision', 'decisionId', 'evaluationRunId', 'recordedAt'])
+    const records = (await readFile(store.storeFile, 'utf8')).trim().split('\n').map(JSON.parse)
+    expect(records.at(-1)).toEqual({
+      schemaVersion: 3,
+      type: 'decision',
+      decision: first.decision,
+    })
+    expect(records.filter((record) => record.type === 'decision')).toHaveLength(1)
     await expect(store.appendDecision('run-1', 'promote')).rejects.toThrow('decision')
     await expect(store.appendDecision('missing', 'keep-baseline')).rejects.toThrow('not found')
+  })
+
+  it('derives Suite case coverage from authoritative counts and leaves legacy coverage unavailable', async () => {
+    const store = await temporaryStore()
+    const partial = await store.appendRun(summary({ metrics: { ...summary().metrics, casesTotal: 1, eligibleCases: 2, suiteCaseCoveragePct: 100 } }))
+    expect(partial.metrics.suiteCaseCoveragePct).toBe(50)
+    const legacy = await store.appendRun(summary({ id: 'run-legacy', metrics: { ...summary().metrics, eligibleCases: undefined, suiteCaseCoveragePct: 100 } }))
+    expect(legacy.metrics.suiteCaseCoveragePct).toBeNull()
+  })
+
+  it('reads legacy decisions non-destructively and derives a stable server decision ID', async () => {
+    const store = await temporaryStore()
+    const run = summary({ evidenceHash: 'f'.repeat(64) })
+    const firstLegacyDecision = {
+      runId: run.id,
+      artifactId: run.candidate.artifactId,
+      candidateHash: run.candidate.contentHash,
+      decision: 'keep-baseline',
+      decidedAt: '2026-07-21T00:01:00.000Z',
+      rationale: 'sentinel-private-rationale-a',
+    }
+    const legacyDecision = {
+      ...firstLegacyDecision,
+      decision: 'reject-candidate',
+      decidedAt: '2026-07-21T00:02:00.000Z',
+      rationale: 'sentinel-private-rationale-b',
+    }
+    const original = [
+      JSON.stringify({ schemaVersion: 2, type: 'run', summary: run }),
+      JSON.stringify({ schemaVersion: 2, type: 'decision', decision: firstLegacyDecision }),
+      JSON.stringify({ schemaVersion: 2, type: 'decision', decision: legacyDecision }),
+      '',
+    ].join('\n')
+    await writeFile(store.storeFile, original, 'utf8')
+
+    const migrated = await store.getDecision(run.id)
+    expect(migrated).toEqual({
+      decisionId: expect.stringMatching(/^decision_[a-f0-9]{64}$/),
+      evaluationRunId: run.id,
+      artifactId: run.candidate.artifactId,
+      candidateRefHash: run.candidate.contentHash,
+      decision: 'reject-candidate',
+      recordedAt: legacyDecision.decidedAt,
+    })
+    expect((await store.getRun(run.id)).evidenceHash).toBe(run.evidenceHash)
+    expect(await store.appendDecision(run.id, 'reject-candidate')).toEqual({ decision: migrated, reused: true })
+    await expect(store.appendDecision(run.id, 'keep-baseline')).rejects.toMatchObject({ status: 409 })
+    expect(await readFile(store.storeFile, 'utf8')).toBe(original)
   })
 
   it('hashes local source paths before persisting evaluation evidence', async () => {
@@ -130,18 +187,85 @@ describe('evaluation store', () => {
       sourceRef: expect.stringMatching(/^local-scan:legacy-github:sha256:[a-f0-9]{64}$/),
     }))
     expect(loaded.baseline.gitCommit).toBeUndefined()
+    expect(await store.getDecision(legacy.id)).toBeNull()
     await expect(store.appendRun(legacy)).rejects.toThrow('immutable Git commit')
   })
 
-  it('fails closed without deleting a malformed trailing JSONL record', async () => {
+  it('recovers complete history and reports a malformed trailing JSONL record as partial', async () => {
     const store = await temporaryStore()
     await store.appendRun(summary({ status: 'running', metrics: null, completedAt: null, gates: [], gateResult: 'not-evaluated' }))
     await appendFile(store.storeFile, '{"type":"run","summary":', 'utf8')
     const corrupted = await readFile(store.storeFile, 'utf8')
+    const expiredBackup = `${store.storeFile}.backup-expired`
+    await writeFile(expiredBackup, 'expired backup', 'utf8')
+    await utimes(expiredBackup, new Date('2026-07-19T00:00:00.000Z'), new Date('2026-07-19T00:00:00.000Z'))
+
+    expect(await store.getRun('run-1')).toEqual(expect.objectContaining({ id: 'run-1' }))
+    expect(await store.listRuns({ limit: 100 })).toEqual(expect.objectContaining({
+      sourceStatus: 'partial',
+      items: [expect.objectContaining({ id: 'run-1' })],
+    }))
+    await expect(store.appendRun(summary({ id: 'run-2' }))).rejects.toThrow('partial trailing record')
+    await expect(store.pruneBefore('2026-07-21T00:00:00.000Z')).rejects.toThrow('partial trailing record')
+    expect(await readFile(store.storeFile, 'utf8')).toBe(corrupted)
+    expect(await readFile(expiredBackup, 'utf8')).toBe('expired backup')
+  })
+
+  it('rejects a malformed final evaluation record that was fully written with a newline', async () => {
+    const store = await temporaryStore()
+    await store.appendRun(summary({ status: 'running', metrics: null, completedAt: null, gates: [], gateResult: 'not-evaluated' }))
+    await appendFile(store.storeFile, '{"type":"run","summary":\n', 'utf8')
+    const corrupted = await readFile(store.storeFile, 'utf8')
+    const expiredBackup = `${store.storeFile}.backup-expired`
+    await writeFile(expiredBackup, 'expired backup', 'utf8')
+    await utimes(expiredBackup, new Date('2026-07-19T00:00:00.000Z'), new Date('2026-07-19T00:00:00.000Z'))
+
+    await expect(store.listRuns({ limit: 100 })).rejects.toThrow('malformed record')
+    await expect(store.pruneBefore('2026-07-21T00:00:00.000Z')).rejects.toThrow('malformed record')
+    expect(await readFile(store.storeFile, 'utf8')).toBe(corrupted)
+    expect(await readFile(expiredBackup, 'utf8')).toBe('expired backup')
+  })
+
+  it('fails explicitly without changing malformed records before the tail', async () => {
+    const store = await temporaryStore()
+    await store.appendRun(summary({ status: 'running', metrics: null, completedAt: null, gates: [], gateResult: 'not-evaluated' }))
+    await appendFile(store.storeFile, '{"type":\n', 'utf8')
+    await appendFile(store.storeFile, `${JSON.stringify({ schemaVersion: 3, type: 'run', summary: summary({ id: 'run-2' }) })}\n`, 'utf8')
+    const corrupted = await readFile(store.storeFile, 'utf8')
 
     await expect(store.getRun('run-1')).rejects.toThrow('malformed record')
-    await expect(store.appendRun(summary({ id: 'run-2' }))).rejects.toThrow('malformed record')
+    await expect(store.appendRun(summary({ id: 'run-3' }))).rejects.toThrow('malformed record')
     expect(await readFile(store.storeFile, 'utf8')).toBe(corrupted)
+  })
+
+  it.each([
+    ['unknown type', { schemaVersion: 3, type: 'unknown', prompt: 'sentinel-private-prompt' }],
+    ['primitive', 'sentinel-private-prompt'],
+    ['missing type', { schemaVersion: 3, summary: {}, prompt: 'sentinel-private-prompt' }],
+    ['unknown envelope field', { schemaVersion: 3, type: 'run', summary: summary(), prompt: 'sentinel-private-prompt' }],
+  ])('fails closed on complete semantic corruption: %s', async (_label, record) => {
+    const store = await temporaryStore()
+    const corrupted = `${JSON.stringify(record)}\n`
+    await writeFile(store.storeFile, corrupted, 'utf8')
+    const expiredBackup = `${store.storeFile}.backup-expired`
+    await writeFile(expiredBackup, 'expired backup', 'utf8')
+    await utimes(expiredBackup, new Date('2026-07-19T00:00:00.000Z'), new Date('2026-07-19T00:00:00.000Z'))
+
+    await expect(store.health()).rejects.toThrow('malformed record')
+    await expect(store.listRuns({ limit: 100 })).rejects.toThrow('malformed record')
+    await expect(store.appendRun(summary({ id: 'run-new' }))).rejects.toThrow('malformed record')
+    await expect(store.pruneBefore('2026-07-21T00:00:00.000Z')).rejects.toThrow('malformed record')
+    expect(await readFile(store.storeFile, 'utf8')).toBe(corrupted)
+    expect(await readFile(expiredBackup, 'utf8')).toBe('expired backup')
+  })
+
+  it('does not misclassify a complete invalid no-newline record as partial', async () => {
+    const store = await temporaryStore()
+    await writeFile(store.storeFile, 'not-json', 'utf8')
+
+    await expect(store.health()).rejects.toThrow('malformed record')
+    await expect(store.listRuns({ limit: 100 })).rejects.toThrow('malformed record')
+    expect(await readFile(store.storeFile, 'utf8')).toBe('not-json')
   })
 
   it('repairs only a missing newline after a valid final record', async () => {
@@ -169,7 +293,7 @@ describe('evaluation store', () => {
     await expect(blocked.appendRun(summary({ id: 'blocked' }))).rejects.toThrow('Timed out')
     expect(JSON.parse(await readFile(path.join(store.dataDir, 'evaluations.lock'), 'utf8')).token).toBe('live-owner')
   })
-  it('marks persisted queued and running work interrupted at startup and rebuilds the latest index', async () => {
+  it('marks persisted queued and running work interrupted at startup', async () => {
     const store = await temporaryStore()
     await store.appendRun(summary({ id: 'run-queued', status: 'queued', metrics: null, startedAt: null, completedAt: null, gates: [], gateResult: 'not-evaluated' }))
     await store.appendRun(summary({ id: 'run-running', status: 'running', metrics: null, completedAt: null, gates: [], gateResult: 'not-evaluated' }))
@@ -177,11 +301,7 @@ describe('evaluation store', () => {
     expect(await store.interruptRunning()).toBe(0)
     expect(await store.getRun('run-queued')).toEqual(expect.objectContaining({ status: 'interrupted', errorCode: 'PROCESS_RESTARTED' }))
     expect(await store.getRun('run-running')).toEqual(expect.objectContaining({ status: 'interrupted', errorCode: 'PROCESS_RESTARTED' }))
-    const index = JSON.parse(await readFile(path.join(store.dataDir, 'evaluation-index.json'), 'utf8'))
-    expect(index.runs).toEqual([
-      { id: 'run-queued', status: 'interrupted', requestedAt: '2026-07-21T00:00:00.000Z' },
-      { id: 'run-running', status: 'interrupted', requestedAt: '2026-07-21T00:00:00.000Z' },
-    ])
+    await expect(readFile(path.join(store.dataDir, 'evaluation-index.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('prunes expired terminal runs while preserving governed evidence and active work', async () => {
@@ -219,6 +339,21 @@ describe('evaluation store', () => {
     expect((await store.listRuns({ limit: 100 })).items.map((run) => run.id).sort()).toEqual(['active', 'current', 'governed'])
     expect(await readFile(result.backupFile, 'utf8')).toContain('"id":"expired"')
     await expect(readFile(expiredBackup, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('prunes evaluation history without depending on an obsolete index path', async () => {
+    const store = await temporaryStore()
+    await mkdir(path.join(store.dataDir, 'evaluation-index.json'))
+    await store.appendRun(summary({ id: 'expired', requestedAt: '2026-07-20T00:00:00.000Z' }))
+    await store.appendRun(summary({ id: 'current', requestedAt: '2026-07-22T00:00:00.000Z' }))
+
+    await expect(store.pruneBefore('2026-07-21T00:00:00.000Z')).resolves.toEqual(expect.objectContaining({
+      removedRuns: 1,
+      retainedRuns: 1,
+    }))
+
+    expect(await store.getRun('expired')).toBeNull()
+    expect(await store.getRun('current')).toEqual(expect.objectContaining({ id: 'current' }))
   })
 
   it('hashes the full completed evidence and returns no evidence for incomplete work', () => {

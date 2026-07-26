@@ -107,6 +107,10 @@ moderate. The high paths cover optional local-inference archive/image packages
 `brace-expansion` below optional Google-auth cleanup code. The moderate paths
 remain in Promptfoo's agent/MCP dependencies and `@hono/node-server`.
 
+On 2026-07-26, `npm view promptfoo version --json` still returned `0.121.19`,
+the exact version already pinned here; no newer upstream release was available
+to test as a non-breaking remediation.
+
 SkillOps does not accept request-controlled Promptfoo config files, YAML,
 filesystem patterns, executable providers, archives, images, or local model
 artifacts. It compiles the restricted Suite schema in memory, uses one explicit

@@ -1,7 +1,9 @@
 # Task ledger: SkillOps
 
 > Baseline: v0.3.1
-> Status notation: `[x]` verified implemented, `[ ]` planned/not complete
+> Base candidate commit: `v0.3.2-rc.1@0b703c6dcbbc6841a70c3a290ffae928abda85b8`
+> Status notation: `[x]` implemented or recorded, `[ ]` open; validation gates
+> are tracked separately from implementation
 
 This ledger mirrors the RoleGarden milestone style but records SkillOps reality.
 A checked item means the current repository contains the behavior; it does not
@@ -21,6 +23,127 @@ Implementation verification snapshot (2026-07-22):
   the production governance/rollback smoke without an external account;
 - real Codex and Claude Code invocations produced non-discovery Skill lifecycle
   evidence through their installed adapters.
+
+## Current v0.3.2-rc.1 audit correction
+
+The authoritative product contract, work ledger, and release evidence are
+[the repository PRD](../../product/prd.md), this file, and
+[the versioned RC evidence record](../operations/rc-evidence/v0.3.2-rc.1.md).
+Working copies outside the repository are audit inputs, not a release source of
+truth.
+
+The P0 personal loop ends at **Connect -> Verify -> Observe -> Benchmark ->
+Evidence-backed Candidate Decision**. Governed Canary or Stable publishing is
+conditional on approval from a reviewer principal distinct from the owner
+principal; a single-principal flow stops at Candidate/Ready for review.
+
+Current evidence state:
+
+- The latest audit-corrected local rerun passed 78 test files with 765 tests
+  passed and one Windows platform-specific skip, plus build, production smoke,
+  docs, artifacts, critical audit, and both adapter dry-runs.
+- [x] `VAL-001` Candidate commit
+  `0b703c6dcbbc6841a70c3a290ffae928abda85b8` passed the
+  [four-job GitHub Actions matrix](https://github.com/Gjts/skillops/actions/runs/30145860716):
+  Windows, Ubuntu, and macOS on Node 22.22, plus Ubuntu on Node 24.
+- [ ] `VAL-002` The audit-corrected working tree passed the deterministic
+  100k/5k endpoint and 30-minute memory fixture plus local browser-network,
+  UI-timing, responsive, accessibility-tree, and current axe-core checks on
+  2026-07-25/26. Endpoint p95 was 16.03/58.39 ms for Command Center/Runs;
+  foreground 1366-by-768 UI p95 was 114.70 ms, with 0/50 samples above the
+  500 ms release ceiling and 1/50 above 120 ms. The isolated GP-03 UI path took
+  3.337 seconds and exposed none of its injected prompt/output/raw-error
+  sentinels; automated privacy contracts cover task/source and all forbidden
+  classes. The recorded 14-core/34-GB/NVMe host meets or exceeds the specified
+  4-core/16-GB/SSD reference environment.
+  Project-scoped Codex CLI `0.145.0` and Claude Code `2.1.218` runs both
+  produced qualifying post-boundary lifecycle evidence. The Claude turn still
+  failed at a pre-inference account gate, so its lifecycle outcome remains
+  `unknown` and is not counted as product success. An isolated
+  Broken-to-Repair path passed in 48.321 seconds. All isolated fixtures created
+  by the current checks were moved to the recycle bin. Bind the reruns to an
+  immutable candidate.
+- [ ] `VAL-003` Record the five-person first-value and decision-loop sample.
+- [ ] `VAL-004` Record independent end-to-end keyboard-only sign-off.
+- [ ] `VAL-005` Record an independent P0 Blocker / P1 Critical defect review.
+- [ ] `VAL-006` Record the RC owner's dependency-advisory decision.
+- [ ] `VAL-007` Complete the RC packet fields: independent executor/reviewer,
+  remaining per-Golden-Path result/duration, linked issues, and
+  cleanup/rollback. Exact local Runtime versions and the timed GP-03 result are
+  now recorded.
+
+The implementation audit found and closed these P0 contract-reconciliation
+tasks in the current working tree:
+
+- [x] `AUD-001` GP-02 discovery-only/post-install state is
+  `awaiting-verification` across projection, UI copy, and tests.
+- [x] `AUD-002` `/api/setup/preflight` is a metadata-only product contract with
+  backend, UI, privacy, writable-file rejection, unavailable-vs-read-only
+  tri-state, failure locking, and explicit dry-run review confirmation before
+  Install is revealed. Rechecking installation refreshes both connection and
+  preflight facts after repair.
+- [x] `AUD-003` Command Center exposes known-outcome and reported-cost
+  numerators/denominators, server-local calendar Today, partial-source unknown
+  truth, unavailable event metric/recent-run states, six-language explanation
+  mapping, and persistent consistent Demo truth.
+- [x] `AUD-004` Readiness uses the fixed recent-evidence boundary independently
+  from the Agents 7/14/30-day display filter.
+- [x] `AUD-005` Vite and production reuse the same local data and Agents API
+  handlers, including event summary and direct download behavior.
+- [x] `AUD-006` Canonical routes are documented and tested; `/team` replaces
+  itself with `/settings?section=advanced-team`.
+- [x] `AUD-007` A completed Managed Suite run has one immutable six-field final
+  Decision and can originate at most one Release Candidate; same-value retries
+  reuse the record, changed judgment requires a new run, and Team retention
+  preserves every origin/latest/quality/Red Team run referenced by a Capability.
+  The reference snapshot and evaluation prune share the governance release
+  transaction and Capability registry locks, so concurrent evidence rebinding
+  or cross-process registry writes cannot create a dangling run reference.
+- [x] `AUD-008` The Chinese README now matches the current IA, Limited Preview
+  boundary, setup preflight, and evidence-backed Candidate decision.
+- [x] `AUD-009` Protected lock, global audit, and capability-scoped audit reads
+  require a configured Bearer principal and never use the OS fallback; the
+  Candidate audit UI requires an explicit transient token and distinguishes
+  rejection from a valid empty audit.
+- [x] `AUD-010` Event, evaluation, governance, Team, and conflict JSONL stores
+  distinguish a genuinely truncated final object from complete syntax or
+  semantic corruption. Ordinary writes, clear, conflict apply, and retention
+  fail closed before destructive mutation; the explicit event recovery command
+  remains backup-first. Event/index recovery preserves concurrent appends under
+  one lock order.
+- [x] `AUD-011` Runs, Agent definitions, Scan, and Artifact Registry responses
+  use server-side filtering and bounded pages. Browser evidence records the
+  returned row counts without loading the complete event source.
+- [x] `AUD-012` The eight canonical routes and seven legacy mappings pass
+  direct-load/refresh checks at narrow and desktop widths. Axe-core `4.10.3`
+  found one shared Command Center contrast root cause; the existing
+  higher-contrast `accent-hover` token fixes it, and all eight routes now pass
+  at four viewports with zero violations.
+- [x] `AUD-013` Every production list read now has bounded page/cursor
+  semantics, deterministic ordering, and `generatedAt` or revision metadata.
+  Managed History consumes its cursor; Capability recovery is run-filtered;
+  release deep links and previous Stable references resolve outside the current
+  page; Team root returns counts instead of seven full entity arrays; Prompt
+  warnings remain count-only. Prompt branch pages are navigable, Managed History
+  serializes page requests, and invalid event queries are rejected before ETag
+  handling.
+- [x] `AUD-014` An unevaluated Candidate proposal cannot enter Ready or any
+  release path. Every bound quality run requires its own final
+  `create-candidate` Decision; the first claims immutable origin and later runs
+  only refresh latest evidence. Approval, Canary, Stable, install, rollback,
+  legacy reapproval, and pending Canary/Stable forward-release recovery
+  revalidate both Decisions instead of trusting persisted Capability metadata. The Registry
+  rejects duplicate Capability IDs, mismatched latest/evidence bindings, and
+  duplicate evaluation-run reservations in both v1 and v2 data.
+
+General RC promotion remains **no-ship** until the open validation gates are
+closed. Green implementation tests are necessary but do not close missing,
+human, real-runtime, or unbound evidence.
+
+In the historical checklist below, `current/candidate` means evaluation
+baseline/challenger. A governed `Candidate` is a persisted proposal; it becomes
+a `Release Candidate` only after a final `create-candidate` Decision claims its
+immutable origin.
 
 ## 1. Priority definitions
 
@@ -62,7 +185,8 @@ Status: implemented
 - [x] ETag event versioning.
 - [x] Atomic batch validation and ID deduplication.
 - [x] Discovery index, in-process queue, and cross-process lock.
-- [x] Backup-first clear and selective cleanup helpers.
+- [x] Backup-first clear and selective cleanup helpers that reject a partial
+  live tail before creating or applying a mutation.
 
 Acceptance:
 
@@ -81,7 +205,8 @@ Status: implemented with documented signal limitation
 - [x] Session, prompt-length, tool, subagent, and turn hooks.
 - [x] Exact explicit `$skill-name` detection.
 - [x] Conservative Skill path inference.
-- [x] Non-blocking hook errors and local diagnostics.
+- [x] Non-blocking hook errors and atomic fixed local diagnostics that redact
+  an existing entry without following symlink or hardlink targets.
 - [x] Codex Desktop incremental session ingestion.
 - [x] Stable derived IDs and semantic deduplication.
 - [x] False-positive protection for arbitrary path mentions.
@@ -132,12 +257,14 @@ Status: implemented
 - [x] Search and status filters.
 - [x] Duplicate definition, definition conflict, disabled, and missing metadata filters.
 - [x] Last-successful/discovery fallback when scan fails.
+- [x] Stable server filtering and bounded pagination for definition and Artifact lists.
 
 Acceptance:
 
 - [x] Combined view groups rows by runtime.
 - [x] Same-name cross-runtime Skills are not collapsed into one definition.
 - [x] Duplicate/conflict health is calculated within one runtime/name.
+- [x] Browser list responses contain only the requested page and page-scoped detail metadata.
 
 ## 7. Milestone 5: Execution dashboard
 
@@ -457,7 +584,9 @@ Acceptance:
 ## 19. Sprint 1: Trustworthy scanning and offline quality gate
 
 Priority: P0
-Status: implemented in v0.3.2-rc.1
+Status: implementation snapshot delivered in v0.3.2-rc.1; audit corrections
+captured in the audit-corrected candidate, while external validation gates
+above remain open
 
 - [x] `S1-01` Resolve project roots with cross-platform tests.
 - [x] `S1-02` Report source, scope, origin config, and diagnostics for scan roots.
@@ -478,11 +607,17 @@ Acceptance:
 - [x] Product documentation distinguishes implemented local behavior from deferred
   network, signing, Cursor, and hosted-team work.
 
-## 20. Release gate for future versions
+## 20. Release gate for this and future versions
 
 - [ ] P0 defects are resolved or release is stopped.
-- [ ] Full tests, build, and smoke pass freshly.
+- [ ] Full tests, build, smoke, and the supported OS/Node matrix pass on the
+  immutable candidate.
+- [ ] Performance, browser, accessibility, and real-runtime evidence is bound
+  to that same candidate or has a recorded equivalence attestation.
 - [ ] Relevant real-runtime scenario passes for adapter changes.
 - [ ] Privacy allowlist and documentation are synchronized.
 - [ ] Roadmap items are not presented as implemented product behavior.
+- [ ] The RC evidence record names the executor, exact environments, per-Golden-
+  Path result/duration, linked issues, and cleanup/rollback status.
+- [ ] Required distinct-principal and manual review gates are recorded.
 - [ ] Git status contains no accidental runtime data, secrets, or build output.

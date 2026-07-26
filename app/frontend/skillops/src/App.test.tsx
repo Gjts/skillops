@@ -13,24 +13,32 @@ function commandCenterSnapshot(events: Array<Record<string, unknown>> = []) {
   const issues = costed.length < terminal.length && terminal.length
     ? [{ id: 'review-cost-coverage', priority: 70, severity: 'low', href: '/activity?tab=runs&cost=unreported', data: { reported: costed.length, total: terminal.length } }]
     : []
+  const nextActions = issues.map((issue) => ({
+    ...issue,
+    priority: 'maintenance',
+    title: 'Review cost coverage',
+    reason: 'Some terminal runs do not report cost.',
+    impact: 'Can reduce completeness over time.',
+    evidenceRefs: ['metric:costCoverage'],
+    actionLabel: 'Review cost coverage',
+  }))
   return {
     generatedAt: new Date().toISOString(),
     scope: { runtime: 'all', days: 7 },
     sources: { events: 'ok', connections: 'ok', provider: 'ok' },
     readiness: { level: 'setup', verifiedRuntimes: [], installedRuntimes: [], providerConfigured: false },
     metrics: {
-      runs: terminal.length,
+      terminalRuns: terminal.length,
       knownOutcomes: known.length,
-      unknownOutcomes: terminal.length - known.length,
-      successRate: known.length ? successes / known.length * 100 : null,
-      activeSkills: observed.size,
-      costUsd,
-      costReportedRuns: costed.length,
-      costCoverage: terminal.length ? costed.length / terminal.length * 100 : null,
+      successRate: { numerator: successes, denominator: known.length, value: known.length ? successes / known.length * 100 : null, label: 'Known outcomes' },
+      runtimeOutcomeCoverage: { numerator: known.length, denominator: terminal.length, value: terminal.length ? known.length / terminal.length * 100 : null, label: 'Runtime outcome coverage' },
+      reportedCostUsd: costUsd,
+      costCoverage: { numerator: costed.length, denominator: terminal.length, value: terminal.length ? costed.length / terminal.length * 100 : null, label: 'Cost coverage' },
+      observedAssets: observed.size,
     },
-    metricDefinitions: { runs: '', successRate: '', activeSkills: '', costUsd: '', costCoverage: '' },
+    metricDefinitions: { terminalRuns: '', knownOutcomes: '', successRate: '', runtimeOutcomeCoverage: '', observedAssets: '', reportedCostUsd: '', costCoverage: '' },
     issues,
-    nextActions: issues,
+    nextActions,
     recentActivity: events.filter((event) => event.event !== 'skill.discovered').slice(0, 8),
   }
 }
@@ -38,12 +46,27 @@ function commandCenterSnapshot(events: Array<Record<string, unknown>> = []) {
 function apiBody(input: string, events: Array<Record<string, unknown>> = []) {
   const url = new URL(input, 'http://localhost')
   if (url.pathname === '/api/command-center') return commandCenterSnapshot(events)
+  if (url.pathname === '/api/setup/preflight') return {
+    checkedAt: new Date().toISOString(),
+    node: { version: '22.22.0', minimumVersion: '22.22.0', supported: true },
+    git: { available: true },
+    localApi: { available: true },
+    dataDirectory: { available: true, writable: true },
+    runtimes: {
+      available: true,
+      items: [
+        { runtime: 'codex', configurationDetected: true, configurationStatus: 'installed', adapterReferenceHealth: 'healthy' },
+        { runtime: 'claude-code', configurationDetected: true, configurationStatus: 'installed', adapterReferenceHealth: 'healthy' },
+      ],
+    },
+  }
   if (url.pathname === '/api/events' && url.searchParams.get('summary') === '1') {
     const lastRuntimeEvent = events
       .filter((event) => event.event !== 'skill.discovered' && typeof event.timestamp === 'string')
       .sort((left, right) => Date.parse(String(right.timestamp)) - Date.parse(String(left.timestamp)))[0]
     return { generatedAt: new Date().toISOString(), count: events.length, lastRuntimeEventAt: lastRuntimeEvent?.timestamp ?? null }
   }
+  if (url.pathname === '/api/connections') return { items: [] }
   if (url.pathname === '/api/events') return events
   return []
 }
@@ -69,11 +92,13 @@ describe('SkillOps primary flow', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'Command Center' })).toBeTruthy()
     expect(await screen.findByText('No real activity in the selected scope yet.')).toBeTruthy()
     await screen.findByText('Local events')
-    expect(container.querySelector('[data-metric="Skill runs"] strong')?.getAttribute('data-value')).toBe('0')
+    expect(screen.getByRole('heading', { name: 'Connect a runtime to get started' })).toBeTruthy()
+    expect(container.querySelector('[data-metric="Skill runs"]')).toBeNull()
+    expect(within(screen.getByLabelText('Date range')).getByRole('option', { name: 'Today' })).toBeTruthy()
 
     fireEvent.change(screen.getByLabelText('Runtime'), { target: { value: 'codex' } })
     expect((screen.getByLabelText('Runtime') as HTMLSelectElement).value).toBe('codex')
-    expect(container.querySelector('[data-metric="Skill runs"] strong')?.getAttribute('data-value')).toBe('0')
+    expect(container.querySelector('[data-metric="Skill runs"]')).toBeNull()
   })
 
   it('shows unreported Runtime cost instead of formatting missing metadata as zero', async () => {
@@ -225,6 +250,16 @@ describe('SkillOps primary flow', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'Releases' })).toBeTruthy()
   })
 
+  it('canonicalizes the legacy team route under advanced settings', async () => {
+    window.history.replaceState({}, '', '/team')
+    render(<App />)
+
+    await act(async () => undefined)
+    expect(window.location.pathname).toBe('/settings')
+    expect(window.location.search).toBe('?section=advanced-team')
+    expect(screen.getByRole('heading', { level: 1, name: 'Settings' })).toBeTruthy()
+  })
+
   it('closes mobile navigation with Escape and restores focus', () => {
     render(<App />)
     const toggle = screen.getByRole('button', { name: 'Toggle navigation' })
@@ -296,7 +331,7 @@ describe('SkillOps primary flow', () => {
 
     await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
     expect(screen.getAllByText('polled-skill').length).toBeGreaterThan(0)
-    expect(screen.getByText('Refreshes every 3s')).toBeTruthy()
+    expect(screen.getByText(/Refreshes every 3s/)).toBeTruthy()
   })
 
   it('polls runtime connection health after an external installation change', async () => {
@@ -306,7 +341,7 @@ describe('SkillOps primary flow', () => {
     vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => Promise.resolve({
       ok: true,
       json: async () => input === '/api/connections'
-        ? [{ runtime: 'codex', status }, { runtime: 'claude-code', status: 'not-installed' }, { runtime: 'cursor', status: 'preview' }]
+        ? { items: [{ runtime: 'codex', status }, { runtime: 'claude-code', status: 'not-installed' }, { runtime: 'cursor', status: 'preview' }] }
         : [],
     })))
     render(<App />)
@@ -317,6 +352,35 @@ describe('SkillOps primary flow', () => {
     status = 'installed'
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
     expect(within(codexRow).getByText('Installed')).toBeTruthy()
+  })
+
+  it('bounds stalled connection reads without overlapping the poller', async () => {
+    vi.useFakeTimers()
+    window.history.replaceState({}, '', '/settings')
+    const connectionSignals: AbortSignal[] = []
+    let connectionCalls = 0
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string, init?: RequestInit) => {
+      if (input !== '/api/connections') return Promise.resolve(okResponse(apiBody(input)))
+      connectionCalls += 1
+      const signal = init?.signal
+      if (signal) connectionSignals.push(signal)
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('Timed out', 'AbortError')))
+      })
+    }))
+
+    render(<App />)
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(connectionCalls).toBe(1)
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+    expect(connectionCalls).toBe(1)
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
+    expect(connectionSignals[0]?.aborted).toBe(true)
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+    expect(connectionCalls).toBe(2)
   })
 
   it('persists imported files through the local API and reports the stored count', async () => {
@@ -443,6 +507,7 @@ describe('SkillOps primary flow', () => {
             totalPages: Math.ceil(matching.length / pageSize),
             hasPrevious: page > 1,
             hasNext: page * pageSize < matching.length,
+            sourceStatus: 'partial',
           }),
         })
       }
@@ -451,7 +516,10 @@ describe('SkillOps primary flow', () => {
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
 
+    expect(screen.getByRole('heading', { level: 2, name: 'Runs' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { level: 2, name: 'Execution timeline' })).toBeNull()
     expect(await screen.findByText('1–20 of 45 runs')).toBeTruthy()
+    expect(screen.getByText('Some local sources are unavailable or partial. Remaining results are still usable.')).toBeTruthy()
     expect(screen.getByText('1–20 of 45 runs').getAttribute('role')).toBe('status')
     expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/runs?'))).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
@@ -1022,13 +1090,15 @@ describe('SkillOps primary flow', () => {
   })
 
 
-  it('opens the runtime connection flow and changes adapters', () => {
+  it('opens the runtime connection flow and changes adapters', async () => {
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: 'Connect runtime' }))
     const dialog = screen.getByRole('dialog', { name: 'Connect a runtime' })
     expect(dialog).toBeTruthy()
 
     fireEvent.click(within(dialog).getByRole('button', { name: /Claude Code/ }))
+    expect(within(dialog).queryByText('npm run claude:install')).toBeNull()
+    fireEvent.click(await within(dialog).findByRole('checkbox', { name: 'I reviewed the redacted dry-run preview.' }))
     expect(within(dialog).getByText('npm run claude:install')).toBeTruthy()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
     expect(screen.queryByRole('dialog')).toBeNull()
@@ -1053,7 +1123,7 @@ describe('SkillOps primary flow', () => {
       { runtime: 'cursor', status: 'preview' },
     ]
     vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => Promise.resolve(okResponse(
-      input === '/api/connections' ? inspectedConnections : apiBody(input, oldEvents),
+      input === '/api/connections' ? { items: inspectedConnections } : apiBody(input, oldEvents),
     ))))
     render(<App />)
     await screen.findByText('Local events')
@@ -1077,7 +1147,10 @@ describe('SkillOps primary flow', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull()
     expect(document.activeElement).toBe(clearButton)
     fireEvent.click(within(claudeRow).getByRole('button', { name: 'Configure Claude Code' }))
-    expect(within(screen.getByRole('dialog', { name: 'Connect a runtime' })).getByText('npm run claude:install')).toBeTruthy()
+    const connectionDialog = screen.getByRole('dialog', { name: 'Connect a runtime' })
+    expect(within(connectionDialog).queryByText('npm run claude:install')).toBeNull()
+    fireEvent.click(await within(connectionDialog).findByRole('checkbox', { name: 'I reviewed the redacted dry-run preview.' }))
+    expect(within(connectionDialog).getByText('npm run claude:install')).toBeTruthy()
   })
 
   it('uses scanner source metadata for project Skills', async () => {

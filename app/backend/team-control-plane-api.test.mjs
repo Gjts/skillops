@@ -2,10 +2,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import { handleTeamControlPlaneApi } from './team-control-plane-api.mjs'
 
-function request(method, body, headers = {}) {
+function request(method, body, headers = {}, url) {
   const bytes = body === undefined ? [] : [Buffer.from(JSON.stringify(body))]
   return {
     method,
+    url,
     socket: { remoteAddress: '127.0.0.1' },
     headers: {
       host: '127.0.0.1:4173',
@@ -44,7 +45,12 @@ describe('Team control-plane API', () => {
     const read = response()
     await handleTeamControlPlaneApi(request('GET'), read, '/api/team', options(teamControlPlane))
     expect(read.statusCode).toBe(200)
-    expect(JSON.parse(read.body)).toEqual({ team: { id: 'acme' } })
+    expect(JSON.parse(read.body)).toMatchObject({
+      team: { id: 'acme' },
+      counts: { workspaces: 0, projects: 0, environments: 0, activeMembers: 0, activeDevices: 0, policyPacks: 0, exceptions: 0 },
+      generatedAt: expect.any(String),
+    })
+    expect(JSON.parse(read.body)).not.toHaveProperty('members')
     expect(read.headers['Cache-Control']).toBe('no-store')
   })
 
@@ -55,6 +61,30 @@ describe('Team control-plane API', () => {
     expect(output.statusCode).toBe(422)
     expect(JSON.parse(output.body).error.message).toContain('networkHost')
     expect(teamControlPlane.initialize).not.toHaveBeenCalled()
+  })
+
+  it('forwards bounded pagination and queue kind through one Team list contract', async () => {
+    const envelope = { items: [], page: 2, pageSize: 20, totalItems: 21, totalPages: 2, hasPrevious: true, hasNext: false, revision: 7 }
+    const teamControlPlane = {
+      catalog: vi.fn(async () => envelope),
+      queues: vi.fn(async () => envelope),
+      audit: vi.fn(async () => ({ ...envelope, sourceStatus: 'partial' })),
+    }
+
+    const catalog = response()
+    await handleTeamControlPlaneApi(request('GET', undefined, {}, '/api/team/catalog?page=2&pageSize=20'), catalog, '/api/team/catalog', options(teamControlPlane))
+    expect(JSON.parse(catalog.body)).toEqual({ ...envelope, generatedAt: expect.any(String) })
+    expect(teamControlPlane.catalog).toHaveBeenCalledWith(principal, { page: '2', pageSize: '20' })
+
+    const queue = response()
+    await handleTeamControlPlaneApi(request('GET', undefined, {}, '/api/team/queues?kind=release&page=2&pageSize=20'), queue, '/api/team/queues', options(teamControlPlane))
+    expect(JSON.parse(queue.body)).toEqual({ ...envelope, generatedAt: expect.any(String) })
+    expect(teamControlPlane.queues).toHaveBeenCalledWith(principal, 'release', { page: '2', pageSize: '20' })
+
+    const audit = response()
+    await handleTeamControlPlaneApi(request('GET', undefined, {}, '/api/team/audit?page=2&pageSize=20'), audit, '/api/team/audit', options(teamControlPlane))
+    expect(JSON.parse(audit.body)).toEqual({ ...envelope, sourceStatus: 'partial', generatedAt: expect.any(String) })
+    expect(teamControlPlane.audit).toHaveBeenCalledWith(principal, { page: '2', pageSize: '20' })
   })
 
   it('rejects unknown Project and nested Template fields before calling the module', async () => {
@@ -94,7 +124,7 @@ describe('Team control-plane API', () => {
       removeEntity: vi.fn(async () => ({ revision: 3 })),
       requestException: vi.fn(async () => ({ id: 'exception-1' })),
       reviewException: vi.fn(async () => ({ status: 'approved' })),
-      audit: vi.fn(async () => []),
+      audit: vi.fn(async () => ({ items: [{ sequence: 1 }], page: 1, pageSize: 50, totalItems: 1, totalPages: 1, hasPrevious: false, hasNext: false, revision: 1, sourceStatus: 'partial' })),
       exportTeam: vi.fn(async () => ({ schemaVersion: 1 })),
       backup: vi.fn(async () => ({ created: true })),
       restoreBackup: vi.fn(async () => ({ restored: true })),
@@ -121,6 +151,10 @@ describe('Team control-plane API', () => {
     expect(teamControlPlane.reviewException).toHaveBeenCalledWith('exception-1', 'approved', principal)
     expect(teamControlPlane.applyRetention).toHaveBeenCalledWith(30, principal)
     expect(teamControlPlane.restoreBackup).toHaveBeenCalledWith('team-backup-safe.json', principal)
+
+    const audit = response()
+    await handleTeamControlPlaneApi(request('GET'), audit, '/api/team/audit', options(teamControlPlane))
+    expect(JSON.parse(audit.body)).toEqual({ items: [{ sequence: 1 }], page: 1, pageSize: 50, totalItems: 1, totalPages: 1, hasPrevious: false, hasNext: false, revision: 1, sourceStatus: 'partial', generatedAt: expect.any(String) })
 
     expect(await handleTeamControlPlaneApi(request('GET'), response(), '/api/team-unknown', options(teamControlPlane))).toBe(false)
   })

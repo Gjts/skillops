@@ -2,12 +2,13 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { normalizeEvent } from '../shared/event-schema.mjs'
-import { pruneEventsBefore } from './event-store.mjs'
+import { pruneEventsBefore, restoreEventsFromBackup } from './event-store.mjs'
 import { createEvaluationStore } from './evaluations/evaluation-store.mjs'
 import { canonicalJson } from './evaluations/suite-registry.mjs'
 import { EvaluationError } from './evaluations/errors.mjs'
-import { gatePolicyHash, normalizeGatePolicy } from './governance/capability-policy.mjs'
+import { gatePolicyHash, gatePolicyIntegrityMatches, normalizeGatePolicy } from './governance/capability-policy.mjs'
 import { withGovernanceFileLock } from './governance/skeleton-lock.mjs'
+import { createPageEnvelope } from './page-envelope.mjs'
 import { inspectProjectTemplateAdoption } from './project-template.mjs'
 
 const ROLES = ['Owner', 'Maintainer', 'Reviewer', 'Developer', 'Viewer']
@@ -18,6 +19,36 @@ const COLLECTOR_EVENT_FIELDS = new Set([
   'outcome', 'detectionMethod', 'confidence', 'provider', 'kind', 'enabled',
 ])
 const EVIDENCE_FIELDS = new Set(['capabilityId', 'artifactId', 'version', 'contentHash', 'evidenceHash', 'gateResult', 'score', 'passRatePct'])
+const COLLECTOR_RECORD_FIELDS = new Set(['schemaVersion', 'id', 'deviceId', 'memberId', 'receivedAt', 'events', 'evidence'])
+const AUDIT_RECORD_FIELDS = new Set([
+  'schemaVersion', 'id', 'sequence', 'previousHash', 'action', 'actorId', 'actorRole',
+  'subjectType', 'subjectId', 'stateRevision', 'at', 'hash',
+])
+const AUDIT_ACTIONS = new Set([
+  'team.created', 'workspace.saved', 'workspace.removed', 'project.saved', 'project.removed',
+  'environment.saved', 'environment.removed', 'member.saved', 'member.removed', 'policyPack.saved',
+  'policyPack.removed', 'device.registered', 'device.revoked', 'exception.requested',
+  'exception.reviewed', 'collector.received', 'connector.credential.saved',
+  'connector.credential.removed', 'backup.restored', 'retention.updated',
+])
+const AUDIT_ACTOR_ROLES = new Set([...ROLES, 'Device'])
+const AUDIT_SUBJECT_TYPES = new Set(['team', 'workspace', 'project', 'environment', 'member', 'policyPack', 'device', 'exception', 'connector'])
+const TEAM_QUEUE_KINDS = new Set(['approval', 'release'])
+
+function compareCatalogItems(left, right) {
+  return left.artifactId.localeCompare(right.artifactId, 'en-US')
+    || left.version.localeCompare(right.version, 'en-US')
+    || left.artifactVersionId.localeCompare(right.artifactVersionId, 'en-US')
+}
+
+function compareQueueItems(left, right) {
+  return left.artifactId.localeCompare(right.artifactId, 'en-US')
+    || left.capabilityId.localeCompare(right.capabilityId, 'en-US')
+}
+
+function compareAuditRecords(left, right) {
+  return left.sequence - right.sequence || left.id.localeCompare(right.id, 'en-US')
+}
 
 function text(value, label, maxLength = 200) {
   if (typeof value !== 'string' || !value.trim() || value.trim().length > maxLength || /[\u0000-\u001f\u007f]/.test(value)) {
@@ -180,6 +211,34 @@ async function replaceFile(file, contents) {
   } finally { await rm(temporary, { force: true }) }
 }
 
+function mergeJsonlPreimage(preimage, current, postimage) {
+  const before = preimage.split('\n').filter((line) => line.length)
+  const committed = (postimage ?? preimage).split('\n').filter((line) => line.length)
+  const remaining = new Map()
+  for (const line of committed) remaining.set(line, (remaining.get(line) || 0) + 1)
+  const appended = current.split('\n').filter((line) => line.length).filter((line) => {
+    const count = remaining.get(line) || 0
+    if (!count) return true
+    remaining.set(line, count - 1)
+    return false
+  })
+  const restored = [...before, ...appended]
+  return restored.length ? `${restored.join('\n')}\n` : ''
+}
+
+async function restoreJsonlBackup(file, backupFile, postimage, lockFile, label) {
+  if (!backupFile) return
+  const target = path.resolve(file)
+  const backup = path.resolve(backupFile)
+  if (path.dirname(target) !== path.dirname(backup) || !path.basename(backup).startsWith(`${path.basename(target)}.backup-`)) {
+    throw new Error(`${label} recovery backup is invalid.`)
+  }
+  await withGovernanceFileLock(lockFile, async () => {
+    const [preimage, current] = await Promise.all([readFile(backup, 'utf8'), readOptional(target, '')])
+    await replaceFile(target, mergeJsonlPreimage(preimage, current, postimage))
+  }, 100, label)
+}
+
 export function createTeamControlPlane(options = {}) {
   const dataDir = path.resolve(options.dataDir || process.env.SKILLOPS_DATA_DIR || path.join(process.cwd(), 'data'))
   const stateFile = path.join(dataDir, 'team-control-plane.json')
@@ -192,7 +251,7 @@ export function createTeamControlPlane(options = {}) {
   const now = options.now || (() => new Date())
   const inspectTemplateAdoption = options.inspectProjectTemplateAdoption || inspectProjectTemplateAdoption
   const evaluations = options.evaluations || createEvaluationStore({ ...options, dataDir })
-  const pruneEvents = options.pruneEvents || ((cutoff) => pruneEventsBefore(cutoff, { directory: dataDir }))
+  const pruneEvents = options.pruneEvents || ((cutoff) => pruneEventsBefore(cutoff, { directory: dataDir, deferBackupCleanup: true }))
 
   async function observedPublicState(state) {
     const value = publicState(state)
@@ -234,10 +293,88 @@ export function createTeamControlPlane(options = {}) {
     return contents === null ? defaultState() : parseState(contents)
   }
 
+  function parseJsonlObjects(contents, label) {
+    const items = []
+    const lines = contents.split('\n')
+    let sourceStatus = 'ok'
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index]
+      if (!line.trim()) continue
+      let item
+      try { item = JSON.parse(line) } catch (error) {
+        const position = Number(error?.message?.match(/position (\d+)/)?.[1])
+        const incomplete = line.trimStart().startsWith('{')
+          && (error?.message === 'Unexpected end of JSON input'
+            || error?.message?.startsWith('Unterminated string')
+            || Number.isInteger(position) && position >= line.length)
+        if (!contents.endsWith('\n') && incomplete && lines.slice(index + 1).every((candidate) => !candidate.trim())) {
+          sourceStatus = 'partial'
+          break
+        }
+        throw new EvaluationError(`${label} is invalid.`, 500)
+      }
+      if (!item || typeof item !== 'object' || Array.isArray(item)) throw new EvaluationError(`${label} is invalid.`, 500)
+      items.push(item)
+    }
+    return { items, sourceStatus }
+  }
+
+  function requireComplete(snapshot, label) {
+    if (snapshot.sourceStatus === 'partial') {
+      throw new EvaluationError(`${label} has a partial trailing record; no data was changed.`, 409)
+    }
+    return snapshot.items
+  }
+
+  function persistedAuditRecord(record) {
+    const hashValue = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+    const safeText = (value, maxLength = 200) => typeof value === 'string' && Boolean(value.trim())
+      && value.length <= maxLength && !/[\u0000-\u001f\u007f]/.test(value)
+    if (Object.keys(record).some((key) => !AUDIT_RECORD_FIELDS.has(key))
+      || record.schemaVersion !== 1
+      || !safeText(record.id)
+      || !Number.isInteger(record.sequence) || record.sequence < 1
+      || record.previousHash !== null && !hashValue(record.previousHash)
+      || !AUDIT_ACTIONS.has(record.action)
+      || !safeText(record.actorId)
+      || !AUDIT_ACTOR_ROLES.has(record.actorRole)
+      || !AUDIT_SUBJECT_TYPES.has(record.subjectType)
+      || !safeText(record.subjectId)
+      || !Number.isInteger(record.stateRevision) || record.stateRevision < 1
+      || typeof record.at !== 'string' || Number.isNaN(Date.parse(record.at))
+      || !hashValue(record.hash)) {
+      throw new EvaluationError('Team audit log is invalid.', 500)
+    }
+    return record
+  }
+
+  function persistedCollectorRecord(record) {
+    try {
+      if (Object.keys(record).some((key) => !COLLECTOR_RECORD_FIELDS.has(key))
+        || record.schemaVersion !== 1
+        || typeof record.id !== 'string' || !record.id
+        || typeof record.deviceId !== 'string' || !record.deviceId
+        || typeof record.memberId !== 'string' || !record.memberId
+        || typeof record.receivedAt !== 'string' || Number.isNaN(Date.parse(record.receivedAt))
+        || !Array.isArray(record.events) || record.events.length > 100
+        || !Array.isArray(record.evidence) || record.evidence.length > 100) {
+        throw new Error()
+      }
+      const normalized = {
+        ...record,
+        events: record.events.map(sanitizeEvent),
+        evidence: record.evidence.map(sanitizeEvidence),
+      }
+      if (canonicalJson(normalized) !== canonicalJson(record)) throw new Error()
+      return record
+    } catch {
+      throw new EvaluationError('Team collector store is invalid.', 500)
+    }
+  }
+
   function parseAudit(contents) {
-    const records = contents.split('\n').filter(Boolean).map((line) => {
-      try { return JSON.parse(line) } catch { throw new EvaluationError('Team audit log is invalid.', 500) }
-    })
+    const snapshot = parseJsonlObjects(contents, 'Team audit log')
+    const records = snapshot.items.map(persistedAuditRecord)
     let previousHash = null
     for (let index = 0; index < records.length; index += 1) {
       const record = records[index]
@@ -247,10 +384,19 @@ export function createTeamControlPlane(options = {}) {
       }
       previousHash = recordedHash
     }
-    return records
+    return { items: records, sourceStatus: snapshot.sourceStatus }
+  }
+
+  function parseCollector(contents) {
+    const snapshot = parseJsonlObjects(contents, 'Team collector store')
+    return { items: snapshot.items.map(persistedCollectorRecord), sourceStatus: snapshot.sourceStatus }
   }
 
   async function readAuditFile() {
+    return requireComplete(parseAudit(await readOptional(auditFile, '')), 'Team audit log')
+  }
+
+  async function readAuditSnapshot() {
     return parseAudit(await readOptional(auditFile, ''))
   }
 
@@ -264,7 +410,7 @@ export function createTeamControlPlane(options = {}) {
       throw new EvaluationError('Team transaction journal is invalid.', 500)
     }
     parseState(transaction.state)
-    parseAudit(transaction.audit)
+    requireComplete(parseAudit(transaction.audit), 'Team audit log')
     await replaceFile(stateFile, transaction.state)
     if (transaction.collector !== undefined) await replaceFile(collectorFile, transaction.collector)
     await replaceFile(auditFile, transaction.audit)
@@ -284,6 +430,10 @@ export function createTeamControlPlane(options = {}) {
 
   function readAudit() {
     return readConsistent(readAuditFile)
+  }
+
+  function readAuditPrefix() {
+    return readConsistent(readAuditSnapshot)
   }
 
   function createAuditRecord(records, action, principal, roleName, subjectType, subjectId, revision) {
@@ -463,7 +613,6 @@ export function createTeamControlPlane(options = {}) {
     return withGovernanceFileLock(lockFile, async () => {
       await recoverTransaction()
       const state = await readStateFile()
-      const previousCollector = await readOptional(collectorFile, '')
       const device = state.devices.find((item) => {
         const stored = Buffer.from(item.tokenHash || '', 'hex')
         return item.status === 'active' && stored.length === supplied.length && timingSafeEqual(stored, supplied)
@@ -473,6 +622,8 @@ export function createTeamControlPlane(options = {}) {
       const unknown = Object.keys(input).filter((key) => !['events', 'evidence'].includes(key))
       if (unknown.length) throw new EvaluationError(`Collector payload contains unsupported field: ${unknown[0]}.`, 422)
       if (!Array.isArray(input.events || []) || input.events?.length > 100 || !Array.isArray(input.evidence || []) || input.evidence?.length > 100) throw new EvaluationError('Collector payload is too large.', 422)
+      const previousCollector = await readOptional(collectorFile, '')
+      requireComplete(parseCollector(previousCollector), 'Team collector store')
       const record = {
         schemaVersion: 1,
         id: randomUUID(),
@@ -483,20 +634,18 @@ export function createTeamControlPlane(options = {}) {
         evidence: (input.evidence || []).map(sanitizeEvidence),
       }
       // ponytail: local collector rewrites are O(n); move to SQLite when retention-bounded files make uploads measurable.
-      const collector = `${previousCollector}${JSON.stringify(record)}\n`
+      const collector = `${previousCollector && !previousCollector.endsWith('\n') ? `${previousCollector}\n` : previousCollector}${JSON.stringify(record)}\n`
+      const records = await readAuditFile()
       device.lastSeenAt = record.receivedAt
       state.revision += 1
       state.updatedAt = record.receivedAt
-      const records = await readAuditFile()
       records.push(createAuditRecord(records, 'collector.received', { id: `device:${device.id}` }, 'Device', 'device', device.id, state.revision))
       await commitTransaction(state, records, collector)
       return { accepted: true, eventCount: record.events.length, evidenceCount: record.evidence.length }
     })
   }
 
-  async function catalog(principal) {
-    const state = await readState()
-    requireRole(state, principal, 'Viewer')
+  async function catalogItems(state) {
     if (!artifactRegistry?.list || !governance?.list) throw new EvaluationError('Team Artifact catalog is unavailable.', 503)
     const [registrySnapshot, capabilities] = await Promise.all([artifactRegistry.list(), governance.list()])
     return registrySnapshot.versions.map((version) => {
@@ -509,20 +658,38 @@ export function createTeamControlPlane(options = {}) {
         source: version.source,
         lifecycleStatus: governed?.stage || version.status,
         owner: governed?.owner || null,
-        usedByProjectIds: state.projects.filter((project) => project.artifactIds.includes(`${version.kind}:${version.sourceArtifactId}`)).map((project) => project.id),
+        usedByProjectIds: state.projects.filter((project) => project.artifactIds.includes(`${version.kind}:${version.sourceArtifactId}`)).map((project) => project.id).sort(),
         evidenceHash: governed?.evidence?.evidenceHash || null,
       }
     })
   }
 
-  async function queues(principal) {
+  async function catalog(principal, pagination = {}) {
     const state = await readState()
     requireRole(state, principal, 'Viewer')
+    return {
+      ...createPageEnvelope(await catalogItems(state), { ...pagination, compare: compareCatalogItems }),
+      revision: state.revision,
+    }
+  }
+
+  async function queueItems() {
     if (!governance?.list) throw new EvaluationError('Team governance queue is unavailable.', 503)
     const capabilities = await governance.list()
     return {
-      approvalInbox: capabilities.filter((item) => item.stage === 'ready').map((item) => ({ capabilityId: item.id, artifactId: item.artifact.artifactId, owner: item.owner, evidenceHash: item.evidence?.evidenceHash || null })),
-      releaseQueue: capabilities.filter((item) => ['approved', 'canary'].includes(item.stage)).map((item) => ({ capabilityId: item.id, artifactId: item.artifact.artifactId, stage: item.stage, targetSkeleton: item.targetSkeleton })),
+      approval: capabilities.filter((item) => item.stage === 'ready').map((item) => ({ capabilityId: item.id, artifactId: item.artifact.artifactId, owner: item.owner, evidenceHash: item.evidence?.evidenceHash || null })),
+      release: capabilities.filter((item) => ['approved', 'canary'].includes(item.stage)).map((item) => ({ capabilityId: item.id, artifactId: item.artifact.artifactId, stage: item.stage, targetSkeleton: item.targetSkeleton })),
+    }
+  }
+
+  async function queues(principal, kind, pagination = {}) {
+    const state = await readState()
+    requireRole(state, principal, 'Viewer')
+    if (!TEAM_QUEUE_KINDS.has(kind)) throw new EvaluationError('Team queue kind must be approval or release.', 400)
+    const items = await queueItems()
+    return {
+      ...createPageEnvelope(items[kind], { ...pagination, compare: compareQueueItems }),
+      revision: state.revision,
     }
   }
 
@@ -565,7 +732,7 @@ export function createTeamControlPlane(options = {}) {
       throw new EvaluationError('Project was not found.', 404)
     }
     const gatePolicy = normalizeGatePolicy(policyPack.gatePolicy)
-    if (gatePolicy.id !== policyPack.id || gatePolicyHash(gatePolicy) !== policyPack.contentHash) {
+    if (gatePolicy.id !== policyPack.id || !gatePolicyIntegrityMatches(policyPack.gatePolicy, policyPack.contentHash)) {
       throw new EvaluationError('Policy Pack content integrity verification failed.', 500)
     }
     const exception = projectId
@@ -582,9 +749,15 @@ export function createTeamControlPlane(options = {}) {
     }
   }
 
-  async function audit(principal) {
-    requireRole(await readState(), principal, 'Viewer')
-    return readAudit()
+  async function audit(principal, pagination = {}) {
+    const state = await readState()
+    requireRole(state, principal, 'Viewer')
+    const snapshot = await readAuditPrefix()
+    return {
+      ...createPageEnvelope(snapshot.items, { ...pagination, compare: compareAuditRecords }),
+      revision: state.revision,
+      sourceStatus: snapshot.sourceStatus,
+    }
   }
 
   async function recordConnectorCredentialChange(connectorId, configured, principal) {
@@ -607,12 +780,19 @@ export function createTeamControlPlane(options = {}) {
   async function exportTeam(principal) {
     const state = await readState()
     requireRole(state, principal, 'Owner')
+    const [catalogSnapshot, queueSnapshot] = await Promise.all([
+      artifactRegistry && governance ? catalogItems(state) : [],
+      governance ? queueItems() : { approval: [], release: [] },
+    ])
     return {
       schemaVersion: 1,
       exportedAt: now().toISOString(),
       state: await observedPublicState(state),
-      catalog: artifactRegistry && governance ? await catalog(principal) : [],
-      queues: governance ? await queues(principal) : { approvalInbox: [], releaseQueue: [] },
+      catalog: catalogSnapshot.sort(compareCatalogItems),
+      queues: {
+        approvalInbox: queueSnapshot.approval.sort(compareQueueItems),
+        releaseQueue: queueSnapshot.release.sort(compareQueueItems),
+      },
       audit: await readAudit(),
     }
   }
@@ -671,25 +851,17 @@ export function createTeamControlPlane(options = {}) {
 
   async function applyRetention(days, principal) {
     if (!Number.isInteger(days) || days < 1 || days > 3_650) throw new EvaluationError('Team retention days are invalid.', 422)
-    return withGovernanceFileLock(lockFile, async () => {
+    return withGovernanceFileLock(path.join(dataDir, 'governance-release.lock'), () => withGovernanceFileLock(lockFile, async () => {
       await recoverTransaction()
       const state = await readStateFile()
       const member = requireRole(state, principal, 'Owner')
-      if (!governance?.list || !evaluations?.pruneBefore) throw new EvaluationError('Team retention dependencies are unavailable.', 503)
+      const capabilityRegistry = governance?.registry || governance
+      if (!capabilityRegistry?.list || !evaluations?.pruneBefore) throw new EvaluationError('Team retention dependencies are unavailable.', 503)
       const cutoff = new Date(now().getTime() - days * 86_400_000)
-      const collectorRecords = (await readOptional(collectorFile, '')).split('\n').filter(Boolean).map((line) => {
-        try { return JSON.parse(line) } catch { throw new EvaluationError('Team collector store is invalid.', 500) }
-      })
+      const collectorRecords = requireComplete(parseCollector(await readOptional(collectorFile, '')), 'Team collector store')
       const retainedCollector = collectorRecords.filter((record) => Date.parse(record.receivedAt) >= cutoff.getTime())
-      const capabilities = await governance.list()
-      const preserveRunIds = [...new Set(capabilities.flatMap((capability) => [
-        capability.latestEvidenceRunId,
-        capability.evidence?.qualityRunId,
-        capability.evidence?.redteamRunId,
-      ]).filter(Boolean))]
-      const events = await pruneEvents(cutoff)
-      const evaluationEvidence = await evaluations.pruneBefore(cutoff, { preserveRunIds })
-      let removedTeamBackups = 0
+      const auditRecords = await readAuditFile()
+      const expiredTeamBackups = []
       const backupDirectory = path.join(dataDir, 'backups')
       for (const entry of await readdir(backupDirectory, { withFileTypes: true }).catch((error) => error?.code === 'ENOENT' ? [] : Promise.reject(error))) {
         if (!entry.isFile() || !/^team-backup-[a-zA-Z0-9-]+\.json$/.test(entry.name)) continue
@@ -699,16 +871,83 @@ export function createTeamControlPlane(options = {}) {
         } catch {
           continue
         }
-        await rm(path.join(backupDirectory, entry.name))
-        removedTeamBackups += 1
+        expiredTeamBackups.push(path.join(backupDirectory, entry.name))
       }
-      state.retentionDays = days
-      state.revision += 1
-      state.updatedAt = now().toISOString()
-      const auditRecords = await readAuditFile()
-      auditRecords.push(createAuditRecord(auditRecords, 'retention.updated', principal, member.role, 'team', 'retention', state.revision))
-      const collector = retainedCollector.length ? `${retainedCollector.map(JSON.stringify).join('\n')}\n` : ''
-      await commitTransaction(state, auditRecords, collector)
+      let events
+      let evaluationEvidence
+      let preserveRunIds
+      try {
+        events = await pruneEvents(cutoff)
+        const retainedEvaluations = await withGovernanceFileLock(path.join(dataDir, 'capabilities.lock'), async () => {
+          const capabilities = await capabilityRegistry.list()
+          const preserveRunIds = [...new Set(capabilities.flatMap((capability) => [
+            capability.originEvaluationRunId,
+            capability.latestEvidenceRunId,
+            capability.evidence?.qualityRunId,
+            capability.evidence?.redteamRunId,
+          ]).filter(Boolean))]
+          return {
+            preserveRunIds,
+            evaluationEvidence: await evaluations.pruneBefore(cutoff, { preserveRunIds, deferBackupCleanup: true }),
+          }
+        }, 100, 'capability registry')
+        preserveRunIds = retainedEvaluations.preserveRunIds
+        evaluationEvidence = retainedEvaluations.evaluationEvidence
+        state.retentionDays = days
+        state.revision += 1
+        state.updatedAt = now().toISOString()
+        auditRecords.push(createAuditRecord(auditRecords, 'retention.updated', principal, member.role, 'team', 'retention', state.revision))
+        const collector = retainedCollector.length ? `${retainedCollector.map(JSON.stringify).join('\n')}\n` : ''
+        await commitTransaction(state, auditRecords, collector)
+      } catch (error) {
+        if (error?.retentionRecovery?.store === 'events' && !events) events = error.retentionRecovery
+        if (error?.retentionRecovery?.store === 'evaluations' && !evaluationEvidence) evaluationEvidence = error.retentionRecovery
+        const recoveryFiles = [evaluationEvidence?.backupFile, events?.backupFile].filter(Boolean)
+        const recoveryReferences = recoveryFiles.map((file) => path.basename(file)).join(', ')
+        let pendingTransaction = true
+        try { pendingTransaction = await readOptional(transactionFile, null) !== null } catch {}
+        if (pendingTransaction) {
+          throw new EvaluationError(`Team retention recovery is pending in ${path.basename(transactionFile)}${recoveryReferences ? `; data backups: ${recoveryReferences}` : ''}.`, 500)
+        }
+        const failures = []
+        try {
+          await restoreJsonlBackup(
+            path.join(dataDir, 'evaluations.jsonl'),
+            evaluationEvidence?.backupFile,
+            evaluationEvidence?.recoveryPostimage,
+            path.join(dataDir, 'evaluations.lock'),
+            'evaluation store',
+          )
+        } catch (recoveryError) { failures.push(recoveryError) }
+        try {
+          await restoreEventsFromBackup(events?.backupFile, events?.recoveryPostimage, { directory: dataDir })
+        } catch (recoveryError) { failures.push(recoveryError) }
+        if (failures.length) {
+          throw new EvaluationError(`Team retention failed and automatic recovery was incomplete${recoveryReferences ? `; data backups: ${recoveryReferences}` : ''}.`, 500)
+        }
+        throw error
+      }
+      for (const result of [events, evaluationEvidence]) {
+        if (!Array.isArray(result.expiredBackupFiles)) continue
+        result.removedBackups = 0
+        for (const file of result.expiredBackupFiles) {
+          try {
+            await rm(file)
+            result.removedBackups += 1
+          } catch {
+            // Safe retention lag: leave the backup for the next explicit retention pass.
+          }
+        }
+      }
+      let removedTeamBackups = 0
+      for (const file of expiredTeamBackups) {
+        try {
+          await rm(file)
+          removedTeamBackups += 1
+        } catch {
+          // Safe retention lag: leave the backup for the next explicit retention pass.
+        }
+      }
       return {
         retentionDays: state.retentionDays,
         retainedCollectorRecords: retainedCollector.length,
@@ -726,7 +965,7 @@ export function createTeamControlPlane(options = {}) {
         },
         removedTeamBackups,
       }
-    })
+    }), 3_000, 'governance release transaction')
   }
 
   return {

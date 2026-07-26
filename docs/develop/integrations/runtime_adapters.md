@@ -175,14 +175,15 @@ non-discovery lifecycle has been observed.
 
 For each connected runtime:
 
-1. Open **Settings**, choose the runtime, and review the wizard's scope,
-   config path, redacted preview, and exact dry-run/install command.
+1. Open **Settings**, choose the runtime, copy the dry-run command, and review
+   its scope, config path, redacted preview, and backup plan in the terminal.
 2. Install, restart the runtime, and complete its `/hooks` or trust review.
-3. Click **Begin verification** so SkillOps records a local time boundary.
+3. Click **Check installation**. SkillOps derives a verification boundary from
+   the current configuration and referenced hook-file modification times.
 4. Explicitly invoke one known Skill and allow the turn to reach a terminal
    hook.
-5. Refresh the wizard. **Verified** requires a post-boundary non-discovery
-   lifecycle event; discovery never qualifies.
+5. Click **Check installation** again. **Verified** requires a post-boundary
+   non-discovery lifecycle event; discovery never qualifies.
 6. Optionally confirm the same evidence from the repository root:
 
 ```powershell

@@ -34,7 +34,7 @@ describe('truth semantics', () => {
   it.each([
     [{ configurationStatus: 'not-installed', detected: false, eventCount: 0 }, 'not-detected'],
     [{ configurationStatus: 'not-installed', detected: true, eventCount: 0 }, 'detected'],
-    [{ configurationStatus: 'installed', eventCount: 0 }, 'installed'],
+    [{ configurationStatus: 'installed', eventCount: 0 }, 'awaiting-verification'],
     [{ configurationStatus: 'installed', eventCount: 1 }, 'awaiting-verification'],
     [{ configurationStatus: 'installed', eventCount: 1, verifiedEvidenceAt: timestamp }, 'verified'],
     [{ configurationStatus: 'broken', eventCount: 0 }, 'degraded'],

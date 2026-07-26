@@ -13,8 +13,10 @@ The installer merges handlers into `~/.codex/hooks.json` (or `$CODEX_HOME/hooks.
 
 Restart Codex, run `/hooks`, review the exact commands, and trust the new SkillOps definitions. Codex intentionally skips new or changed non-managed hooks until they are trusted.
 
-In SkillOps **Settings**, open Codex and click **Begin verification** before
-invoking a known Skill. Finish the turn, then refresh. **Installed** confirms
+In SkillOps **Settings**, open Codex and click **Check installation** after
+installing or repairing the adapter. SkillOps derives the verification boundary
+from the current configuration and hook files. Invoke a known Skill, finish the
+turn, then click **Check installation** again. **Installed** confirms
 configuration only; **Verified** requires a post-boundary non-discovery
 lifecycle event. A `skill.discovered` record never passes this check.
 
@@ -54,7 +56,12 @@ This removes handlers containing the `skillops-codex-hook` marker and leaves eve
 - `SubagentStart` / `SubagentStop`
 - `Stop`
 
-Adapter failures are swallowed so telemetry never blocks Codex. Diagnostics, if any, go to `data/codex-adapter-errors.log`.
+Adapter failures are swallowed so telemetry never blocks Codex. Diagnostics, if
+any, go to `data/codex-adapter-errors.log` as fixed status lines only. On the
+next hook invocation, an existing diagnostic entry is atomically replaced with
+a fixed redaction marker; a new failure atomically replaces that marker with
+the latest safe status. Link targets are never written and no sensitive backup
+is created.
 Raw Codex session IDs are replaced with stable per-install HMAC pseudonyms before any event is written.
 
 The inventory scanner covers Skills, `AGENTS.md` / `AGENTS.override.md` Rules,

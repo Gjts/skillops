@@ -120,6 +120,11 @@ a deduplicated discovery index.
 ### 5.4 Runtime connection inspection
 
 ```text
+GET /api/setup/preflight
+  → check Node.js minimum, Git, loopback API, and separate data-directory probe availability/writability
+  → inspect runtimes without returning config paths, hook commands, or credentials
+  → return sanitized configuration/reference health
+
 GET /api/connections
   → resolve effective Codex/Claude config
   → find SkillOps-marked handlers
@@ -162,7 +167,7 @@ stays inside a controlled backend renderer.
 
 ```text
 Command Center / Agents / Activity opens
-  → validate runtime, time, query, tab, sort, and page scope
+  → validate runtime, Today/7d/14d/30d, query, tab, sort, and page scope
   → read normalized events through the versioned in-memory cache
   → derive one deterministic bounded view
   → return metric provenance or evidence state with no raw content
@@ -170,16 +175,55 @@ Command Center / Agents / Activity opens
 
 The projection modules introduce no new persistence. They reuse the event store,
 scanner, connection inspection, evaluation evidence, and Capability state.
+Command Center joins those facts into seven explicit readiness checks, at most
+three evidence-backed actions, honest ratio numerator/denominator pairs, and at
+most eight terminal recent runs. The frontend renders setup instead of zero KPI
+cards only when the event source is complete, no Runtime is installed or
+verified, and no terminal run or observed asset exists. The connection source
+must also be complete before the UI can infer that no Runtime is connected. A
+verified Runtime with zero in-window activity keeps truthful zero metrics;
+partial or unavailable event or connection sources never become setup claims.
 
-### 5.7 Unified Artifact Registry
+### 5.7 Managed Decision and Release Candidate origin
+
+```text
+Optional exact-revision Candidate proposal
+  → remains Candidate and is not release-eligible
+
+Completed Managed Suite run
+  → POST /api/evaluations/:runId/decision
+  → persist one final allowlisted Decision
+  → if Decision=create-candidate, nominate or claim the matching Candidate
+  → reserve immutable Capability.originEvaluationRunId
+  → only passing evidence may move the Release Candidate to Ready
+  → later evidence also requires Decision=create-candidate
+  → update mutable latestEvidenceRunId without changing the origin
+```
+
+A run accepts one final Decision. Retrying the same value is idempotent; a
+different value requires a new run. One evaluation run can reserve at most one
+Release Candidate, and one Release Candidate cannot change its origin. The
+origin run fixes Candidate identity and ownership. The latest evidence run
+supplies the current baseline and hash-bound evidence; refreshing that binding
+cannot change the origin. Client-supplied copies are verification inputs only.
+Approval, Canary, Stable, install, rollback, and pending Canary/Stable
+forward-release recovery revalidate that the origin and latest evidence still
+resolve to completed Managed Suite runs with final `create-candidate`
+Decisions.
+
+### 5.8 Unified Artifact Registry
 
 ```text
 GET /api/artifacts
-  → rescan installed Skill and legacy command definitions
+  → read or create the latest derived metadata snapshot
+  → filter and stably paginate Artifact identities on the server
   → read committed Prompt metadata, governance capabilities, and project locks
   → normalize kind-scoped Artifact and immutable ArtifactVersion identities
   → compare desired lock state with observed paths and content hashes
-  → return metadata, compatibility, dependencies, and drift only
+  → return current-page Artifacts and only their versions/installations
+
+POST /api/artifacts/refresh
+  → explicitly rescan and replace the cached snapshot after success
 ```
 
 `app/backend/evaluations/artifact-registry.mjs` is a derived read model behind
@@ -199,7 +243,7 @@ The migrated snapshot is read only as compatibility history: versions absent
 from current sources reappear as Deprecated, current source records always win,
 and installation state is always recomputed from the live scan and lock.
 
-### 5.8 Governed Team project templates
+### 5.9 Governed Team project templates
 
 ```text
 skillops init --manifest <Git-managed manifest>
@@ -222,8 +266,9 @@ No template API or hosted template store is introduced.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/events` | Compatibility event feed with ETag/304; `summary=1` returns bounded status and `download=1` returns normalized JSONL |
+| `GET` | `/api/events` | Compatibility event page (20/50/100) with stable timestamp/ID order and ETag/304; `summary=1` returns bounded status and `download=1` returns full normalized JSONL |
 | `GET` | `/api/command-center` | Return one deterministic bounded readiness/metrics/issues/actions/recent-activity projection |
+| `GET` | `/api/setup/preflight` | Return sanitized Node.js, Git, loopback API, local-data, and runtime adapter prerequisite health |
 | `GET` | `/api/agents` | Return one validated 50-row Definitions or Observed Activity page |
 | `GET` | `/api/agents/:id` | Return one Agent projection with a bounded evidence timeline |
 | `GET` | `/api/runs` | Read one validated terminal Skill run page (20/50/100), scoped lifecycle counts, server-side filters, and stable timestamp/ID ordering |
@@ -231,29 +276,32 @@ No template API or hosted template store is introduced.
 | `POST` | `/api/events` | Validate and append one event |
 | `DELETE` | `/api/events` | Back up and clear active events |
 | `POST` | `/api/import` | Atomically validate/deduplicate/append an event array |
-| `POST` | `/api/scan` | Return live installed definitions |
-| `GET` | `/api/connections` | Return runtime config status and activity |
+| `POST` | `/api/scan` | Return one filtered, bounded page from the cached live-definition scan; `refresh=1` explicitly rescans |
+| `GET` | `/api/connections` | Return one stable runtime-status page with activity and `generatedAt` |
 | `POST` | `/api/evaluations/compare` | Discover a public GitHub candidate and rank local overlaps |
 | `POST` | `/api/evaluations/run` | Run a hash-pinned, memory-only baseline/candidate A/B evaluation |
-| `GET` | `/api/evaluation-suites` | List validated Suite Schema v1 metadata |
+| `GET` | `/api/evaluation-suites` | Return one stable validated Suite Schema v1 metadata page |
+| `GET` | `/api/evaluation-runs` | Return bounded cursor-paginated sanitized Managed Suite history |
 | `POST` | `/api/evaluation-runs` | Queue a hash-pinned Managed Suite run |
 | `GET` | `/api/evaluation-runs/:id` | Read a sanitized run summary |
 | `GET` | `/api/evaluation-runs/:id/cases` | Page through sanitized case verdicts |
 | `GET` | `/api/evaluation-runs/:id/report?format={json,html}` | Export a sanitized read-only report |
 | `POST` | `/api/evaluation-runs/:id/cancel` | Request cooperative cancellation |
-| `GET/POST` | `/api/capabilities/*` | Candidate nomination with optional Team project/policy binding, evidence re-evaluation, approval, two-step deploy-and-rescan Canary, Stable promotion, deprecation, and rollback operations |
+| `GET/POST` | `/api/evaluations/:id/decision` | Read or record the single final Managed Decision; legacy `/api/evaluation-runs/:id/decision` remains compatible |
+| `GET/POST` | `/api/capabilities/*` | Stable paginated Candidate reads plus nomination with optional Team project/policy binding, evidence re-evaluation, approval, two-step deploy-and-rescan Canary, Stable promotion, deprecation, and rollback operations |
 | `GET` | `/api/project-skeleton-lock` | Authenticated read of target-specific Canary, Stable, and previous immutable locks |
-| `GET` | `/api/governance-audit` | Authenticated read of metadata-only append-only transition records |
-| `GET` | `/api/prompt-registry/status` | Return local Git workspace, branch, commit, and persistence metadata |
-| `POST` | `/api/prompt-registry/{prompts,compare,nominate}` | Metadata-only committed Prompt browsing, component Diff, and explicit Candidate nomination |
-| `GET/POST` | `/api/connectors/prompthub/*` | List and preview remote Prompt metadata, then import only an exact component-matched immutable Git Prompt as Candidate |
-| `GET` | `/api/artifacts` | Return the unified metadata-only Artifact, version, compatibility, and installation view |
-| `POST` | `/api/artifacts/refresh` | Rescan and return the derived Artifact Registry |
+| `GET` | `/api/governance-audit` | Authenticated stable page of metadata-only append-only transition records |
+| `GET` | `/api/capabilities/:id/audit` | Authenticated stable capability-scoped page of metadata-only transition records |
+| `GET` | `/api/prompt-registry/status` | Return local Git workspace, commit, persistence metadata, and one bounded branch page |
+| `POST` | `/api/prompt-registry/{prompts,compare,nominate}` | Paginated metadata-only committed Prompt browsing, component Diff, and explicit Candidate nomination |
+| `GET/POST` | `/api/connectors/prompthub/*` | Stable paginated project/drift metadata, remote preview, then import only an exact component-matched immutable Git Prompt as Candidate |
+| `GET` | `/api/artifacts` | Return one filtered, bounded Artifact page plus only its version/installation metadata and global facets |
+| `POST` | `/api/artifacts/refresh` | Rescan, replace the cache after success, and return one bounded Artifact page |
 | `POST` | `/api/artifacts/{diff,import-preview}` | Compare immutable version metadata or preview a commit-pinned GitHub Candidate |
 | `POST` | `/api/artifacts/migration/{preview,apply}` | Preview or explicitly apply the reversible legacy metadata migration |
 | `POST` | `/api/artifacts/migration/:id/rollback` | Restore the exact migration preimage |
-| `GET/POST` | `/api/team` | Read or initialize the local Team control plane |
-| `GET/PUT/DELETE/POST` | `/api/team/*` | Role-gated entities, devices, catalog, queues, exceptions, audit, backup/export, retention, and collector upload |
+| `GET/POST` | `/api/team` | Read a bounded Team count/adoption summary or initialize the local control plane |
+| `GET/PUT/DELETE/POST` | `/api/team/*` | Role-gated entities, devices, paginated catalog/queue/audit reads, exceptions, backup/export, retention, and collector upload |
 | `POST` | `/api/assistant/chat` | Ask the configured provider using inventory/evaluation metadata |
 | `GET` | `/api/ai-settings` | Load saved Skill Lab AI provider settings |
 | `PUT` | `/api/ai-settings` | Persist Skill Lab AI provider settings locally |
@@ -263,6 +311,12 @@ canonical SHA-256 hash match the enclosing Team entity. Governance resolves the
 bound `projectId`/`policyId` on every evidence and release check. Approved
 project exceptions select the built-in fallback policy; changing either policy
 or exception state invalidates the prior Evidence Hash and approvals.
+
+The canonical Decision response exposes only `decisionId`, `evaluationRunId`,
+`artifactId`, `candidateRefHash`, `decision`, and `recordedAt`, plus response
+envelope time/revision metadata. Capability nomination from a Managed Suite
+requires that run's final `create-candidate` Decision and atomically reserves
+its immutable origin.
 
 The Vite development middleware and production Node server implement the same
 application interface. Changes must be kept behaviorally aligned.
@@ -291,8 +345,8 @@ interfaces without independent deployment needs.
 | Filter, page, modal state | Frontend | In-memory; page identity also in URL |
 | AI provider settings and API key | Backend AI settings store | `data/ai-settings.json` after explicit Save; loaded by Evaluations on mount |
 | Evaluation task, outputs, and chat | Frontend | In-memory only |
-| Managed run/case summaries and identity hashes | Backend evidence store | `data/evidence/`; sanitized JSONL and indexes |
-| Capability, approval, release, and append-only audit metadata | Backend governance store | `data/capabilities.json` and `data/governance-audit.jsonl`; identities, metadata, and hashes only |
+| Managed run/case summaries, final Decisions, and identity hashes | Backend evidence store | `data/evaluations.jsonl`; sanitized JSONL only. A Decision has six allowlisted fields and no rationale/output |
+| Capability, approval, release, origin/latest run IDs, and append-only audit metadata | Backend governance store | `data/capabilities.json` and `data/governance-audit.jsonl`; identities, metadata, and hashes only |
 | Stable/Canary locks and release recovery | Backend skeleton installer | `data/project-skeleton.lock.json` records target-specific immutable identity plus the Canary's canonical physical project root and post-deploy observation; metadata-only `data/governance-release-recoveries.json` and target-adjacent exact-byte file or complete Skill-directory backups support compensation; installed Artifact bodies remain in managed projects |
 | Prompt bodies | User Git repository/backend resolver | User-controlled source plus transient evaluation memory; never copied into SkillOps data |
 | PromptHub credentials and sync metadata | OS credential store / backend connector | Credential stays in native secure storage; remote ID/version/hash/branch and local Git content hash use metadata-only `data/prompthub-sync*.json*` |
@@ -329,8 +383,11 @@ interfaces without independent deployment needs.
   match.
 - **Governed release seam**: owner, reviewer, and operator identities are
   resolved by the loopback server rather than accepted from the browser.
-  Optional Bearer credentials map only to server-configured principals and are
-  never persisted. New-file targets are relative to an explicit managed root;
+  Bearer credentials map only to server-configured principals and are never
+  persisted. Approval and protected lock/global-audit/capability-audit reads
+  require that authenticated principal and never fall back to the local OS
+  account. New-file targets are
+  relative to an explicit managed root;
   existing targets come from the enabled scan inventory. Preview tokens bind
   operation, Capability, target, and content hash. Install, replace, remove,
   and restore operations verify the resulting scan before metadata/lock commit

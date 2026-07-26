@@ -1,7 +1,7 @@
 # PRD: SkillOps Personal AI Developer OS
 
 > Version: v0.3.2-rc.1
-> Status: implemented local + Git Limited Preview; external RC gates open
+> Status: Limited Preview implementation; audited contract and external RC gates open
 > Last reviewed: 2026-07-25
 
 ## 1. Product statement
@@ -12,6 +12,13 @@ them:
 
 1. **What Skill definitions are available on this machine?**
 2. **Which Skills were actually invoked, and what lifecycle evidence exists?**
+
+The P0 personal loop is:
+**Connect -> Verify -> Observe -> Benchmark -> Evidence-backed Candidate
+Decision**. That loop ends with a decision to nominate an exact Artifact
+revision for governed review. Canary or Stable publishing is a separate,
+conditional path: it requires a distinct reviewer principal to approve the
+exact revision and evidence binding. A single principal cannot self-approve.
 
 Cursor appears as a preview runtime only. This release does not include an
 installable Cursor adapter.
@@ -60,7 +67,7 @@ loopback binding, export, retention, and removal behavior.
 - Show honest outcome coverage: lifecycle-only completions are not successes.
 - Allow validated JSON/JSONL import, JSONL export, and recoverable clearing.
 - Provide reload-safe dashboard routes and live local refresh.
-- Discover public GitHub Skill candidates and rank overlap with enabled local definitions.
+- Discover public GitHub evaluation challengers and rank overlap with enabled local definitions.
 - Run an in-memory, blinded, task-specific A/B evaluation in prompt-only or bounded read-only agent mode.
 - Provide contextual assistant chat without exposing local Skill paths or Skill-definition contents.
 - Present a personal-developer IA with bounded Command Center, Agents, Activity,
@@ -89,8 +96,10 @@ loopback binding, export, retention, and removal behavior.
 - Treat a user-controlled Git repository as the Prompt source of truth. Read
   exact committed versions for local execution, keep Prompt bodies out of
   SkillOps persistence, and require no hosted Prompt-management service.
-- Require verified evidence and independent approval before Candidate, Canary,
-  or Stable transitions; a remote `head` never deploys itself.
+- Allow a Release Candidate nomination only from an exact Artifact revision,
+  require sufficient and fresh evidence before Ready, and require approval by a
+  distinct reviewer principal before Canary or Stable. A remote `head` never
+  deploys itself.
 
 ## 5. Non-goals for this local release
 
@@ -111,17 +120,40 @@ loopback binding, export, retention, and removal behavior.
 | --- | --- |
 | Definition | One Skill or command file at one path for one runtime. |
 | Unique Skill | A case-insensitive Skill name within the selected inventory scope. |
-| Discovery | Evidence that a definition exists at scan time. |
-| Match | Evidence that the runtime signal selected or referenced a Skill. |
-| Run | A terminal `skill.completed` or `skill.failed` lifecycle event. |
-| Evaluated run | A run whose outcome is known as success or failed. |
-| Lifecycle only | A completed run with `outcome: unknown`. |
-| Connection | Inspection result for installed hook configuration plus observed activity. |
-| Candidate | One bounded public GitHub Skill package rooted at a selected `SKILL.md`; not installed locally. |
-| A/B evaluation | One task run against a local baseline and remote candidate, then blind-judged by the configured model. |
 | Artifact | A metadata identity for a Skill, Prompt, Workflow, Rules file, or Agent definition; content remains behind a controlled backend renderer. |
+| Artifact revision | One immutable Artifact version identified by its source reference and content hash. |
+| Discovery record | Evidence that a definition existed at scan time; never execution evidence. |
+| Match record | Evidence that a runtime signal selected or referenced a Skill. |
+| Terminal lifecycle record (UI: Run) | A terminal `skill.completed` or `skill.failed` event; it proves lifecycle completion, not task success. |
+| Evaluated lifecycle record | A terminal lifecycle record whose outcome is explicitly `success` or `failed`. |
+| Lifecycle-only record | A completed lifecycle record with `outcome: unknown`. |
+| Connection projection | Inspection of installed hook configuration plus post-boundary observed activity. |
+| Evaluation baseline | The exact enabled local Artifact revision used as the comparison control. |
+| Evaluation challenger | One bounded public GitHub Skill package rooted at a selected `SKILL.md`; it is not installed locally. |
+| Evaluation run | One task-specific comparison of a baseline and challenger, blind-judged by the configured model. |
+| Quick Compare draft | A memory-only exploratory result that cannot create a Capability or governed evidence. |
 | Managed Suite | A versioned, user-authored set of synthetic or sanitized evaluation cases stored as product source, not telemetry. |
-| Evidence | A sanitized run/gate summary bound to Artifact, suite, dataset, and policy hashes. |
+| Evaluation evidence | A sanitized run/gate summary bound to exact Artifact, suite, dataset, and policy hashes. |
+| Candidate | A persisted metadata-only proposal for an exact Artifact revision and release target; without a qualifying final Decision it cannot enter Ready or any release stage. |
+| Release Candidate | A Candidate whose immutable origin is a completed Managed Suite run with a final `create-candidate` Decision; it is not an evaluation challenger or a product-version RC. |
+| Governance evidence binding | The current hash-bound link between a Release Candidate, qualifying evaluation evidence, and the policy evaluated; later qualifying evidence may refresh this link without changing the immutable Candidate origin. |
+| Reviewer principal | A server-resolved identity distinct from the owner principal. SkillOps proves principal separation, not real-world independence unless an audited identity system provides it. |
+| Product RC evidence record | A version-level release packet that records product-version candidate provenance, automated and manual gates, missing evidence, and the ship/no-ship decision. |
+
+Evidence invariants:
+
+- discovery, runtime lifecycle, evaluation, governance, and product RC evidence
+  are different facts and are never interchangeable;
+- **Verified** requires a post-install-boundary non-discovery lifecycle record;
+- `outcome: unknown` never counts as success;
+- Quick Compare stays memory-only and cannot nominate a Release Candidate;
+- a Candidate without a valid final `create-candidate` Decision remains
+  release-ineligible;
+- each later quality-evidence binding also requires its run's final
+  `create-candidate` Decision and never reassigns the original run;
+- Artifact or evidence changes invalidate the prior approval;
+- missing, stale, insufficient, or source-incomplete evidence is reported as
+  such and never converted to Pass.
 
 ## 7. Primary user journeys
 
@@ -197,7 +229,7 @@ Implemented:
 
 - deterministic readiness, issue, and next-action projection from
   `GET /api/command-center`;
-- runtime and 7/14/30-day scope;
+- runtime plus Today (server-local midnight) and 7/14/30-day scope;
 - honest run, outcome coverage, active-Skill, and reported-cost metrics;
 - bounded recent activity and explicit partial/unavailable source states;
 - empty-state connection and provider guidance.
@@ -230,7 +262,8 @@ Implemented:
 - live installed-definition scan and unified Artifact Registry;
 - runtime-first source/provider/type/status/issue filters;
 - duplicate/conflict/disabled/missing and desired-versus-observed drift facts;
-- 50-row client pagination over the bounded scan result;
+- 50-row server filtering and pagination over the latest scan and Artifact
+  snapshots; page changes never return the complete collection;
 - reviewed conflict preview, apply, authoritative rescan, and undo.
 
 Legacy `/skills` and `/registry` URLs remain compatible.
@@ -239,11 +272,11 @@ Legacy `/skills` and `/registry` URLs remain compatible.
 
 Implemented:
 
-- memory-only Quick Compare with public GitHub candidate discovery, deterministic
+- memory-only Quick Compare with public GitHub challenger discovery, deterministic
   local overlap, explicit task/criteria, sequential blinded A/B, and bounded
   read-only agent mode;
 - Managed Suite list, preflight, asynchronous run, History, sanitized case
-  evidence/report, cancellation, and validated Candidate continuation;
+  evidence/report, cancellation, and validated Release Candidate nomination;
 - provider settings saved only after explicit confirmation to the dedicated
   local AI settings file.
 
@@ -256,9 +289,15 @@ Implemented:
 
 - existing Capability stages grouped as Candidate, Evaluating, Blocked, Ready,
   Canary, Stable, Deprecated, and Rolled back;
-- immutable Artifact/evidence hashes, freshness/gate checks, independent
-  approval, preview, confirmation, authoritative rescan, and rollback;
+- immutable Artifact/evidence hashes, freshness/gate checks, distinct
+  reviewer-principal approval, preview, confirmation, authoritative rescan, and
+  rollback;
 - no parallel release state machine and no PromptHub authority over Stable.
+
+For a single-principal personal workspace, the P0 path stops at an
+evidence-backed Candidate decision or Ready-for-review state. Canary and Stable
+remain unavailable until a distinct reviewer principal supplies the bound
+approval.
 
 Legacy `/governance` remains compatible.
 
@@ -291,8 +330,9 @@ fields are discarded through an explicit allowlist.
 ### FR-2 Local persistence
 
 The default store is `data/events.jsonl`; `SKILLOPS_DATA_DIR` may relocate it.
-Readers tolerate one malformed or partially written line. Writers repair a
-missing trailing newline before append.
+Readers expose the valid prefix when only the final, non-newline-terminated
+record is syntactically incomplete. Complete malformed records fail closed;
+writers repair a missing trailing newline before append.
 
 ### FR-3 Discovery deduplication
 
@@ -317,9 +357,9 @@ Success rate is computed only from explicit success and failure outcomes.
 Unknown lifecycle completions are shown separately and excluded from the
 denominator.
 
-### FR-7 Candidate and baseline safety
+### FR-7 Evaluation challenger and baseline safety
 
-Candidate discovery loads the complete regular-file package rooted at the selected
+Challenger discovery loads the complete regular-file package rooted at the selected
 public GitHub `SKILL.md`, bounded to 500 files and 10 MB, and binds its immutable
 commit plus package hash. A local baseline is accepted only when its exact path
 appears in the current enabled live scan; the frontend cannot read arbitrary
@@ -342,7 +382,7 @@ automatically.
 
 ### FR-9 Evaluation integrity and agent boundary
 
-The backend must re-download the candidate and match its analyzed SHA-256 hash
+The backend must re-download the challenger and match its analyzed SHA-256 hash
 before executing either variant. Prompt-only mode has no workspace access.
 Read-only agent mode exposes only bounded list/read/literal-search tools over
 allowed workspace text; it blocks hidden/common secret paths and credential-like
@@ -373,7 +413,7 @@ telemetry merely to measure SkillOps itself.
 | Outcome coverage | Evaluated terminal runs / all terminal runs | Reported honestly, no fixed target |
 | Hook safety | Host-runtime tasks blocked by telemetry failure | 0 |
 | Privacy regressions | Forbidden content persisted by built-in adapters | 0 |
-| Performance acceptance | Deterministic 100k events / 5k definitions fixture | Command Center warm p95 ≤ 750 ms; Activity p95 ≤ 500 ms; UI ready p95 ≤ 120 ms |
+| Performance acceptance | Deterministic 100k events / 5k definitions fixture | Command Center warm p95 ≤ 750 ms; Activity p95 ≤ 500 ms; UI ready p95 ≤ 500 ms |
 | Test health | Automated tests passing on supported Node version | 100% |
 
 ## 11. Risks and mitigations
@@ -402,14 +442,15 @@ of assuming prior installation is still valid.
 
 ### Unbounded event growth
 
-JSONL is appropriate for the current local MVP but has no automatic retention.
-Export/clear and backup behavior exist; retention controls and aggregation are
-planned.
+JSONL is appropriate for the current local MVP but has no automatic personal
+Settings retention or compaction. Export/clear, backup, and explicit
+Owner-controlled Team retention exist; Team retention prunes old events and
+evaluation evidence while preserving runs referenced by a Capability.
 
-### External candidate and model providers
+### External challenger and model providers
 
 Skill Lab intentionally crosses the local boundary only after a user action.
-GitHub receives candidate file requests; the configured model endpoint receives
+GitHub receives challenger file requests; the configured model endpoint receives
 the Skill definitions, task/criteria or chat messages, the in-memory key, and—
 only in read-only agent mode—requested allowed workspace excerpts. URL,
 HTTPS/loopback, origin, size, count, timeout, hash, and local-path controls limit
@@ -417,6 +458,10 @@ SkillOps behavior, but each provider's data policy remains outside SkillOps
 control.
 
 ## 12. MVP release acceptance
+
+Checked items below mean the implementation exists. They do not by themselves
+prove formal RC acceptance; open external and human validation is tracked in
+the task ledger and product RC evidence record.
 
 - [x] Local development and production-style start commands work.
 - [x] Codex and Claude Code adapters can be previewed, installed, verified, and removed.
@@ -426,9 +471,9 @@ control.
 - [x] Import, direct normalized export, clear, and backup workflows exist.
 - [x] Event polling supports ETag/304 and primary pages consume bounded projections.
 - [x] Canonical and legacy SPA routes pass production smoke verification.
-- [x] Quick Compare stays memory-only; only Managed Suite evidence can continue a validated Candidate.
+- [x] Quick Compare stays memory-only; only Managed Suite evidence can nominate a validated Release Candidate.
 - [x] Explicit local AI settings, hash-pinned blinded A/B, bounded read-only agent mode, and contextual chat exist.
-- [x] Managed Suite evidence, independent approval, release preview/apply/rescan, and rollback exist.
+- [x] Managed Suite evidence, distinct-principal approval, release preview/apply/rescan, and rollback exist.
 - [x] Deterministic large-fixture performance and browser readiness checks exist.
 - [ ] Cursor native adapter is implemented.
 - [ ] Automatic retention and event-store compaction policy exist.

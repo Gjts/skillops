@@ -84,6 +84,16 @@ references replace filesystem paths with deterministic SHA-256 pseudonyms.
 Provider keys, content bodies, task text, workspace excerpts, raw outputs,
 judge responses, and raw errors are not persisted.
 
+A final Managed Decision persists exactly `decisionId`, `evaluationRunId`,
+`artifactId`, `candidateRefHash`, `decision`, and `recordedAt`. It cannot carry
+a rationale, task, Prompt, output, or provider response. The associated
+Capability stores immutable `originEvaluationRunId` plus the independently
+mutable latest evidence run ID; both are opaque local identifiers, and one run
+cannot be reserved by multiple Release Candidates. Team retention serializes
+against complete governance release transactions, then preserves origin,
+latest, quality, and Red Team run references under the Capability registry lock
+while pruning evaluation evidence.
+
 The Promptfoo adapter sets its privacy environment before importing the
 package, disables cache, telemetry, update checks, sharing, and both normal and
 Red Team remote generation, omits output paths, and uses a run-scoped temporary
@@ -105,15 +115,20 @@ HTTP interface exposes hashes and sanitized records, never backup bytes or
 Artifact bodies.
 
 Governance requests do not accept owner, reviewer, or operator IDs from the
-browser. The loopback server uses its operating-system principal when no
-credential is supplied or maps a Bearer token from the process-only
-`SKILLOPS_GOVERNANCE_PRINCIPALS` configuration to a server-defined principal.
-The browser keeps a reviewer token only in component memory and clears it after
-approval; tokens are never written to Capability, audit, recovery, event, or
-frontend persistence. Capability and append-only audit records retain only the
-resolved identity plus Artifact/version, stage, evidence hash, and timestamps.
-Direct lock and audit API reads require a configured Bearer principal; the
-operating-system fallback is not accepted for these metadata-egress routes.
+browser. Ordinary local governance operations may resolve the operating-system
+principal when no credential is supplied. Approval does not: approval requires
+a valid Bearer token from the process-only
+`SKILLOPS_GOVERNANCE_PRINCIPALS` configuration, maps it to a server-defined
+principal, and fails closed with no operating-system fallback. The browser keeps
+a reviewer token only in component memory and clears it after approval; tokens
+are never written to Capability, audit, recovery, event, or frontend
+persistence. Capability and append-only audit records retain only the resolved
+identity plus Artifact/version, stage, evidence hash, and timestamps. Direct
+lock, global audit, and capability-scoped audit API reads also require a
+configured Bearer principal and reject the operating-system fallback. The
+Capability audit UI starts locked, sends a separately entered token only in the
+request Authorization header, clears it immediately, and keeps rejection
+distinct from a valid empty audit.
 Governed file backups can contain the selected Artifact body, but remain beside
 the local managed target, are never returned by the API, and are created only
 after explicit preview and confirmation. Server-only recovery metadata stores
@@ -153,9 +168,16 @@ Primary pages use bounded projections instead of the full event feed. Settings
 reads only a count/latest-activity summary and starts a backend-normalized JSONL
 download; it does not materialize the complete store in React state before
 export. The deterministic performance harness writes only fixture parameters,
-fixture hash, environment versions, aggregate timings, and memory measurements
-to the ignored local `data/performance-report.json`; it does not copy fixture
-events, prompts, source, errors, or credentials into the report.
+fixture hash, environment versions, sanitized raw timing samples, aggregate
+timings, and memory measurements to the ignored local
+`data/performance-report.json`. It records no complete local path and does not
+copy fixture events, prompts, source, raw errors, credentials, or other secrets
+into the report.
+
+The setup preflight response is likewise metadata-only: Node.js version/minimum,
+booleans for Git/API, separate data-probe availability and writability,
+runtime-inspection availability, and sanitized configuration/reference states.
+It excludes config paths, hook commands, environment values, and credentials.
 
 ## 5. Data flow and storage
 
@@ -282,7 +304,11 @@ exist, reducing stale-command risk after repository moves.
 ## 9. Availability and failure isolation
 
 - Runtime hooks swallow adapter failures so host work continues.
-- Diagnostics are local and separate from normalized events.
+- Diagnostics are local, separate from normalized events, and limited to fixed
+  status lines. Each adapter atomically replaces an existing diagnostic entry
+  with a fixed redaction marker on its next hook invocation; a new failure
+  atomically records the latest safe status. The replacement never writes
+  through symlink/hardlink targets or copies sensitive source into a backup.
 - Readers tolerate one partial JSONL line.
 - Discovery locks have stale-lock recovery.
 - Clear/compaction rewrites use temporary files and atomic rename.
@@ -328,6 +354,9 @@ permissions and disk-encryption policy.
 | Custom endpoint steals API key | HTTPS requirement, no embedded credentials, UI warning, local-only settings file | User must trust the endpoint they configure and protect the local data directory |
 | Agent exposes sensitive workspace data | Explicit mode, denied paths/types, credential-line redaction, bounded read-only tools, negative privacy tests | Allowed source can still embed sensitive data and excerpts are intentionally disclosed to the selected provider |
 | Evaluation content persists accidentally | Sanitized evidence allowlist, separate store, recovery tests; event allowlist unchanged | Browser/provider retention follows their own policies |
+| A final evaluation judgment is rewritten or leaks rationale/output | One allowlisted six-field Decision per completed run; same-value retries are idempotent and changed judgments require a new run | The Decision still records local Artifact and run identifiers |
+| One Managed Suite run creates multiple Release Candidates | Atomic origin/latest-run reservation plus immutable `originEvaluationRunId` | Legacy conflicting state is rejected and requires operator repair |
+| Browser forges a reviewer or approval uses the local OS fallback | Approval requires a configured authenticated Bearer principal; browser identity fields are rejected | Token custody and distinct-reviewer assignment remain operator responsibilities |
 | Raw host session IDs link activity outside SkillOps | Event-store HMAC pseudonymization with a random per-install key | Events remain intentionally linkable within one installation; protect `session-identity.key` with the rest of `data/` |
 | Promptfoo writes cache/history, sends telemetry, or spawns a network client | Adapter flags, isolated temporary config, disk sentinels, default-deny test child processes, and inherited guards for nested Node processes | Environment/process guards are defense in depth, not an operating-system network sandbox; package upgrades require contract revalidation |
 | A branch or working tree silently replaces a Prompt release | Commit-pinned source references plus semantic/component hashes and pre-run/pre-promotion recheck | Deleted or rewritten Git objects can make old content unavailable, but Stable metadata and lock rollback remain local |
@@ -359,6 +388,8 @@ escape hatch.
 - [ ] Review backup retention after clearing data.
 - [ ] Do not use manual success outcomes without a trusted evaluator.
 - [ ] Use only trusted AI Base URLs and review the selected provider's data policy.
+- [ ] Configure a distinct governance Bearer principal before approval; do not
+      treat the local OS account as reviewer authentication.
 - [ ] Avoid placing secrets or proprietary source in Skill Lab tasks or chat.
 - [ ] Use prompt-only mode when workspace excerpts must not leave the machine.
 

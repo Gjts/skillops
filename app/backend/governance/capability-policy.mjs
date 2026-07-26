@@ -6,6 +6,7 @@ export const DEFAULT_GATE_POLICY = Object.freeze({
   schemaVersion: 1,
   id: 'default-v1',
   minSampleSize: 2,
+  minSuiteCaseCoveragePct: 100,
   maxFailedCases: 0,
   minCandidateScore: 80,
   minScoreDeltaPp: 0,
@@ -28,12 +29,15 @@ export function normalizeGatePolicy(value = DEFAULT_GATE_POLICY) {
   const policy = { ...DEFAULT_GATE_POLICY, ...value }
   if (policy.schemaVersion !== 1) throw new EvaluationError('Gate policy schemaVersion must be 1.', 422)
   if (typeof policy.id !== 'string' || !/^[a-z0-9][a-z0-9.-]{0,99}$/.test(policy.id)) throw new EvaluationError('Gate policy id is invalid.', 422)
-  const numeric = ['minSampleSize', 'maxFailedCases', 'minCandidateScore', 'minScoreDeltaPp', 'minPassRatePct', 'maxRegressionRatePct', 'maxCostIncreasePct', 'maxLatencyIncreasePct', 'maxCriticalFindings', 'maxHighFindings']
+  const numeric = ['minSampleSize', 'minSuiteCaseCoveragePct', 'maxFailedCases', 'minCandidateScore', 'minScoreDeltaPp', 'minPassRatePct', 'maxRegressionRatePct', 'maxCostIncreasePct', 'maxLatencyIncreasePct', 'maxCriticalFindings', 'maxHighFindings']
   for (const field of numeric) {
     if (typeof policy[field] !== 'number' || !Number.isFinite(policy[field])) throw new EvaluationError(`Gate policy ${field} must be finite.`, 422)
   }
   for (const field of ['minSampleSize', 'maxFailedCases']) {
     if (!Number.isInteger(policy[field]) || policy[field] < 0) throw new EvaluationError(`Gate policy ${field} must be a non-negative integer.`, 422)
+  }
+  if (policy.minSuiteCaseCoveragePct < 0 || policy.minSuiteCaseCoveragePct > 100) {
+    throw new EvaluationError('Gate policy minSuiteCaseCoveragePct must be between 0 and 100.', 422)
   }
   for (const field of ['requireCostMetric', 'requireLatencyMetric', 'requireRedteam', 'requireCompatibility']) {
     if (typeof policy[field] !== 'boolean') throw new EvaluationError(`Gate policy ${field} must be boolean.`, 422)
@@ -43,6 +47,19 @@ export function normalizeGatePolicy(value = DEFAULT_GATE_POLICY) {
 
 export function gatePolicyHash(value = DEFAULT_GATE_POLICY) {
   return createHash('sha256').update(canonicalJson(normalizeGatePolicy(value)), 'utf8').digest('hex')
+}
+
+export function gatePolicyIntegrityMatches(value, expectedHash) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const policy = normalizeGatePolicy(value)
+  if (gatePolicyHash(policy) === expectedHash) return true
+  if (Object.hasOwn(value, 'minSuiteCaseCoveragePct')) return false
+  const legacyPolicy = Object.fromEntries(
+    Object.keys(DEFAULT_GATE_POLICY)
+      .filter((key) => key !== 'minSuiteCaseCoveragePct')
+      .map((key) => [key, policy[key]]),
+  )
+  return createHash('sha256').update(canonicalJson(legacyPolicy), 'utf8').digest('hex') === expectedHash
 }
 
 function gate(id, value, predicate, blocking = true) {
@@ -60,12 +77,18 @@ function failedCases(metrics) {
   return metrics.casesTotal - metrics.casesPassed
 }
 
+function suiteCaseCoverage(metrics) {
+  if (!Number.isInteger(metrics?.casesTotal) || !Number.isInteger(metrics?.eligibleCases) || metrics.eligibleCases <= 0) return null
+  return metrics.casesTotal / metrics.eligibleCases * 100
+}
+
 export function evaluateGatePolicy(summary, value = DEFAULT_GATE_POLICY) {
   const policy = normalizeGatePolicy(value)
   const metrics = summary?.metrics
   if (!metrics) throw new EvaluationError('Completed evaluation metrics are required for gate evaluation.', 422)
   const gates = [
     gate('sample-size', metrics.casesTotal, (metric) => Number.isInteger(metric) && metric >= policy.minSampleSize),
+    gate('suite-case-coverage', suiteCaseCoverage(metrics), (metric) => metric >= policy.minSuiteCaseCoveragePct && metric <= 100),
     gate('failed-cases', failedCases(metrics), (metric) => metric >= 0 && metric <= policy.maxFailedCases),
     gate('candidate-score', metrics.candidateScore, (metric) => metric >= policy.minCandidateScore),
     gate('score-delta', metrics.scoreDeltaPp, (metric) => metric >= policy.minScoreDeltaPp),

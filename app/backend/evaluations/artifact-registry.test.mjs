@@ -449,6 +449,344 @@ describe('unified Artifact Registry', () => {
 })
 
 describe('Artifact Registry API', () => {
+  it('filters and stably paginates artifacts without returning unrelated versions or installations', async () => {
+    const artifacts = [
+      { id: 'skill:zeta', artifactId: 'zeta', kind: 'skill', name: 'Zeta', owner: 'platform', status: 'stable', versionIds: ['skill:zeta@1'] },
+      { id: 'prompt:alpha', artifactId: 'alpha', kind: 'prompt', name: 'Alpha', owner: 'design', status: 'ready', versionIds: ['prompt:alpha@1'] },
+      { id: 'skill:beta', artifactId: 'beta', kind: 'skill', name: 'Beta', owner: 'platform', status: 'candidate', versionIds: ['skill:beta@1'] },
+    ]
+    const versions = [
+      { id: 'skill:zeta@1', artifactId: 'skill:zeta', source: 'github', runtimeTargets: ['codex'] },
+      { id: 'prompt:alpha@1', artifactId: 'prompt:alpha', source: 'prompt-registry', runtimeTargets: ['claude-code'] },
+      { id: 'skill:beta@1', artifactId: 'skill:beta', source: 'local-scan', runtimeTargets: ['codex', 'claude-code'] },
+    ]
+    const installations = [
+      { id: 'zeta-install', artifactId: 'skill:zeta', observedState: 'drifted' },
+      { id: 'alpha-install', artifactId: 'prompt:alpha', observedState: 'present' },
+      { id: 'beta-install', artifactId: 'skill:beta', observedState: 'missing' },
+    ]
+    const artifactRegistry = {
+      list: vi.fn().mockResolvedValue({
+        schemaVersion: 1,
+        generatedAt: '2026-07-22T01:00:00.000Z',
+        artifacts,
+        versions,
+        installations,
+        compatibility: {},
+        warnings: [],
+      }),
+    }
+    const filteredRequest = {
+      ...request(),
+      url: '/api/artifacts?query=skill&kind=skill&source=local-scan&status=candidate&runtime=claude-code&owner=platform&page=1&pageSize=1',
+    }
+    const filteredResponse = response()
+
+    await handleArtifactRegistryApi(filteredRequest, filteredResponse, '/api/artifacts', { artifactRegistry })
+
+    expect(filteredResponse.statusCode).toBe(200)
+    expect(JSON.parse(filteredResponse.body)).toMatchObject({
+      generatedAt: '2026-07-22T01:00:00.000Z',
+      artifacts: [{ id: 'skill:beta' }],
+      versions: [{ id: 'skill:beta@1' }],
+      installations: [{ id: 'beta-install' }],
+      page: 1,
+      pageSize: 1,
+      totalItems: 1,
+      totalPages: 1,
+      hasPrevious: false,
+      hasNext: false,
+      stats: { totalArtifacts: 3, driftedInstallations: 2 },
+    })
+    expect(JSON.parse(filteredResponse.body).facets).toEqual({
+      kinds: [{ value: 'prompt', count: 1 }, { value: 'skill', count: 2 }],
+      sources: [{ value: 'github', count: 1 }, { value: 'local-scan', count: 1 }, { value: 'prompt-registry', count: 1 }],
+      statuses: [{ value: 'candidate', count: 1 }, { value: 'ready', count: 1 }, { value: 'stable', count: 1 }],
+      runtimes: [{ value: 'claude-code', count: 2 }, { value: 'codex', count: 2 }],
+      owners: [{ value: 'design', count: 1 }, { value: 'platform', count: 2 }],
+    })
+
+    const firstPage = response()
+    await handleArtifactRegistryApi({ ...request(), url: '/api/artifacts?page=1&pageSize=2' }, firstPage, '/api/artifacts', { artifactRegistry })
+    expect(JSON.parse(firstPage.body)).toMatchObject({
+      artifacts: [{ id: 'prompt:alpha' }, { id: 'skill:beta' }],
+      page: 1,
+      pageSize: 2,
+      totalItems: 3,
+      totalPages: 2,
+      hasNext: true,
+    })
+    expect(artifactRegistry.list).toHaveBeenCalledOnce()
+  })
+
+  it('bounds a 5k registry page and refreshes the cached source snapshot explicitly', async () => {
+    const artifacts = Array.from({ length: 5_000 }, (_, index) => {
+      const suffix = String(4_999 - index).padStart(4, '0')
+      return { id: `skill:artifact-${suffix}`, artifactId: `artifact-${suffix}`, kind: 'skill', name: `Artifact ${suffix}`, owner: 'platform', status: 'stable' }
+    })
+    const versions = artifacts.map((item) => ({ id: `${item.id}@1`, artifactId: item.id, source: 'local-scan', runtimeTargets: ['codex'] }))
+    const installations = artifacts.map((item) => ({ id: `${item.id}:install`, artifactId: item.id, observedState: 'present' }))
+    const snapshot = {
+      schemaVersion: 1,
+      generatedAt: '2026-07-22T01:00:00.000Z',
+      artifacts,
+      versions,
+      installations,
+      compatibility: {},
+      warnings: [],
+      internalMarker: 'must-not-cross-api',
+    }
+    const artifactRegistry = {
+      list: vi.fn().mockResolvedValue(snapshot),
+      refresh: vi.fn().mockResolvedValue({ ...snapshot, generatedAt: '2026-07-22T02:00:00.000Z' }),
+    }
+
+    const firstResponse = response()
+    await handleArtifactRegistryApi(
+      { ...request(), url: '/api/artifacts?page=50&pageSize=100' },
+      firstResponse,
+      '/api/artifacts',
+      { artifactRegistry },
+    )
+    const firstPage = JSON.parse(firstResponse.body)
+    expect(firstPage.artifacts).toHaveLength(100)
+    expect(firstPage.versions).toHaveLength(100)
+    expect(firstPage.installations).toHaveLength(100)
+    expect(firstPage.artifacts[0].id).toBe('skill:artifact-4900')
+    expect(firstPage.artifacts.at(-1).id).toBe('skill:artifact-4999')
+    expect(firstPage).toMatchObject({ totalItems: 5_000, totalPages: 50, hasNext: false })
+    expect(firstPage.internalMarker).toBeUndefined()
+
+    const cachedResponse = response()
+    await handleArtifactRegistryApi(
+      { ...request(), url: '/api/artifacts?page=1&pageSize=100' },
+      cachedResponse,
+      '/api/artifacts',
+      { artifactRegistry },
+    )
+    expect(artifactRegistry.list).toHaveBeenCalledOnce()
+
+    const refreshResponse = response()
+    await handleArtifactRegistryApi(
+      { ...request('POST', {}), url: '/api/artifacts/refresh?page=1&pageSize=100' },
+      refreshResponse,
+      '/api/artifacts/refresh',
+      { artifactRegistry },
+    )
+    expect(JSON.parse(refreshResponse.body)).toMatchObject({ generatedAt: '2026-07-22T02:00:00.000Z', artifacts: expect.any(Array) })
+    expect(JSON.parse(refreshResponse.body).artifacts).toHaveLength(100)
+    expect(artifactRegistry.refresh).toHaveBeenCalledOnce()
+
+    const refreshedCache = response()
+    await handleArtifactRegistryApi(
+      { ...request(), url: '/api/artifacts?page=2&pageSize=100' },
+      refreshedCache,
+      '/api/artifacts',
+      { artifactRegistry },
+    )
+    expect(JSON.parse(refreshedCache.body).generatedAt).toBe('2026-07-22T02:00:00.000Z')
+    expect(artifactRegistry.list).toHaveBeenCalledOnce()
+  })
+
+  it('bounds related records and owner facets for a single Artifact page', async () => {
+    const artifacts = Array.from({ length: 101 }, (_, index) => ({
+      id: `skill:artifact-${String(index).padStart(3, '0')}`,
+      artifactId: `artifact-${String(index).padStart(3, '0')}`,
+      kind: 'skill',
+      name: `Artifact ${index}`,
+      owner: `owner-${String(index).padStart(3, '0')}`,
+      status: 'stable',
+      versionIds: index === 0 ? Array.from({ length: 500 }, (_, version) => `skill:artifact-000@${version}`) : [],
+    }))
+    const versions = Array.from({ length: 500 }, (_, index) => ({
+      id: `skill:artifact-000@${index}`,
+      artifactId: 'skill:artifact-000',
+      source: 'local-scan',
+      runtimeTargets: ['codex'],
+    }))
+    const installations = Array.from({ length: 500 }, (_, index) => ({
+      id: `installation-${index}`,
+      artifactId: 'skill:artifact-000',
+      observedState: 'present',
+    }))
+    const artifactRegistry = {
+      list: vi.fn().mockResolvedValue({
+        schemaVersion: 1,
+        generatedAt: '2026-07-22T01:00:00.000Z',
+        artifacts,
+        versions,
+        installations,
+        compatibility: {},
+        warnings: [],
+      }),
+    }
+    const target = response()
+
+    await handleArtifactRegistryApi(
+      { ...request(), url: '/api/artifacts?page=1&pageSize=1' },
+      target,
+      '/api/artifacts',
+      { artifactRegistry },
+    )
+
+    const page = JSON.parse(target.body)
+    expect(target.statusCode).toBe(200)
+    expect(page).toMatchObject({ sourceStatus: 'partial', page: 1, pageSize: 1, totalItems: 101 })
+    expect(page.artifacts).toHaveLength(1)
+    expect(page.artifacts[0].versionIds).toHaveLength(100)
+    expect(page.versions).toHaveLength(100)
+    expect(page.installations).toHaveLength(100)
+    expect(page.facets.owners).toHaveLength(100)
+  })
+
+  it('enforces a total related-record cap and public response allowlist', async () => {
+    const sentinel = 'ARTIFACT_PRIVATE_SENTINEL'
+    const artifacts = Array.from({ length: 100 }, (_, index) => {
+      const id = `skill:artifact-${String(index).padStart(3, '0')}`
+      return {
+        id,
+        artifactId: `artifact-${String(index).padStart(3, '0')}`,
+        kind: 'skill',
+        name: `Artifact ${index}`,
+        owner: 'platform',
+        status: 'stable',
+        createdAt: null,
+        updatedAt: null,
+        versionIds: Array.from({ length: 100 }, (_, version) => `${id}@${String(version).padStart(3, '0')}`),
+        rawPrompt: sentinel,
+      }
+    })
+    const versions = artifacts.flatMap((artifact) => Array.from({ length: 100 }, (_, index) => ({
+      id: `${artifact.id}@${String(index).padStart(3, '0')}`,
+      artifactId: artifact.id,
+      sourceArtifactId: artifact.artifactId,
+      kind: 'skill',
+      version: `1.0.${index}`,
+      contentHash: hash('a'),
+      gitCommit: null,
+      schemaVersion: 1,
+      runtimeTargets: ['codex'],
+      compatibility: { codex: 'supported', 'claude-code': 'supported', cursor: 'preview', privateRuntime: sentinel },
+      dependencies: [],
+      source: 'local-scan',
+      sourceRef: `local-scan:${artifact.id}`,
+      status: 'stable',
+      createdAt: null,
+      rawOutput: sentinel,
+    })))
+    const installations = artifacts.flatMap((artifact) => Array.from({ length: 100 }, (_, index) => ({
+      id: `${artifact.id}:installation-${index}`,
+      artifactId: artifact.id,
+      runtime: 'codex',
+      scope: 'project',
+      targetPath: `/skills/${artifact.artifactId}/${index}`,
+      desiredState: 'present',
+      observedState: 'present',
+      rawError: sentinel,
+    })))
+    const artifactRegistry = {
+      list: vi.fn().mockResolvedValue({
+        schemaVersion: 1,
+        generatedAt: '2026-07-22T01:00:00.000Z',
+        artifacts,
+        versions,
+        installations,
+        compatibility: { skill: { codex: 'supported', 'claude-code': 'supported', cursor: 'preview', privateRuntime: sentinel }, privateKind: sentinel },
+        warnings: Array.from({ length: 100 }, () => ({ source: 'prompt-registry', code: 'PROMPT_SOURCE_UNAVAILABLE', rawMessage: sentinel })),
+        internalMarker: sentinel,
+      }),
+    }
+    const target = response()
+
+    await handleArtifactRegistryApi(
+      { ...request(), url: '/api/artifacts?page=1&pageSize=100' },
+      target,
+      '/api/artifacts',
+      { artifactRegistry },
+    )
+
+    const page = JSON.parse(target.body)
+    expect(target.statusCode).toBe(200)
+    expect(page.sourceStatus).toBe('partial')
+    expect(page.versions.length + page.installations.length).toBeLessThanOrEqual(500)
+    expect(page.artifacts.flatMap((artifact) => artifact.versionIds)).toHaveLength(page.versions.length)
+    expect(page.warnings.length).toBeLessThanOrEqual(10)
+    expect(Object.keys(page.compatibility)).toHaveLength(7)
+    expect(target.body).not.toContain(sentinel)
+  })
+
+  it('shares an in-flight refresh with readers and restores the prior cache after refresh failure', async () => {
+    const oldSnapshot = {
+      schemaVersion: 1,
+      generatedAt: '2026-07-22T01:00:00.000Z',
+      artifacts: [],
+      versions: [],
+      installations: [],
+      compatibility: {},
+      warnings: [],
+    }
+    const newSnapshot = { ...oldSnapshot, generatedAt: '2026-07-22T02:00:00.000Z' }
+    let resolveRefresh
+    let rejectRefresh
+    const artifactRegistry = {
+      list: vi.fn().mockResolvedValue(oldSnapshot),
+      refresh: vi.fn()
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveRefresh = resolve }))
+        .mockImplementationOnce(() => new Promise((_, reject) => { rejectRefresh = reject })),
+    }
+    const primed = response()
+    await handleArtifactRegistryApi(request(), primed, '/api/artifacts', { artifactRegistry })
+
+    const refreshResponse = response()
+    const refresh = handleArtifactRegistryApi(
+      { ...request('POST', {}), url: '/api/artifacts/refresh' },
+      refreshResponse,
+      '/api/artifacts/refresh',
+      { artifactRegistry },
+    )
+    await vi.waitFor(() => expect(artifactRegistry.refresh).toHaveBeenCalledOnce())
+    const concurrentResponse = response()
+    const concurrent = handleArtifactRegistryApi(request(), concurrentResponse, '/api/artifacts', { artifactRegistry })
+    resolveRefresh(newSnapshot)
+    await Promise.all([refresh, concurrent])
+
+    expect(JSON.parse(refreshResponse.body).generatedAt).toBe(newSnapshot.generatedAt)
+    expect(JSON.parse(concurrentResponse.body).generatedAt).toBe(newSnapshot.generatedAt)
+
+    const failedRefresh = response()
+    const failure = handleArtifactRegistryApi(
+      { ...request('POST', {}), url: '/api/artifacts/refresh' },
+      failedRefresh,
+      '/api/artifacts/refresh',
+      { artifactRegistry },
+    )
+    await vi.waitFor(() => expect(artifactRegistry.refresh).toHaveBeenCalledTimes(2))
+    const duringFailure = response()
+    const reader = handleArtifactRegistryApi(request(), duringFailure, '/api/artifacts', { artifactRegistry })
+    rejectRefresh(new Error('refresh failed'))
+    await Promise.all([failure, reader])
+    expect(failedRefresh.statusCode).toBe(500)
+    expect(JSON.parse(duringFailure.body).generatedAt).toBe(newSnapshot.generatedAt)
+    const afterFailure = response()
+    await handleArtifactRegistryApi(request(), afterFailure, '/api/artifacts', { artifactRegistry })
+    expect(JSON.parse(afterFailure.body).generatedAt).toBe(newSnapshot.generatedAt)
+  })
+
+  it('rejects invalid Artifact Registry pagination and filters before scanning', async () => {
+    const artifactRegistry = { list: vi.fn() }
+    const invalid = response()
+
+    await handleArtifactRegistryApi(
+      { ...request(), url: '/api/artifacts?kind=unknown&pageSize=101' },
+      invalid,
+      '/api/artifacts',
+      { artifactRegistry },
+    )
+
+    expect(invalid.statusCode).toBe(400)
+    expect(artifactRegistry.list).not.toHaveBeenCalled()
+  })
+
   it('serves metadata and validates Candidate import previews', async () => {
     const artifactRegistry = {
       list: vi.fn().mockResolvedValue({ schemaVersion: 1, artifacts: [], versions: [], installations: [] }),

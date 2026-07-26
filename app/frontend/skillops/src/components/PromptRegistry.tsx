@@ -1,4 +1,4 @@
-import { CheckCircle2, GitBranch, GitCompareArrows, LoaderCircle, RefreshCw, ShieldCheck } from 'lucide-react'
+import { CheckCircle2, ChevronLeft, ChevronRight, GitBranch, GitCompareArrows, LoaderCircle, RefreshCw, ShieldCheck } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 
@@ -9,6 +9,14 @@ type RegistryStatus = {
   currentBranch: string
   commit: string
   branches: string[]
+  branchesPage: {
+    page: number
+    pageSize: number
+    totalItems: number
+    totalPages: number
+    hasPrevious: boolean
+    hasNext: boolean
+  }
   persistence: 'git-source-only'
 }
 
@@ -45,14 +53,16 @@ export function PromptRegistryBrowser({ baselineRef, candidateRef, onBaseline, o
   onCandidate: (sourceRef: string) => void
   onModelHint?: (hint: { provider: string; model: string }) => void
 }) {
-  const { t } = useI18n()
+  const { formatNumber, t } = useI18n()
   const [status, setStatus] = useState<RegistryStatus | null>(null)
   const [revision, setRevision] = useState('HEAD')
   const [search, setSearch] = useState('')
   const [provider, setProvider] = useState('')
   const [model, setModel] = useState('')
   const [items, setItems] = useState<PromptRecord[]>([])
-  const [warnings, setWarnings] = useState<Array<{ relativePath: string; message: string }>>([])
+  const [warningCount, setWarningCount] = useState(0)
+  const [page, setPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(0)
   const [targetSkeleton, setTargetSkeleton] = useState('')
   const [projectId, setProjectId] = useState('')
   const [comparison, setComparison] = useState<{ changed: boolean; changedFields: string[] } | null>(null)
@@ -60,25 +70,36 @@ export function PromptRegistryBrowser({ baselineRef, candidateRef, onBaseline, o
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const loadPrompts = useCallback(async (selectedRevision = revision) => {
+  const loadPrompts = useCallback(async (selectedRevision = revision, selectedPage = page) => {
     setBusy(true)
     setError(null)
     try {
-      const result = await post<{ items: PromptRecord[]; warnings: Array<{ relativePath: string; message: string }> }>('/api/prompt-registry/prompts', {
+      const result = await post<{ items: PromptRecord[]; warningCount: number; page: number; totalPages: number }>('/api/prompt-registry/prompts', {
         revision: selectedRevision, search: search.trim() || undefined, provider: provider.trim() || undefined, model: model.trim() || undefined,
+        page: selectedPage, pageSize: 50,
       })
       setItems(result.items)
-      setWarnings(result.warnings)
+      setWarningCount(result.warningCount)
+      setPage(result.page)
+      setTotalPages(result.totalPages)
     } catch (caught) { setError(caught instanceof Error ? caught.message : t('promptRegistry.failed')) } finally { setBusy(false) }
-  }, [model, provider, revision, search, t])
+  }, [model, page, provider, revision, search, t])
+
+  const loadBranchPage = async (selectedPage: number) => {
+    setBusy(true)
+    setError(null)
+    try {
+      setStatus(await request<RegistryStatus>(`/api/prompt-registry/status?page=${selectedPage}&pageSize=50`))
+    } catch (caught) { setError(caught instanceof Error ? caught.message : t('promptRegistry.failed')) } finally { setBusy(false) }
+  }
 
   useEffect(() => {
     let live = true
-    request<RegistryStatus>('/api/prompt-registry/status').then((next) => {
+    request<RegistryStatus>('/api/prompt-registry/status?page=1&pageSize=50').then((next) => {
       if (!live) return
       setStatus(next)
       setRevision(next.currentBranch)
-      return loadPrompts(next.currentBranch)
+      return loadPrompts(next.currentBranch, 1)
     }).catch((caught) => { if (live) setError(caught instanceof Error ? caught.message : t('promptRegistry.failed')) })
     return () => { live = false }
   }, []) // The initial snapshot intentionally uses the branch returned by status.
@@ -113,8 +134,15 @@ export function PromptRegistryBrowser({ baselineRef, candidateRef, onBaseline, o
       <label><span>{t('promptRegistry.search')}</span><input value={search} onChange={(event) => setSearch(event.target.value)} /></label>
       <label><span>{t('common.provider')}</span><input value={provider} onChange={(event) => setProvider(event.target.value)} /></label>
       <label><span>{t('common.model')}</span><input value={model} onChange={(event) => setModel(event.target.value)} /></label>
-      <button className="button secondary" type="button" disabled={busy} onClick={() => void loadPrompts()}>{busy ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}{t('promptRegistry.load')}</button>
+      <button className="button secondary" type="button" disabled={busy} onClick={() => void loadPrompts(revision, 1)}>{busy ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}{t('promptRegistry.load')}</button>
     </div>
+    {status && status.branchesPage.totalPages > 1 && <nav className="runs-pagination-bar registry-pagination" aria-label={t('promptRegistry.branch')}>
+      <div className="pagination-controls">
+        <button type="button" aria-label={t('common.previousPage')} disabled={busy || !status.branchesPage.hasPrevious} onClick={() => void loadBranchPage(status.branchesPage.page - 1)}><ChevronLeft size={15} /></button>
+        <span role="status">{t('common.pageOf', { page: formatNumber(status.branchesPage.page), count: formatNumber(status.branchesPage.totalPages) })}</span>
+        <button type="button" aria-label={t('common.nextPage')} disabled={busy || !status.branchesPage.hasNext} onClick={() => void loadBranchPage(status.branchesPage.page + 1)}><ChevronRight size={15} /></button>
+      </div>
+    </nav>}
     {error && <div className="evaluation-error" role="alert">{error}</div>}
     <div className="prompt-registry-list">
       {items.map((item) => <article key={item.artifact.sourceRef} className={item.artifact.sourceRef === candidateRef ? 'is-selected' : ''}>
@@ -128,7 +156,14 @@ export function PromptRegistryBrowser({ baselineRef, candidateRef, onBaseline, o
       </article>)}
       {!items.length && <p>{t('promptRegistry.empty')}</p>}
     </div>
-    {warnings.length > 0 && <div className="data-warning" role="status">{t('promptRegistry.invalidFiles', { count: warnings.length })}</div>}
+    {totalPages > 1 && <nav className="runs-pagination-bar registry-pagination" aria-label={t('common.pageOf', { page: formatNumber(page), count: formatNumber(totalPages) })}>
+      <div className="pagination-controls">
+        <button type="button" aria-label={t('common.previousPage')} disabled={busy || page === 1} onClick={() => void loadPrompts(revision, page - 1)}><ChevronLeft size={15} /></button>
+        <span role="status">{t('common.pageOf', { page: formatNumber(page), count: formatNumber(totalPages) })}</span>
+        <button type="button" aria-label={t('common.nextPage')} disabled={busy || page === totalPages} onClick={() => void loadPrompts(revision, page + 1)}><ChevronRight size={15} /></button>
+      </div>
+    </nav>}
+    {warningCount > 0 && <div className="data-warning" role="status">{t('promptRegistry.invalidFiles', { count: warningCount })}</div>}
     <div className="prompt-registry-workflow">
       <button className="button secondary" type="button" disabled={busy || !baselineRef.startsWith('prompt-registry:') || !candidateRef.startsWith('prompt-registry:')} onClick={() => void compare()}><GitCompareArrows size={14} />{t('promptRegistry.compare')}</button>
       {comparison && <p role="status">{comparison.changed ? t('promptRegistry.changedFields', { fields: comparison.changedFields.join(', ') }) : t('promptRegistry.unchanged')}</p>}

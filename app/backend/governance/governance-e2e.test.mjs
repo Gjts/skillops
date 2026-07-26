@@ -83,13 +83,19 @@ describe('governance end-to-end', () => {
     }
 
     async function evaluateAndPromote(candidate, reviewer) {
-      const nominated = await governance.nominate({ artifact: candidate.artifact, owner: 'artifact-owner', targetSkeleton: 'local-target' })
       const queued = await manager.enqueue({
         suite, baseline: evaluationBaseline, candidate, provider: { provider: 'ollama', model: 'deterministic-fixture', baseUrl: 'http://127.0.0.1:11434/v1' },
-        requestedBy: 'governance-e2e', capabilityId: nominated.capability.id,
+        requestedBy: 'governance-e2e',
       }, { fakeOutputs, runtimeRoot: path.join(dataDir, 'promptfoo-runtime') })
       const run = await waitForCompleted(store, queued.summary.id)
       expect(run).toEqual(expect.objectContaining({ gateResult: 'passed', engine: { name: 'promptfoo', version: '0.121.19' } }))
+      await store.appendDecision(run.id, 'create-candidate')
+      const nominated = await governance.nominate({
+        artifact: candidate.artifact,
+        owner: 'artifact-owner',
+        targetSkeleton: 'local-target',
+        originEvaluationRunId: run.id,
+      })
       expect((await governance.bindEvidence(nominated.capability.id, { runId: run.id, actor: 'operator' })).stage).toBe('ready')
       expect((await governance.approve(nominated.capability.id, { reviewer })).stage).toBe('approved')
       await expect(governance.previewCanary(nominated.capability.id, { targetSkeleton: 'SKILL.md', projectRoot: stableRoot })).rejects.toThrow('separate')
@@ -115,6 +121,7 @@ describe('governance end-to-end', () => {
         capabilityId,
       }, { fakeOutputs, runtimeRoot: path.join(dataDir, 'promptfoo-runtime') })
       const run = await waitForCompleted(store, queued.summary.id)
+      await store.appendDecision(run.id, 'create-candidate')
       expect((await governance.bindEvidence(capabilityId, { runId: run.id, actor: 'operator' })).requalifiesStage).toBeTruthy()
       expect((await governance.approve(capabilityId, { reviewer })).stage).toBe('approved')
     }

@@ -32,11 +32,12 @@ Restart Claude Code after installation, then run `/hooks` to verify that the Ski
 npm run dev
 ```
 
-In SkillOps **Settings**, open Claude Code and click **Begin verification**
-before invoking a known Skill. Finish the turn, then refresh. **Installed**
-confirms configuration only; **Verified** requires a post-boundary
-non-discovery lifecycle event. A `skill.discovered` record never passes this
-check.
+In SkillOps **Settings**, open Claude Code and click **Check installation**
+after installing or repairing the adapter. SkillOps derives the verification
+boundary from the current configuration and hook files. Invoke a known Skill,
+finish the turn, then click **Check installation** again. **Installed** confirms
+configuration only; **Verified** requires a post-boundary non-discovery
+lifecycle event. A `skill.discovered` record never passes this check.
 
 ## What is observed
 
@@ -83,7 +84,13 @@ runtime disagree.
 
 SkillOps does not store prompt text, command arguments, tool inputs, tool outputs, transcripts, last assistant messages, raw host session IDs, or raw error details. It stores per-install HMAC session pseudonyms, timestamps, runtime metadata, lengths, lifecycle outcomes, and discovered Skill paths.
 
-High-frequency generic hooks run asynchronously. The hooks that must establish or close exact Skill state run synchronously to prevent lifecycle races. Adapter errors are written locally and never block Claude Code.
+High-frequency generic hooks run asynchronously. The hooks that must establish
+or close exact Skill state run synchronously to prevent lifecycle races.
+Adapter errors use fixed local status lines and never block Claude Code. On the
+next hook invocation, an existing diagnostic entry is atomically replaced with
+a fixed redaction marker; a new failure atomically replaces that marker with
+the latest safe status. Link targets are never written and no sensitive backup
+is created.
 
 ## Safe configuration behavior
 

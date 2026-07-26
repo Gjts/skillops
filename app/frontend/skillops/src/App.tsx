@@ -31,6 +31,8 @@ import type { Outcome, PageId, Runtime, RuntimeConnection, SkillEvent } from './
 
 const EVENT_REFRESH_MS = 3_000
 const CONNECTION_REFRESH_MS = 5_000
+const CONNECTION_REQUEST_TIMEOUT_MS = 8_000
+const TEAM_SETTINGS_PATH = '/settings?section=advanced-team'
 const pathForPage: Record<PageId, string> = {
   'command-center': '/',
   agents: '/agents',
@@ -38,7 +40,7 @@ const pathForPage: Record<PageId, string> = {
   assets: '/assets',
   benchmarks: '/benchmarks',
   releases: '/releases',
-  team: '/team',
+  team: TEAM_SETTINGS_PATH,
   settings: '/settings',
 }
 const pageForPath = new Map<string, PageId>([
@@ -58,8 +60,14 @@ const pageForPath = new Map<string, PageId>([
   ['/settings', 'settings'],
 ])
 
+function pageForLocation(location: { pathname: string; search: string }) {
+  const pathname = location.pathname.replace(/\/$/, '') || '/'
+  if (pathname === '/settings' && new URLSearchParams(location.search).get('section') === 'advanced-team') return 'team'
+  return pageForPath.get(pathname) ?? 'command-center'
+}
+
 function currentPage() {
-  return pageForPath.get(window.location.pathname.replace(/\/$/, '') || '/') ?? 'command-center'
+  return pageForLocation(window.location)
 }
 
 const checkingConnections: RuntimeConnection[] = [
@@ -114,6 +122,7 @@ interface RunPageResponse {
   hasPrevious: boolean
   hasNext: boolean
   activity?: RunActivity
+  sourceStatus?: 'ok' | 'partial'
 }
 
 interface RunDetailResponse {
@@ -326,31 +335,53 @@ export default function App() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [runsMode, setRunsMode] = useState<'loading' | 'demo' | 'local'>('loading')
   const [runsLoadError, setRunsLoadError] = useState<string | null>(null)
+  const connectionRequestRef = useRef<Promise<RuntimeConnection[]> | null>(null)
+  const connectionAbortRef = useRef<AbortController | null>(null)
 
-  const loadConnections = useCallback(async () => {
-    try {
-      const response = await fetch('/api/connections')
-      if (!response.ok) throw new Error(t('errors.connectionStatus', { status: response.status }))
-      const items = await response.json() as RuntimeConnection[]
-      if (!Array.isArray(items)) throw new Error(t('errors.connectionInvalid'))
-      setConnections(items)
-      return items
-    } catch {
-      const unavailable = checkingConnections.map((item) => item.runtime === 'cursor' ? item : { ...item, status: 'unavailable' as const })
-      setConnections(unavailable)
-      return unavailable
+  const loadConnections = useCallback(() => {
+    if (connectionRequestRef.current) return connectionRequestRef.current
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), CONNECTION_REQUEST_TIMEOUT_MS)
+    connectionAbortRef.current = controller
+    const request = (async () => {
+      try {
+        const response = await fetch('/api/connections', { signal: controller.signal })
+        if (!response.ok) throw new Error(t('errors.connectionStatus', { status: response.status }))
+        const result = await response.json() as { items?: RuntimeConnection[] }
+        const items = result.items
+        if (!Array.isArray(items)) throw new Error(t('errors.connectionInvalid'))
+        setConnections(items)
+        return items
+      } catch {
+        const unavailable = checkingConnections.map((item) => item.runtime === 'cursor' ? item : { ...item, status: 'unavailable' as const })
+        setConnections(unavailable)
+        return unavailable
+      } finally {
+        window.clearTimeout(timeout)
+      }
+    })()
+    connectionRequestRef.current = request
+    const release = () => {
+      if (connectionRequestRef.current === request) connectionRequestRef.current = null
+      if (connectionAbortRef.current === controller) connectionAbortRef.current = null
     }
+    void request.then(release, release)
+    return request
   }, [t])
 
 
   useEffect(() => {
     void loadConnections()
     const interval = window.setInterval(() => { void loadConnections() }, CONNECTION_REFRESH_MS)
-    return () => { window.clearInterval(interval) }
+    return () => {
+      window.clearInterval(interval)
+      connectionAbortRef.current?.abort()
+    }
   }, [loadConnections])
 
   useEffect(() => {
     const restorePage = () => {
+      if ((window.location.pathname.replace(/\/$/, '') || '/') === '/team') window.history.replaceState({}, '', TEAM_SETTINGS_PATH)
       const nextPage = currentPage()
       if (nextPage === 'activity') {
         const restored = readRunLocation()
@@ -359,18 +390,19 @@ export default function App() {
       }
       setPage(nextPage)
     }
+    restorePage()
     window.addEventListener('popstate', restorePage)
     return () => window.removeEventListener('popstate', restorePage)
   }, [])
 
   const navigate = (target: PageId) => {
-    if (window.location.pathname !== pathForPage[target]) window.history.pushState({}, '', pathForPage[target])
+    if (`${window.location.pathname}${window.location.search}` !== pathForPage[target]) window.history.pushState({}, '', pathForPage[target])
     setPage(target)
   }
   const openHref = (href: string) => {
     const url = new URL(href, window.location.origin)
     window.history.pushState({}, '', `${url.pathname}${url.search}`)
-    const target = pageForPath.get(url.pathname.replace(/\/$/, '') || '/') ?? 'command-center'
+    const target = pageForLocation(url)
     if (target === 'activity') {
       const restored = readRunLocation()
       setRuntime(restored.runtime)
@@ -445,7 +477,7 @@ export default function App() {
         <header className="topbar">
           <div className="title-wrap"><h1>{t(pageTitle[page])}</h1><span className={`data-mode ${activeMode}`}>{modeLabel}</span></div>
           <div className="topbar-actions">
-            {showEventFilters && <label className="select-control date-select"><CalendarDays size={16} /><select aria-label={t('common.dateRange')} value={days} onChange={(event) => setDays(Number(event.target.value))}><option value={7}>{t('common.lastDays', { count: 7 })}</option><option value={14}>{t('common.lastDays', { count: 14 })}</option><option value={30}>{t('common.lastDays', { count: 30 })}</option></select><ChevronDown size={14} /></label>}
+            {showEventFilters && <label className="select-control date-select"><CalendarDays size={16} /><select aria-label={t('common.dateRange')} value={days} onChange={(event) => setDays(Number(event.target.value))}>{page === 'command-center' && <option value={1}>{t('common.today')}</option>}<option value={7}>{t('common.lastDays', { count: 7 })}</option><option value={14}>{t('common.lastDays', { count: 14 })}</option><option value={30}>{t('common.lastDays', { count: 30 })}</option></select><ChevronDown size={14} /></label>}
             {showEventFilters && <label className="select-control runtime-select"><Code2 size={16} /><select aria-label={t('common.runtime')} value={runtime} onChange={(event) => setRuntime(event.target.value as Runtime | 'all')}><option value="all">{t('common.allRuntimes')}</option><option value="codex">Codex</option><option value="claude-code">Claude Code</option><option value="cursor">Cursor</option></select><ChevronDown size={14} /></label>}
             <button className="button primary connect-button" type="button" onClick={() => openConnect(runtime === 'all' ? 'codex' : runtime)}><PlugZap size={16} />{t('common.connectRuntime')}</button>
           </div>
@@ -564,7 +596,10 @@ function RunsPage({ events, mode, runtime, days, requestedRunId, onRequestedRunH
           apiResponded = true
           body = await response.json() as unknown
           if (!response.ok) {
-            const message = body && typeof body === 'object' && 'error' in body ? String(body.error) : t('runs.loadFailed')
+            const error = body && typeof body === 'object' && 'error' in body ? body.error : null
+            const message = typeof error === 'string'
+              ? error
+              : error && typeof error === 'object' && 'message' in error ? String(error.message) : t('runs.loadFailed')
             throw new Error(message)
           }
         }
@@ -702,7 +737,10 @@ function RunsPage({ events, mode, runtime, days, requestedRunId, onRequestedRunH
         const response = await fetch(`/api/runs/~${encodeURIComponent(selectedRunId)}`, { signal: controller.signal })
         const body = await response.json() as unknown
         if (!response.ok) {
-          const message = body && typeof body === 'object' && 'error' in body ? String(body.error) : t('runs.loadFailed')
+          const error = body && typeof body === 'object' && 'error' in body ? body.error : null
+          const message = typeof error === 'string'
+            ? error
+            : error && typeof error === 'object' && 'message' in error ? String(error.message) : t('runs.loadFailed')
           throw new Error(message)
         }
         if (!isRunDetailResponse(body)) throw new Error(t('runs.invalidResponse'))
@@ -764,7 +802,8 @@ function RunsPage({ events, mode, runtime, days, requestedRunId, onRequestedRunH
 
   return (
     <div className="single-page">
-      <div className="page-intro"><div><h2>{t('runs.timeline')}</h2><p>{t('runs.description')}</p></div><button className="button secondary" type="button" disabled={importing} onClick={() => input.current?.click()}><Upload size={15} />{importing ? t('runs.importing') : t('runs.importFile')}</button><input ref={input} type="file" accept=".jsonl,.json,application/json" hidden onChange={(event) => { void handleFile(event.target.files?.[0]); event.target.value = '' }} /></div>
+      <div className="page-intro"><div><h2>{t('nav.runs')}</h2><p>{t('runs.description')}</p></div><button className="button secondary" type="button" disabled={importing} onClick={() => input.current?.click()}><Upload size={15} />{importing ? t('runs.importing') : t('runs.importFile')}</button><input ref={input} type="file" accept=".jsonl,.json,application/json" hidden onChange={(event) => { void handleFile(event.target.files?.[0]); event.target.value = '' }} /></div>
+      {result.sourceStatus === 'partial' && <div className="data-warning" role="alert">{t('cc.partial')}</div>}
       {importError && <div className="data-warning" role="alert">{t('runs.importFailed', { error: importError })}</div>}
       {importStatus && <div className="import-status" role="status">{importStatus}</div>}
       {newRunCount > 0 && <div className="new-runs-notice" role="status"><span>{t(newRunCount === 1 ? 'runs.newRun' : 'runs.newRuns', { count: formatNumber(newRunCount) })}</span><button className="button secondary" type="button" onClick={refreshRuns}>{t('runs.refresh')}</button></div>}

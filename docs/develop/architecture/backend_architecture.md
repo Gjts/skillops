@@ -14,6 +14,8 @@ The backend provides a small local interface for:
 - multi-provider A/B evaluation and assistant requests with optional local AI settings persistence;
 - Codex Desktop incremental ingestion;
 - runtime configuration health;
+- sanitized first-run prerequisite inspection;
+- final Managed Decisions and evidence-backed Release Candidate origin;
 - production SPA serving.
 
 It must remain local-first, tolerate missing runtime directories, and keep
@@ -58,8 +60,12 @@ correlation window, preserving the selected run and reporting total/truncation m
 ### `command-center.mjs`
 
 Owns the deterministic Command Center aggregate, truth labels, source status,
-bounded recent activity, readiness, and prioritized actions. Cache entries are
-keyed by event-store version, runtime, time window, and a short TTL.
+bounded terminal recent activity, readiness, and prioritized actions. It joins
+events, connections, setup preflight, inventory, provider settings, Managed
+Evaluations, and Capability state with partial-source handling. Responses expose
+seven readiness facts, at most three actions, explicit ratio
+numerators/denominators, and at most eight recent runs. Cache entries are keyed
+by event-store version, runtime, time window, and a short TTL.
 
 ### `agents-api.mjs`
 
@@ -86,6 +92,17 @@ Failed apply or undo keeps recovery paths instead of overwriting editor bytes.
 
 Owns effective config inspection, SkillOps handler recognition, hook-script path
 validation, and activity enrichment.
+
+### `setup-preflight.mjs`
+
+Owns the read-only installation prerequisite check used by the connection
+dialog. `GET /api/setup/preflight` reports the current/minimum Node.js version,
+Git availability, loopback API availability, separate data-directory probe
+availability and writability, runtime-inspection availability, and sanitized
+runtime configuration/reference health. An existing path must be a directory;
+a writable regular file fails closed, while a thrown probe remains unavailable
+rather than becoming a read-only diagnosis. It does not return paths, hook
+commands, raw config, or credentials.
 
 ### `codex-desktop-ingest.mjs`
 
@@ -138,27 +155,48 @@ Evaluation and assistant POST handlers additionally reject non-loopback Host
 headers, cross-site or mismatched browser Origins, and non-JSON content types
 before scanning local inventory or contacting a provider.
 
+Primary page-based list routes accept only page sizes 20, 50, or 100 and return
+`items`, `page`, `pageSize`, `totalItems`, `totalPages`, `hasPrevious`, and
+`hasNext` after deterministic server-side sorting. Cursor-based evaluation
+history keeps its existing bounded cursor contract. Every list response also
+includes `generatedAt` or an immutable revision/commit.
+
 ### `GET /api/events`
 
 Before reading, performs an incremental Codex Desktop sync. The compatibility
-form returns the normalized event array and an ETag derived from the store
-version; matching `If-None-Match` returns `304`. `summary=1` returns only count,
-generated time, and latest non-discovery activity time. `download=1` streams the
-normalized store as an attachment and never returns unknown persisted fields.
+form returns a bounded normalized event page, `generatedAt`, `ok`/`partial`
+source status, and an ETag derived from the store version. Mode conflicts and
+page parameters are validated before a matching `If-None-Match` can return
+`304`. Events sort by timestamp descending and ID descending. `summary=1`
+returns only count, generated time, latest
+non-discovery activity time, and source status. `download=1` streams the full
+normalized store as an explicit attachment, reports the same status in
+`X-SkillOps-Source-Status`, and never returns unknown persisted fields.
 
 Responses:
 
-- `200`: JSON array, bounded summary object, or normalized JSONL attachment;
+- `200`: page envelope, bounded summary object, or normalized JSONL attachment;
 - `304`: unchanged compatibility feed;
 - `400`: conflicting query modes;
 - `500`: read or sync failure.
 
 ### `GET /api/command-center`
 
-Validates runtime plus a 7d/14d/30d window and returns one deterministic,
-bounded aggregate. It contains metric definitions and provenance, source
-availability, readiness, prioritized issues/actions, and at most five recent
-records; it never contains the full event array.
+Validates runtime plus a Today (`1d`), 7d, 14d, or 30d window and returns one
+deterministic, bounded aggregate. Today begins at server-local midnight rather
+than using a rolling 24-hour boundary. It contains metric definitions and
+numerator/denominator provenance, per-source availability, seven readiness
+facts, prioritized issues, at most three next actions, and at most eight
+terminal recent runs; it never contains the full event array. A source-reader
+failure becomes an explicit partial/unavailable fact rather than discarding the
+remaining projection. Runtime readiness is unknown unless both event and
+connection sources are readable.
+
+### `GET /api/setup/preflight`
+
+Requires a loopback request and returns the sanitized setup prerequisite
+projection. Only `GET` is accepted. Probe failures fail closed to unavailable,
+unsupported, or not-writable facts without echoing local paths.
 
 ### `GET /api/agents`
 
@@ -240,23 +278,40 @@ Example response:
 
 ### `POST /api/scan`
 
-Returns a current array of installed definitions. `GET` is intentionally not
-supported and returns `405`.
+Accepts bounded `query`, `runtime`, `source`, `provider`, `status`,
+`attention`, `page`, and `pageSize` query parameters. The first request creates
+an in-memory scan snapshot; later filter and page requests project that
+snapshot without rescanning. `refresh=1` performs an explicit rescan and
+replaces the cache only after success. The response contains at most the
+requested page (maximum 100 definitions), stable page metadata, aggregate
+counts, current-page issue/shared-name keys, scan diagnostics, and
+`generatedAt`. `GET` is intentionally not supported and returns `405`.
 
 ### `GET /api/connections`
 
-Performs Codex Desktop sync, reads effective runtime configuration, and returns:
+Performs Codex Desktop sync, reads effective runtime configuration, and returns
+the fixed runtime catalog through the shared page envelope. Runtime rows sort
+by runtime ID and the response includes `generatedAt`:
 
 ```json
-[
-  {
-    "runtime": "codex",
-    "status": "installed",
-    "checkedAt": "2026-07-20T00:00:00.000Z",
-    "eventCount": 12,
-    "lastEventAt": "2026-07-19T23:59:00.000Z"
-  }
-]
+{
+  "generatedAt": "2026-07-20T00:00:00.000Z",
+  "items": [
+    {
+      "runtime": "codex",
+      "status": "installed",
+      "checkedAt": "2026-07-20T00:00:00.000Z",
+      "eventCount": 12,
+      "lastEventAt": "2026-07-19T23:59:00.000Z"
+    }
+  ],
+  "page": 1,
+  "pageSize": 50,
+  "totalItems": 3,
+  "totalPages": 1,
+  "hasPrevious": false,
+  "hasNext": false
+}
 ```
 
 ### `GET /api/ai-settings`
@@ -299,6 +354,58 @@ bounded enabled inventory names/versions/descriptions plus sanitized task,
 criteria, candidate/match descriptions, similarity signals, and A/B outputs.
 Local source paths and Skill contents are excluded from chat context.
 
+### `GET/POST /api/evaluations/:id/decision`
+
+Reads or records the one final Decision for a completed Managed Suite run.
+Allowed values are `create-candidate`, `keep-baseline`, `reject-candidate`, and
+`collect-more-evidence`. The persisted and public Decision has exactly:
+
+```text
+decisionId
+evaluationRunId
+artifactId
+candidateRefHash
+decision
+recordedAt
+```
+
+The server derives identity fields from the authoritative run. Repeating the
+same Decision is idempotent; submitting another value returns `409`, so a
+changed judgment or supplemental evidence requires a new run. The compatibility
+path `/api/evaluation-runs/:id/decision` resolves to the same store behavior.
+`create-candidate` additionally requires current passing evidence and the
+blocking `suite-case-coverage` gate at 100%. The backend derives that metric
+from persisted `casesTotal / eligibleCases`; a missing eligible count is
+`not-available` and fails closed.
+
+### Managed Decision to Capability nomination
+
+`POST /api/capabilities` may persist an exact-revision Candidate proposal
+without `evaluationRunId`; that proposal cannot enter Ready. When the request
+does include an origin claim, the run must be completed Managed Suite evidence
+with a final `create-candidate` Decision. Governance derives the Artifact and
+baseline from that run and merely verifies any client copies.
+
+Every quality-evidence binding requires that bound run's final
+`create-candidate` Decision. The first qualifying binding may claim an unowned
+Candidate and atomically reserves that run across immutable
+`originEvaluationRunId` and mutable
+`latestEvidenceRunId`, reuses a same-target retry, rejects a different target,
+and fails closed on conflicting legacy reservations. Later evidence binding may
+change `latestEvidenceRunId` but cannot mutate the origin. Runs decided as
+`keep-baseline`, `reject-candidate`, or `collect-more-evidence` cannot be bound.
+Approval, Canary, Stable, install, rollback, and pending Canary/Stable
+forward-release recovery re-read both the origin and latest-evidence Decisions
+rather than trusting persisted Capability metadata alone.
+
+Candidate approval is an authenticated action. It requires a valid Bearer token
+from `SKILLOPS_GOVERNANCE_PRINCIPALS`; the local OS-account fallback used by
+ordinary local governance operations is not accepted for approval. Protected
+lock, global governance-audit, and capability-scoped audit reads use the same
+authenticated-only resolver. The frontend performs a protected audit read only
+after an explicit transient Bearer token is supplied; a rejection remains a
+locked/error state rather than an empty audit.
+
 ## 5. Event-store invariants
 
 ### Append behavior
@@ -312,7 +419,10 @@ Local source paths and Skill contents are excluded from chat context.
 
 - Missing event file means an empty array.
 - Blank lines are ignored.
-- A malformed or partially written line is ignored so valid history remains readable.
+- An unterminated malformed final record returns the valid prefix with
+  `sourceStatus: partial`.
+- A malformed complete record or any malformed non-final record fails with an
+  explicit corruption error.
 - Reading does not rewrite the source file.
 
 ### Batch import behavior
@@ -434,8 +544,9 @@ cancellation, timeout, child-process cleanup, and interrupted-run recovery.
 Capability governance uses atomic lock-protected metadata registries, exact
 evidence hashes, independent server-resolved principals, write-ahead audit
 records, and compensated install/promotion/deprecation/rollback transactions.
-Configured Bearer tokens can resolve a distinct reviewer without accepting an
-identity from the browser. New files must use a relative target beneath
+Configured Bearer tokens resolve the required distinct reviewer without
+accepting an identity from the browser; approval never falls back to the local
+OS principal. New files must use a relative target beneath
 `SKILLOPS_SKELETON_ROOT`; existing targets must resolve through the enabled
 scan inventory. The installer rejects symlink/non-file targets, creates
 exact-byte backups before replacement or removal, and verifies every file
@@ -448,8 +559,9 @@ privacy controls, Red Team seam, and upgrade gate are documented in the
 
 `app/backend/prompts/` owns the Local Prompt Registry. It reads strict Prompt
 definitions from exact commits in a configured Git workspace, returns
-metadata-only lists, derives semantic and component hashes, resolves bodies only
-for backend evaluation, and creates Candidates only after an explicit request.
+metadata-only stable pages, derives semantic and component hashes, resolves
+bodies only for backend evaluation, and creates Candidates only after an
+explicit request.
 It never edits files, changes branches, creates commits, or calls a hosted Prompt
 service. The full contract is documented in
 [Prompt Registry integration](../integrations/prompt-registry.md).
@@ -472,8 +584,18 @@ lock, preserve referenced-entity integrity, write state atomically, and append a
 hash-chained metadata-only audit record. Collector commits compensate state and
 collector bytes if the audit record cannot commit. The HTTP adapter in
 `team-control-plane-api.mjs` applies loopback, JSON-size, route-field, principal,
-and Bearer-token guards. The deployment metadata explicitly reports local +
-Git, with network API, SSO, and SCIM disabled.
+Bearer-token, and stable pagination guards to catalog, queue, and audit reads.
+The Team root read returns counts, template-adoption metrics, and the latest
+collector time instead of embedding the seven entity arrays. Catalog and queue
+pages include `generatedAt` because their Artifact/Governance sources can
+change without a Team-state revision. The deployment metadata explicitly
+reports local + Git, with network API, SSO, and SCIM disabled.
+
+Explicit retention takes the governance release lock before the Team and
+Capability locks, then snapshots Capability origin, latest, quality, and Red
+Team run IDs and prunes evaluation evidence in that same critical section.
+Concurrent service transactions and cross-process registry writes therefore
+cannot leave a retained Capability pointing at deleted provenance.
 
 `app/backend/project-template.mjs` is the governed Team Template boundary. It
 accepts only schema-versioned Stable manifests tied to an immutable Git commit,
@@ -508,6 +630,9 @@ runner and rejects command-line provider keys.
 - Managed evidence contains statuses, scores, gates, and identity hashes only;
   provider keys, Artifact bodies, case inputs, raw outputs, and raw errors are
   excluded by schema and store tests.
+- Managed Decisions contain only the six documented identity/time fields; no
+  rationale, task, prompt, output, or raw provider response is accepted or
+  exported.
 
 ## 12. Backend verification checklist
 

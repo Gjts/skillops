@@ -3,6 +3,7 @@ import { initializeGovernanceServices } from '../governance/governance-api.mjs'
 import { resolveGovernancePrincipal } from '../governance/principal.mjs'
 import { EvaluationError } from '../evaluations/errors.mjs'
 import { assertLocalApiRequest, readEvaluationJsonBody } from '../evaluations/request-guard.mjs'
+import { createPageEnvelope } from '../page-envelope.mjs'
 import { promptRegistry } from './prompt-registry.mjs'
 
 function onlyKeys(value, allowed, label) {
@@ -37,16 +38,35 @@ export async function handlePromptRegistryApi(request, response, pathname, optio
     const registry = options.promptRegistry || promptRegistry(options)
     if (statusRoute) {
       if (request.method !== 'GET') throw new EvaluationError('Method not allowed.', 405)
-      sendJson(response, 200, await registry.status())
+      const status = await registry.status()
+      const search = new URL(request.url || pathname, 'http://127.0.0.1').searchParams
+      const branchPage = createPageEnvelope(status.branches || [], {
+        page: search.get('page'),
+        pageSize: search.get('pageSize'),
+        compare: (left, right) => left.localeCompare(right, 'en-US'),
+      })
+      const { items: branches, ...branchesPage } = branchPage
+      sendJson(response, 200, { ...status, branches, branchesPage, generatedAt: new Date().toISOString() })
     } else if (listRoute) {
       if (!post) throw new EvaluationError('Method not allowed.', 405)
-      const body = onlyKeys(await readEvaluationJsonBody(request), new Set(['revision', 'search', 'provider', 'model']), 'Prompt Registry list')
-      sendJson(response, 200, await registry.list({
+      const body = onlyKeys(await readEvaluationJsonBody(request), new Set(['revision', 'search', 'provider', 'model', 'page', 'pageSize']), 'Prompt Registry list')
+      const result = await registry.list({
         revision: optional(body.revision, 'Prompt Registry revision'),
         search: optional(body.search, 'Prompt search'),
         provider: optional(body.provider, 'Prompt provider'),
         model: optional(body.model, 'Prompt model'),
-      }))
+      })
+      const { items, warnings = [], ...metadata } = result
+      sendJson(response, 200, {
+        ...metadata,
+        warningCount: warnings.length,
+        ...createPageEnvelope(items, {
+          page: body.page,
+          pageSize: body.pageSize,
+          compare: (left, right) => left.relativePath.localeCompare(right.relativePath, 'en-US')
+            || left.artifact.sourceRef.localeCompare(right.artifact.sourceRef, 'en-US'),
+        }),
+      })
     } else if (compareRoute) {
       if (!post) throw new EvaluationError('Method not allowed.', 405)
       const body = onlyKeys(await readEvaluationJsonBody(request), new Set(['leftRef', 'rightRef']), 'Prompt Registry comparison')

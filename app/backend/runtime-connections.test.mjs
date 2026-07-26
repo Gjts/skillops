@@ -77,10 +77,10 @@ describe('runtime connection inspection', () => {
       skillUseObserved: true,
       terminalRunObserved: true,
     }))
-    expect(result[1]).toEqual(expect.objectContaining({ runtime: 'claude-code', connectionStage: 'installed', eventCount: 0, activityObserved: false }))
+    expect(result[1]).toEqual(expect.objectContaining({ runtime: 'claude-code', connectionStage: 'awaiting-verification', eventCount: 0, activityObserved: false }))
   })
 
-  it('rejects discovery and lifecycle evidence older than the current hook boundary', async () => {
+  it('rejects discovery and lifecycle evidence at or before the current hook boundary', async () => {
     const { enrichRuntimeConnections } = await import('./runtime-connections.mjs')
     const connection = {
       runtime: 'codex',
@@ -91,6 +91,7 @@ describe('runtime connection inspection', () => {
     }
     const old = enrichRuntimeConnections([connection], [
       { id: 'history', event: 'skill.completed', runtime: 'codex', skillId: 'alpha', outcome: 'success', timestamp: '2026-07-25T11:59:59.000Z' },
+      { id: 'boundary', event: 'skill.started', runtime: 'codex', skillId: 'alpha', timestamp: '2026-07-25T12:00:00.000Z' },
       { id: 'discovery', event: 'skill.discovered', runtime: 'codex', skillId: 'alpha', timestamp: '2026-07-25T12:01:00.000Z' },
     ], '2026-07-25T12:02:00.000Z')
     expect(old[0]).toEqual(expect.objectContaining({ connectionStage: 'awaiting-verification', skillUseObserved: false }))

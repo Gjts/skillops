@@ -8,6 +8,14 @@ import { readArtifactPackage } from '../evaluations/artifact-package.mjs'
 import { withGovernanceFileLock } from '../governance/skeleton-lock.mjs'
 
 const actions = new Set(['keep', 'enable', 'disable', 'remove', 'rename', 'replace', 'defer'])
+const HISTORY_FIELDS = Object.freeze({
+  applied: new Set(['recordId', 'action', 'definitionKey', 'status', 'changed', 'target', 'operation', 'hashType', 'targetExisted', 'beforeHash', 'afterHash', 'backup', 'verification', 'appliedAt']),
+  failed: new Set(['recordId', 'action', 'definitionKey', 'status', 'changed', 'target', 'operation', 'hashType', 'targetExisted', 'beforeHash', 'afterHash', 'backup', 'rollback', 'errorCode', 'appliedAt']),
+  undone: new Set(['recordId', 'status', 'restored', 'undoneAt']),
+  'undo-failed': new Set(['recordId', 'status', 'restored', 'recoverablePaths', 'undoneAt']),
+  'undo-verification-failed': new Set(['recordId', 'status', 'restored', 'checkedAt']),
+  'undo-cleanup-pending': new Set(['recordId', 'status', 'restored', 'checkedAt']),
+})
 
 export class ConflictError extends Error {
   constructor(message, statusCode = 422) {
@@ -322,25 +330,81 @@ export function createConflictService(options = {}) {
   }
 
   async function appendRecord(record) {
-    await mkdir(dataDir, { recursive: true })
-    await appendFile(recordFile, `${JSON.stringify(record)}\n`, 'utf8')
-  }
-
-  async function loadRecord(recordId) {
-    if (records.has(recordId)) return records.get(recordId)
+    persistedHistoryRecord(record)
     const contents = await readFile(recordFile, 'utf8').catch((error) => {
       if (error?.code === 'ENOENT') return ''
       throw error
     })
-    let record
+    const snapshot = parseRecordHistory(contents)
+    if (snapshot.sourceStatus === 'partial') {
+      throw new ConflictError('Conflict action history has a partial trailing record; no data was changed.', 409)
+    }
+    await mkdir(dataDir, { recursive: true })
+    await appendFile(recordFile, `${contents && !contents.endsWith('\n') ? '\n' : ''}${JSON.stringify(record)}\n`, 'utf8')
+  }
+
+  function persistedHistoryRecord(entry) {
+    const allowed = entry && typeof entry === 'object' && !Array.isArray(entry) ? HISTORY_FIELDS[entry.status] : null
+    const safeText = (value) => typeof value === 'string' && Boolean(value.trim()) && value.length <= 4_000
+    const validTime = (value) => typeof value === 'string' && !Number.isNaN(Date.parse(value))
+    const validHash = (value) => value === null || typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+    let valid = Boolean(allowed) && Object.keys(entry).every((key) => allowed.has(key)) && safeText(entry.recordId)
+    if (['applied', 'failed'].includes(entry?.status)) {
+      valid &&= actions.has(entry.action) && safeText(entry.definitionKey) && typeof entry.changed === 'boolean' && validTime(entry.appliedAt)
+      if (entry.changed || entry.status === 'failed') {
+        valid &&= safeText(entry.target) && safeText(entry.operation) && ['raw', 'skill', 'tree'].includes(entry.hashType)
+          && typeof entry.targetExisted === 'boolean' && validHash(entry.beforeHash) && validHash(entry.afterHash)
+          && entry.backup && typeof entry.backup === 'object' && !Array.isArray(entry.backup)
+      }
+      if (entry.status === 'failed') valid &&= entry.errorCode === 'ACTION_VERIFICATION_FAILED' && entry.rollback && typeof entry.rollback === 'object' && !Array.isArray(entry.rollback)
+      if (entry.verification !== undefined) valid &&= entry.verification && typeof entry.verification === 'object' && !Array.isArray(entry.verification)
+    } else if (entry?.status === 'undone') {
+      valid &&= entry.restored === true && validTime(entry.undoneAt)
+    } else if (entry?.status === 'undo-failed') {
+      valid &&= entry.restored === false && validTime(entry.undoneAt)
+        && Array.isArray(entry.recoverablePaths) && entry.recoverablePaths.every(safeText)
+    } else if (['undo-verification-failed', 'undo-cleanup-pending'].includes(entry?.status)) {
+      valid &&= entry.restored === true && validTime(entry.checkedAt)
+    }
+    if (!valid) throw new ConflictError('Conflict action history is malformed.', 500)
+    return entry
+  }
+
+  function parseRecordHistory(contents) {
+    const entries = []
     const lines = contents.split('\n')
+    let sourceStatus = 'ok'
     for (let index = 0; index < lines.length; index += 1) {
       if (!lines[index].trim()) continue
       let entry
-      try { entry = JSON.parse(lines[index]) } catch {
-        if (index === lines.length - 1) break
+      try { entry = JSON.parse(lines[index]) } catch (error) {
+        const position = Number(error?.message?.match(/position (\d+)/)?.[1])
+        const incomplete = lines[index].trimStart().startsWith('{')
+          && (error?.message === 'Unexpected end of JSON input'
+            || error?.message?.startsWith('Unterminated string')
+            || Number.isInteger(position) && position >= lines[index].length)
+        if (!contents.endsWith('\n') && incomplete && lines.slice(index + 1).every((line) => !line.trim())) {
+          sourceStatus = 'partial'
+          break
+        }
         throw new ConflictError('Conflict action history is malformed.', 500)
       }
+      entries.push(persistedHistoryRecord(entry))
+    }
+    return { entries, sourceStatus }
+  }
+
+  async function loadRecord(recordId) {
+    const contents = await readFile(recordFile, 'utf8').catch((error) => {
+      if (error?.code === 'ENOENT') return ''
+      throw error
+    })
+    const snapshot = parseRecordHistory(contents)
+    if (snapshot.sourceStatus === 'partial') {
+      throw new ConflictError('Conflict action history has a partial trailing record; no data was changed.', 409)
+    }
+    let record
+    for (const entry of snapshot.entries) {
       if (entry.recordId !== recordId) continue
       if (entry.status === 'applied' && entry.changed && entry.target) record = entry
       else if (record && entry.status === 'undone') record = { ...record, status: 'undone', undoneAt: entry.undoneAt }
@@ -666,6 +730,13 @@ export function createConflictService(options = {}) {
     if (preview.change.operation === 'replace-directory') {
       const replacement = await directorySnapshot(preview.change.replacementSourceDirectory)
       if (replacement.contentHash !== preview.change.afterHash) throw new ConflictError('Replacement source changed after preview.', 409)
+    }
+    const history = parseRecordHistory(await readFile(recordFile, 'utf8').catch((error) => {
+      if (error?.code === 'ENOENT') return ''
+      throw error
+    }))
+    if (history.sourceStatus === 'partial') {
+      throw new ConflictError('Conflict action history has a partial trailing record; no data was changed.', 409)
     }
 
     const recordId = randomUUID()

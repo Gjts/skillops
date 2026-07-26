@@ -1,15 +1,12 @@
-import { Boxes, GitCompareArrows, GitCommit, RefreshCw, Search } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Boxes, ChevronLeft, ChevronRight, GitCompareArrows, GitCommit, RefreshCw, Search } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import type { MessageKey } from '../i18n/messages'
-import { definitionKey, normalizedSkillId, type InventoryIssue } from '../lib/skill-inventory'
 import type {
   ArtifactKind,
-  ArtifactRecord,
   ArtifactRegistrySnapshot,
   ArtifactStatus,
   ArtifactVersionRecord,
-  InstalledSkill,
   Runtime,
 } from '../types'
 
@@ -29,8 +26,6 @@ interface ImportPreview {
 }
 
 interface ArtifactRegistryProps {
-  inventory?: InstalledSkill[]
-  inventoryIssues?: Map<string, Set<InventoryIssue>>
   refreshToken?: string
 }
 
@@ -73,13 +68,6 @@ const compatibilityKeys = {
   unsupported: 'registry.compatibility.unsupported',
 } as const satisfies Record<ArtifactVersionRecord['compatibility'][Runtime], MessageKey>
 
-const issueKeys = {
-  conflict: 'registry.versionConflicts',
-  duplicate: 'registry.duplicateDefinitions',
-  disabled: 'registry.disabledSkills',
-  missing: 'registry.missingMetadata',
-} as const satisfies Record<InventoryIssue, MessageKey>
-
 async function request<T>(pathname: string, body?: object): Promise<T> {
   const response = await fetch(pathname, body === undefined ? undefined : {
     method: 'POST',
@@ -109,18 +97,43 @@ const kinds: Array<ArtifactKind | 'all'> = ['all', 'skill', 'prompt', 'workflow'
 const statuses: Array<ArtifactStatus | 'all'> = ['all', 'draft', 'candidate', 'ready', 'canary', 'stable', 'deprecated', 'blocked']
 const runtimeTargets: Runtime[] = ['codex', 'claude-code', 'cursor']
 const runtimes: Array<Runtime | 'all'> = ['all', ...runtimeTargets]
+const PAGE_SIZE = 50
+const artifactKinds = new Set(kinds)
+const artifactSources = new Set(['all', 'local-scan', 'git', 'github', 'prompt-registry', 'prompthub'])
+const artifactStatuses = new Set(statuses)
+const artifactRuntimes = new Set(runtimes)
 
-export function ArtifactRegistry({ inventory = [], inventoryIssues = new Map(), refreshToken = '' }: ArtifactRegistryProps) {
+function readArtifactLocation() {
+  const params = new URLSearchParams(window.location.search)
+  const kind = params.get('artifactKind') as ArtifactKind | 'all' | null
+  const source = params.get('artifactSource')
+  const status = params.get('artifactStatus') as ArtifactStatus | 'all' | null
+  const runtime = params.get('artifactRuntime') as Runtime | 'all' | null
+  const requestedPage = Number(params.get('artifactPage'))
+  return {
+    query: (params.get('artifactQuery') || '').slice(0, 200),
+    kind: kind && artifactKinds.has(kind) ? kind : 'all' as ArtifactKind | 'all',
+    source: source && artifactSources.has(source) ? source : 'all',
+    status: status && artifactStatuses.has(status) ? status : 'all' as ArtifactStatus | 'all',
+    runtime: runtime && artifactRuntimes.has(runtime) ? runtime : 'all' as Runtime | 'all',
+    owner: (params.get('artifactOwner') || 'all').slice(0, 120),
+    page: Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1,
+  }
+}
+
+export function ArtifactRegistry({ refreshToken = '' }: ArtifactRegistryProps) {
   const { formatNumber, t } = useI18n()
+  const initialLocation = useMemo(readArtifactLocation, [])
   const [snapshot, setSnapshot] = useState<ArtifactRegistrySnapshot | null>(null)
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState('')
-  const [query, setQuery] = useState('')
-  const [kind, setKind] = useState<ArtifactKind | 'all'>('all')
-  const [source, setSource] = useState('all')
-  const [status, setStatus] = useState<ArtifactStatus | 'all'>('all')
-  const [runtime, setRuntime] = useState<Runtime | 'all'>('all')
-  const [owner, setOwner] = useState('all')
+  const [query, setQuery] = useState(initialLocation.query)
+  const [kind, setKind] = useState<ArtifactKind | 'all'>(initialLocation.kind)
+  const [source, setSource] = useState(initialLocation.source)
+  const [status, setStatus] = useState<ArtifactStatus | 'all'>(initialLocation.status)
+  const [runtime, setRuntime] = useState<Runtime | 'all'>(initialLocation.runtime)
+  const [owner, setOwner] = useState(initialLocation.owner)
+  const [page, setPage] = useState(initialLocation.page)
   const [selectedId, setSelectedId] = useState('')
   const [leftId, setLeftId] = useState('')
   const [rightId, setRightId] = useState('')
@@ -133,19 +146,37 @@ export function ArtifactRegistry({ inventory = [], inventoryIssues = new Map(), 
   const loadRequest = useRef(0)
   const compareRequest = useRef(0)
   const importRequest = useRef(0)
-  const loaded = useRef(false)
+  const refreshOnMount = useRef(Boolean(refreshToken))
   const previousRefreshToken = useRef(refreshToken)
 
-  const load = async (refresh = false) => {
+  const load = useCallback(async (refresh = false) => {
     const requestId = ++loadRequest.current
     setBusy(true)
     setError('')
     try {
-      const next = await request<ArtifactRegistrySnapshot>(refresh ? '/api/artifacts/refresh' : '/api/artifacts', refresh ? {} : undefined)
-      if (!Array.isArray(next.artifacts) || !Array.isArray(next.versions) || !Array.isArray(next.installations) || !next.compatibility) {
+      const params = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE) })
+      if (query.trim()) params.set('query', query.trim())
+      if (kind !== 'all') params.set('kind', kind)
+      if (source !== 'all') params.set('source', source)
+      if (status !== 'all') params.set('status', status)
+      if (runtime !== 'all') params.set('runtime', runtime)
+      if (owner !== 'all') params.set('owner', owner)
+      const pathname = `${refresh ? '/api/artifacts/refresh' : '/api/artifacts'}?${params}`
+      const next = await request<ArtifactRegistrySnapshot>(pathname, refresh ? {} : undefined)
+      if (!Array.isArray(next.artifacts) || !Array.isArray(next.versions) || !Array.isArray(next.installations)
+        || !next.compatibility || !next.facets || !next.stats
+        || !Number.isSafeInteger(next.page) || !Number.isSafeInteger(next.totalItems) || !Number.isSafeInteger(next.totalPages)) {
         throw new Error(t('registry.artifactLoadFailed'))
       }
       if (requestId !== loadRequest.current) return
+      if (next.totalPages > 0 && page > next.totalPages) {
+        setPage(next.totalPages)
+        return
+      }
+      if (next.totalPages === 0 && page > 1) {
+        setPage(1)
+        return
+      }
       compareRequest.current += 1
       setDiff(null)
       setSnapshot(next)
@@ -154,19 +185,57 @@ export function ArtifactRegistry({ inventory = [], inventoryIssues = new Map(), 
       if (requestId === loadRequest.current) setError(cause instanceof Error ? cause.message : t('registry.artifactLoadFailed'))
     } finally {
       if (requestId === loadRequest.current) {
-        loaded.current = true
         setBusy(false)
       }
     }
-  }
+  }, [kind, owner, page, query, runtime, source, status, t])
 
-  useEffect(() => { void load() }, [])
+  useEffect(() => {
+    const refresh = refreshOnMount.current
+    refreshOnMount.current = false
+    void load(refresh)
+  }, [load])
 
   useEffect(() => {
     if (!refreshToken || refreshToken === previousRefreshToken.current) return
     previousRefreshToken.current = refreshToken
-    if (loaded.current) void load(true)
-  }, [refreshToken])
+    void load(true)
+  }, [load, refreshToken])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (query) params.set('artifactQuery', query)
+    else params.delete('artifactQuery')
+    if (kind !== 'all') params.set('artifactKind', kind)
+    else params.delete('artifactKind')
+    if (source !== 'all') params.set('artifactSource', source)
+    else params.delete('artifactSource')
+    if (status !== 'all') params.set('artifactStatus', status)
+    else params.delete('artifactStatus')
+    if (runtime !== 'all') params.set('artifactRuntime', runtime)
+    else params.delete('artifactRuntime')
+    if (owner !== 'all') params.set('artifactOwner', owner)
+    else params.delete('artifactOwner')
+    if (page > 1) params.set('artifactPage', String(page))
+    else params.delete('artifactPage')
+    const next = `${window.location.pathname}${params.size ? `?${params}` : ''}`
+    if (`${window.location.pathname}${window.location.search}` !== next) window.history.replaceState({}, '', next)
+  }, [kind, owner, page, query, runtime, source, status])
+
+  useEffect(() => {
+    const restore = () => {
+      const next = readArtifactLocation()
+      setQuery(next.query)
+      setKind(next.kind)
+      setSource(next.source)
+      setStatus(next.status)
+      setRuntime(next.runtime)
+      setOwner(next.owner)
+      setPage(next.page)
+    }
+    window.addEventListener('popstate', restore)
+    return () => window.removeEventListener('popstate', restore)
+  }, [])
 
   const versionsByArtifact = useMemo(() => {
     const grouped = new Map<string, ArtifactVersionRecord[]>()
@@ -174,24 +243,13 @@ export function ArtifactRegistry({ inventory = [], inventoryIssues = new Map(), 
     return grouped
   }, [snapshot])
   const versionsById = useMemo(() => new Map((snapshot?.versions || []).map((version) => [version.id, version])), [snapshot])
-  const owners = useMemo(() => [...new Set((snapshot?.artifacts || []).map((artifact) => artifact.owner))].sort(), [snapshot])
-  const sources = useMemo(() => [...new Set((snapshot?.versions || []).map((version) => version.source))].sort(), [snapshot])
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase()
-    return (snapshot?.artifacts || []).filter((artifact) => {
-      const versions = versionsByArtifact.get(artifact.id) || []
-      return (kind === 'all' || artifact.kind === kind)
-        && (status === 'all' || artifact.status === status)
-        && (owner === 'all' || artifact.owner === owner)
-        && (source === 'all' || versions.some((version) => version.source === source))
-        && (runtime === 'all' || versions.some((version) => version.runtimeTargets.includes(runtime)))
-        && (!needle || `${artifact.id} ${artifact.name} ${artifact.description || ''} ${artifact.repository || ''}`.toLowerCase().includes(needle))
-    })
-  }, [kind, owner, query, runtime, snapshot, source, status, versionsByArtifact])
+  const owners = snapshot?.facets.owners.map((item) => item.value) || []
+  const sources = snapshot?.facets.sources.map((item) => item.value) || []
+  const artifacts = snapshot?.artifacts || []
 
   useEffect(() => {
-    if (!filtered.some((artifact) => artifact.id === selectedId)) setSelectedId(filtered[0]?.id || '')
-  }, [filtered, selectedId])
+    if (!artifacts.some((artifact) => artifact.id === selectedId)) setSelectedId(artifacts[0]?.id || '')
+  }, [artifacts, selectedId])
 
   const selected = snapshot?.artifacts.find((artifact) => artifact.id === selectedId) || null
   const selectedVersions = selected ? versionsByArtifact.get(selected.id) || [] : []
@@ -205,11 +263,6 @@ export function ArtifactRegistry({ inventory = [], inventoryIssues = new Map(), 
     setRightId(selectedVersions[1]?.id || '')
     setDiff(null)
   }, [selectedId, snapshot])
-  const selectedInventoryIssues = selected?.kind === 'skill'
-    ? [...new Set(inventory
-      .filter((row) => selected.id === `skill:${normalizedSkillId(row.skillId)}`)
-      .flatMap((row) => [...(inventoryIssues.get(definitionKey(row)) || [])]))]
-    : []
 
   useEffect(() => {
     compareRequest.current += 1
@@ -248,7 +301,7 @@ export function ArtifactRegistry({ inventory = [], inventoryIssues = new Map(), 
     }
   }
 
-  const driftCount = snapshot?.installations.filter((item) => item.observedState === 'drifted' || item.observedState === 'missing').length || 0
+  const driftCount = snapshot?.stats.driftedInstallations || 0
 
   return (
     <section className="panel artifact-registry" aria-labelledby="artifact-registry-title">
@@ -259,7 +312,7 @@ export function ArtifactRegistry({ inventory = [], inventoryIssues = new Map(), 
           <p>{t('registry.artifactsDescription')}</p>
         </div>
         <div className="artifact-registry-stats">
-          <span><strong>{formatNumber(snapshot?.artifacts.length || 0)}</strong> {t('registry.artifacts')}</span>
+          <span><strong>{formatNumber(snapshot?.stats.totalArtifacts || 0)}</strong> {t('registry.artifacts')}</span>
           <span className={driftCount ? 'has-drift' : ''}><strong>{formatNumber(driftCount)}</strong> {t('registry.drift')}</span>
           <button className="button secondary" type="button" disabled={busy} onClick={() => void load(true)}>
             <RefreshCw size={14} className={busy ? 'spin' : ''} /> {t('governance.refresh')}
@@ -289,26 +342,27 @@ export function ArtifactRegistry({ inventory = [], inventoryIssues = new Map(), 
       </div>
 
       <div className="artifact-filters">
-        <label className="artifact-filter"><span>{t('registry.artifactSearch')}</span><span className="search-field"><Search size={15} /><input placeholder={t('registry.artifactSearch')} value={query} onChange={(event) => setQuery(event.target.value)} /></span></label>
-        <label className="artifact-filter"><span>{t('common.type')}</span><select value={kind} onChange={(event) => setKind(event.target.value as ArtifactKind | 'all')}>{kinds.map((value) => <option key={value} value={value}>{value === 'all' ? t('common.all') : t(kindKeys[value])}</option>)}</select></label>
-        <label className="artifact-filter"><span>{t('common.source')}</span><select value={source} onChange={(event) => setSource(event.target.value)}><option value="all">{t('common.all')}</option>{sources.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-        <label className="artifact-filter"><span>{t('common.status')}</span><select value={status} onChange={(event) => setStatus(event.target.value as ArtifactStatus | 'all')}>{statuses.map((value) => <option key={value} value={value}>{value === 'all' ? t('common.all') : t(statusKeys[value])}</option>)}</select></label>
-        <label className="artifact-filter"><span>{t('common.runtime')}</span><select value={runtime} onChange={(event) => setRuntime(event.target.value as Runtime | 'all')}>{runtimes.map((value) => <option key={value} value={value}>{value === 'all' ? t('common.all') : value}</option>)}</select></label>
-        <label className="artifact-filter"><span>{t('registry.owner')}</span><select value={owner} onChange={(event) => setOwner(event.target.value)}><option value="all">{t('common.all')}</option>{owners.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+        <label className="artifact-filter"><span>{t('registry.artifactSearch')}</span><span className="search-field"><Search size={15} /><input placeholder={t('registry.artifactSearch')} value={query} onChange={(event) => { setPage(1); setQuery(event.target.value) }} /></span></label>
+        <label className="artifact-filter"><span>{t('common.type')}</span><select value={kind} onChange={(event) => { setPage(1); setKind(event.target.value as ArtifactKind | 'all') }}>{kinds.map((value) => <option key={value} value={value}>{value === 'all' ? t('common.all') : t(kindKeys[value])}</option>)}</select></label>
+        <label className="artifact-filter"><span>{t('common.source')}</span><select value={source} onChange={(event) => { setPage(1); setSource(event.target.value) }}><option value="all">{t('common.all')}</option>{sources.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+        <label className="artifact-filter"><span>{t('common.status')}</span><select value={status} onChange={(event) => { setPage(1); setStatus(event.target.value as ArtifactStatus | 'all') }}>{statuses.map((value) => <option key={value} value={value}>{value === 'all' ? t('common.all') : t(statusKeys[value])}</option>)}</select></label>
+        <label className="artifact-filter"><span>{t('common.runtime')}</span><select value={runtime} onChange={(event) => { setPage(1); setRuntime(event.target.value as Runtime | 'all') }}>{runtimes.map((value) => <option key={value} value={value}>{value === 'all' ? t('common.all') : value}</option>)}</select></label>
+        <label className="artifact-filter"><span>{t('registry.owner')}</span><select value={owner} onChange={(event) => { setPage(1); setOwner(event.target.value) }}><option value="all">{t('common.all')}</option>{owners.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
       </div>
 
       {error ? <div className="artifact-error" role="alert">{error}</div> : null}
       {actionError ? <div className="artifact-error" role="alert">{actionError}</div> : null}
+      {snapshot?.sourceStatus === 'partial' ? <div className="data-warning" role="alert">{t('cc.partial')}</div> : null}
       {snapshot?.warnings?.map((warning) => <div key={`${warning.source}:${warning.code}`} className="artifact-warning" role="status">{t('registry.promptSourceUnavailable')}</div>)}
       {busy && !snapshot ? <div className="artifact-empty" role="status">{t('registry.loadingArtifacts')}</div> : null}
-      {!busy && snapshot && !filtered.length ? <div className="artifact-empty" role="status">{t('registry.noArtifacts')}</div> : null}
+      {!busy && snapshot && !artifacts.length ? <div className="artifact-empty" role="status">{t('registry.noArtifacts')}</div> : null}
 
-      {filtered.length ? (
+      {artifacts.length ? (
         <div className="artifact-table-wrap">
           <table className="artifact-table">
             <caption className="sr-only">{t('registry.artifactsTitle')}</caption>
             <thead><tr><th>{t('registry.artifact')}</th><th>{t('common.type')}</th><th>{t('registry.owner')}</th><th>{t('common.status')}</th><th>{t('common.version')}</th><th>{t('registry.installations')}</th></tr></thead>
-            <tbody>{filtered.map((artifact) => {
+            <tbody>{artifacts.map((artifact) => {
               const versions = versionsByArtifact.get(artifact.id) || []
               const installationRows = snapshot?.installations.filter((item) => item.artifactId === artifact.id) || []
               const latest = versions.find((version) => version.status === artifact.status) || versions[0]
@@ -325,11 +379,19 @@ export function ArtifactRegistry({ inventory = [], inventoryIssues = new Map(), 
           </table>
         </div>
       ) : null}
+      {snapshot && snapshot.totalPages > 1 ? (
+        <nav className="runs-pagination-bar registry-pagination" aria-label={t('common.pageOf', { page: formatNumber(snapshot.page), count: formatNumber(snapshot.totalPages) })}>
+          <div className="pagination-controls">
+            <button type="button" aria-label={t('common.previousPage')} disabled={busy || !snapshot.hasPrevious} onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft size={15} /></button>
+            <span role="status">{t('common.pageOf', { page: formatNumber(snapshot.page), count: formatNumber(snapshot.totalPages) })}</span>
+            <button type="button" aria-label={t('common.nextPage')} disabled={busy || !snapshot.hasNext} onClick={() => setPage((value) => Math.min(snapshot.totalPages, value + 1))}><ChevronRight size={15} /></button>
+          </div>
+        </nav>
+      ) : null}
 
       {selected ? (
         <div className="artifact-detail">
           <header><div><span className={statusClass(selected.status)}>{t(statusKeys[selected.status])}</span><h4>{selected.id}</h4></div><p>{selected.description || '—'}</p></header>
-          {selectedInventoryIssues.length ? <div className="artifact-inventory-health"><strong>{t('registry.health')}</strong>{selectedInventoryIssues.map((issue) => <span key={issue} className={statusClass(issue === 'disabled' ? 'unmanaged' : 'blocked')}>{t(issueKeys[issue])}</span>)}</div> : null}
           <div className="artifact-detail-grid">
             <section>
               <h5>{t('registry.versions')}</h5>

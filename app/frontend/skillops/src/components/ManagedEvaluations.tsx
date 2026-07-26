@@ -1,5 +1,5 @@
-import { Ban, BrainCircuit, CheckCircle2, Clock3, Download, ExternalLink, FlaskConical, History, LoaderCircle, LockKeyhole, ShieldCheck } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Ban, BrainCircuit, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Download, ExternalLink, FlaskConical, History, LoaderCircle, LockKeyhole, ShieldCheck } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import type { MessageKey } from '../i18n/messages'
 import { activeProviderRequest, AI_PROVIDERS, createDefaultAiSettings, providerIsConfigured, type AiSettings } from '../lib/ai-settings'
@@ -25,14 +25,24 @@ type EvaluationCaseVariant = {
 
 type ManagedRun = EvaluationRunSummary & { evidenceFresh?: boolean | null }
 type ManagedSuite = EvaluationSuiteMetadata & { policyHash?: string }
+type ManagedSuitePage = {
+  items: ManagedSuite[]
+  page?: number
+  totalItems?: number
+  totalPages?: number
+  hasPrevious?: boolean
+  hasNext?: boolean
+}
+type ManagedRunPage = { items: ManagedRun[]; nextCursor?: string | null; sourceStatus?: 'ok' | 'partial' }
 type ManagedDecisionValue = 'create-candidate' | 'keep-baseline' | 'reject-candidate' | 'collect-more-evidence'
 export type ManagedEvaluationDraft = { baselineRef: string; candidateRef: string }
 type ManagedDecision = {
-  runId: string
+  decisionId: string
+  evaluationRunId: string
   artifactId: string
-  candidateHash: string
+  candidateRefHash: string
   decision: ManagedDecisionValue
-  decidedAt: string
+  recordedAt: string
 }
 const statusKeys: Record<EvaluationRunSummary['status'], MessageKey> = {
   queued: 'evaluations.status.queued', running: 'evaluations.status.running', completed: 'evaluations.status.completed',
@@ -68,12 +78,19 @@ function inferredTarget(reference: string | undefined) {
   return reference && /^local-scan:[^:]+:(?!sha256:)/.test(reference) ? reference : ''
 }
 
-export function ManagedEvaluations({ tab, draft }: { tab: ManagedTab; draft?: ManagedEvaluationDraft | null }) {
+export function ManagedEvaluations({ tab, draft, configureProvider = false }: { tab: ManagedTab; draft?: ManagedEvaluationDraft | null; configureProvider?: boolean }) {
   const { t, formatDateTime, formatNumber } = useI18n()
   const [settings, setSettings] = useState<AiSettings>(createDefaultAiSettings)
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(configureProvider)
   const [suites, setSuites] = useState<ManagedSuite[]>([])
+  const [suitePage, setSuitePage] = useState(1)
+  const [suitePageState, setSuitePageState] = useState({ page: 1, totalItems: 0, totalPages: 0, hasPrevious: false, hasNext: false })
   const [runs, setRuns] = useState<ManagedRun[]>([])
+  const [historyCursor, setHistoryCursor] = useState<string | null>(null)
+  const [historyCursors, setHistoryCursors] = useState<Array<string | null>>([])
+  const [historyNextCursor, setHistoryNextCursor] = useState<string | null>(null)
+  const [historySourceStatus, setHistorySourceStatus] = useState<'ok' | 'partial'>('ok')
+  const [historyPaging, setHistoryPaging] = useState(false)
   const [selectedSuiteId, setSelectedSuiteId] = useState('')
   const [baselineRef, setBaselineRef] = useState('')
   const [candidateRef, setCandidateRef] = useState('')
@@ -88,9 +105,14 @@ export function ManagedEvaluations({ tab, draft }: { tab: ManagedTab; draft?: Ma
   const [error, setError] = useState<string | null>(null)
   const [preflight, setPreflight] = useState(false)
   const [decision, setDecision] = useState<ManagedDecision | null>(null)
+  const [decisionRunId, setDecisionRunId] = useState<string | null>(null)
   const [decisionBusy, setDecisionBusy] = useState(false)
   const [targetSkeleton, setTargetSkeleton] = useState('')
   const [candidateCapabilityId, setCandidateCapabilityId] = useState<string | null>(null)
+  const [candidateEvidenceBound, setCandidateEvidenceBound] = useState(false)
+  const [candidateConflict, setCandidateConflict] = useState(false)
+  const selectedRun = useRef({ runId: null as string | null, generation: 0 })
+  const historyNavigationInFlight = useRef(false)
 
   const providerDefinition = AI_PROVIDERS.find((provider) => provider.id === settings.activeProvider)!
   const selectedSuite = suites.find((suite) => suite.id === selectedSuiteId)
@@ -109,25 +131,61 @@ export function ManagedEvaluations({ tab, draft }: { tab: ManagedTab; draft?: Ma
   }
 
   const loadHistory = useCallback(async () => {
-    const result = await apiJson<{ items: ManagedRun[] }>('/api/evaluation-runs?limit=50')
-    setRuns(result.items)
-  }, [])
+    try {
+      const result = await apiJson<ManagedRunPage>(`/api/evaluation-runs?limit=50${historyCursor ? `&cursor=${encodeURIComponent(historyCursor)}` : ''}`)
+      if (!Array.isArray(result.items)) throw new Error('Managed evaluation history response is invalid.')
+      setRuns(result.items)
+      setHistoryNextCursor(result.nextCursor || null)
+      setHistorySourceStatus(result.sourceStatus || 'ok')
+    } catch {
+      setHistorySourceStatus('partial')
+    }
+  }, [historyCursor])
+
+  const changeHistoryPage = (cursor: string | null, cursors: Array<string | null>) => {
+    if (historyNavigationInFlight.current) return
+    historyNavigationInFlight.current = true
+    setHistoryPaging(true)
+    setHistoryCursors(cursors)
+    setHistoryCursor(cursor)
+  }
 
   useEffect(() => {
     let live = true
-    Promise.all([
-      apiJson<{ items: ManagedSuite[] }>('/api/evaluation-suites'),
-      apiJson<{ items: ManagedRun[] }>('/api/evaluation-runs?limit=50'),
+    Promise.allSettled([
+      apiJson<ManagedSuitePage>(suitePage === 1 ? '/api/evaluation-suites' : `/api/evaluation-suites?page=${suitePage}&pageSize=50`),
+      apiJson<ManagedRunPage>(`/api/evaluation-runs?limit=50${historyCursor ? `&cursor=${encodeURIComponent(historyCursor)}` : ''}`),
     ]).then(([suiteResult, runResult]) => {
       if (!live) return
-      setSuites(suiteResult.items)
-      setRuns(runResult.items)
-      setSelectedSuiteId((current) => current || suiteResult.items[0]?.id || '')
-    }).catch((problem) => {
-      if (live) setError(problem instanceof Error ? problem.message : t('evaluations.managedLoadError'))
-    }).finally(() => { if (live) setLoading(false) })
+      if (suiteResult.status === 'fulfilled' && Array.isArray(suiteResult.value.items)) {
+        const value = suiteResult.value
+        setSuites(value.items)
+        setSuitePageState({
+          page: value.page ?? suitePage,
+          totalItems: value.totalItems ?? value.items.length,
+          totalPages: value.totalPages ?? (value.items.length ? 1 : 0),
+          hasPrevious: value.hasPrevious ?? suitePage > 1,
+          hasNext: value.hasNext ?? false,
+        })
+        setSelectedSuiteId((current) => value.items.some((item) => item.id === current) ? current : value.items[0]?.id || '')
+      } else {
+        setError(suiteResult.status === 'rejected' && suiteResult.reason instanceof Error ? suiteResult.reason.message : t('evaluations.managedLoadError'))
+      }
+      if (runResult.status === 'fulfilled' && Array.isArray(runResult.value.items)) {
+        setRuns(runResult.value.items)
+        setHistoryNextCursor(runResult.value.nextCursor || null)
+        setHistorySourceStatus(runResult.value.sourceStatus || 'ok')
+      } else {
+        setHistorySourceStatus('partial')
+      }
+    }).finally(() => {
+      if (!live) return
+      historyNavigationInFlight.current = false
+      setHistoryPaging(false)
+      setLoading(false)
+    })
     return () => { live = false }
-  }, [t])
+  }, [historyCursor, suitePage, t])
 
   useEffect(() => {
     if (!draft) return
@@ -138,6 +196,7 @@ export function ManagedEvaluations({ tab, draft }: { tab: ManagedTab; draft?: Ma
   }, [draft])
 
   const loadCases = useCallback(async (runId: string) => {
+    const selection = selectedRun.current
     const items: EvaluationCase[] = []
     let cursor: string | null = null
     do {
@@ -146,23 +205,44 @@ export function ManagedEvaluations({ tab, draft }: { tab: ManagedTab; draft?: Ma
       items.push(...result.items)
       cursor = result.nextCursor || null
     } while (cursor && items.length < 1_000)
-    setCases(items)
+    if (selectedRun.current === selection && selection.runId === runId) setCases(items)
   }, [])
 
   const loadDecision = useCallback(async (runId: string) => {
-    const result = await apiJson<{ decision: ManagedDecision | null }>(`/api/evaluation-runs/${encodeURIComponent(runId)}/decision`)
-    setDecision(result.decision)
+    const selection = selectedRun.current
+    const result = await apiJson<{ decision: ManagedDecision | null }>(`/api/evaluations/${encodeURIComponent(runId)}/decision`)
+    if (result.decision?.decision === 'create-candidate') {
+      const capabilities = await apiJson<{ items: Array<{ id: string; targetSkeleton?: string; originEvaluationRunId?: string | null; latestEvidenceRunId?: string | null }> }>(`/api/capabilities?evaluationRunId=${encodeURIComponent(runId)}&pageSize=20`)
+      if (selectedRun.current !== selection || selection.runId !== runId) return
+      const matches = capabilities.items.filter((item) => item.originEvaluationRunId === runId || item.latestEvidenceRunId === runId)
+      const capability = matches.length === 1 ? matches[0] : null
+      setDecision(result.decision)
+      setDecisionRunId(runId)
+      setCandidateCapabilityId(capability?.id || null)
+      setCandidateEvidenceBound(Boolean(capability?.latestEvidenceRunId))
+      setCandidateConflict(matches.length > 1)
+      if (capability?.targetSkeleton) setTargetSkeleton(capability.targetSkeleton)
+    } else {
+      if (selectedRun.current !== selection || selection.runId !== runId) return
+      setDecision(result.decision)
+      setDecisionRunId(runId)
+      setCandidateCapabilityId(null)
+      setCandidateEvidenceBound(false)
+      setCandidateConflict(false)
+    }
   }, [])
 
   useEffect(() => {
     if (!runIsActive(currentRun)) return
     const runId = currentRun!.id
+    const selection = selectedRun.current
+    if (selection.runId !== runId) return
     let stopped = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const poll = async () => {
       try {
         const next = await apiJson<ManagedRun>(`/api/evaluation-runs/${encodeURIComponent(runId)}`)
-        if (stopped) return
+        if (stopped || selectedRun.current !== selection) return
         setCurrentRun(next)
         if (runIsActive(next)) {
           timer = setTimeout(poll, document.visibilityState === 'hidden' ? 5_000 : 1_000)
@@ -170,7 +250,9 @@ export function ManagedEvaluations({ tab, draft }: { tab: ManagedTab; draft?: Ma
           await Promise.all([loadHistory(), loadCases(next.id), loadDecision(next.id)])
         }
       } catch (problem) {
-        if (!stopped) setError(problem instanceof Error ? problem.message : t('evaluations.managedLoadError'))
+        if (!stopped && selectedRun.current === selection) {
+          setError(problem instanceof Error ? problem.message : t('evaluations.managedLoadError'))
+        }
       }
     }
     timer = setTimeout(poll, document.visibilityState === 'hidden' ? 5_000 : 1_000)
@@ -192,11 +274,16 @@ export function ManagedEvaluations({ tab, draft }: { tab: ManagedTab; draft?: Ma
       setSettingsOpen(true)
       return
     }
+    const selection = { runId: null as string | null, generation: selectedRun.current.generation + 1 }
+    selectedRun.current = selection
     setSubmitting(true)
     setError(null)
     setCases([])
     setDecision(null)
+    setDecisionRunId(null)
     setCandidateCapabilityId(null)
+    setCandidateEvidenceBound(false)
+    setCandidateConflict(false)
     setTargetSkeleton(inferredTarget(baselineRef.trim()))
     setPreflight(false)
     try {
@@ -212,37 +299,55 @@ export function ManagedEvaluations({ tab, draft }: { tab: ManagedTab; draft?: Ma
           clientRequestId: crypto.randomUUID(),
         }),
       })
+      if (selectedRun.current !== selection) return
+      selectedRun.current = { runId: result.run.id, generation: selection.generation }
       setCurrentRun(result.run)
+      setHistoryCursor(null)
+      setHistoryCursors([])
       setRuns((current) => [result.run, ...current.filter((run) => run.id !== result.run.id)])
     } catch (problem) {
-      setError(problem instanceof Error ? problem.message : t('evaluations.managedRunError'))
+      if (selectedRun.current === selection) {
+        setError(problem instanceof Error ? problem.message : t('evaluations.managedRunError'))
+      }
     } finally {
       setSubmitting(false)
     }
   }
 
   const cancelRun = async () => {
-    if (!currentRun || !runIsActive(currentRun)) return
+    const run = currentRun
+    const selection = selectedRun.current
+    if (!run || !runIsActive(run) || selection.runId !== run.id) return
     try {
-      const result = await apiJson<{ summary: ManagedRun }>(`/api/evaluation-runs/${encodeURIComponent(currentRun.id)}/cancel`, {
+      const result = await apiJson<{ summary: ManagedRun }>(`/api/evaluation-runs/${encodeURIComponent(run.id)}/cancel`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
       })
+      if (selectedRun.current !== selection) return
       setCurrentRun(result.summary)
       await loadHistory()
     } catch (problem) {
-      setError(problem instanceof Error ? problem.message : t('evaluations.managedCancelError'))
+      if (selectedRun.current === selection) {
+        setError(problem instanceof Error ? problem.message : t('evaluations.managedCancelError'))
+      }
     }
   }
 
   const openRun = async (run: ManagedRun) => {
+    const selection = { runId: run.id, generation: selectedRun.current.generation + 1 }
+    selectedRun.current = selection
     setCurrentRun(run)
     setCases([])
     setDecision(null)
+    setDecisionRunId(null)
     setCandidateCapabilityId(null)
+    setCandidateEvidenceBound(false)
+    setCandidateConflict(false)
     setTargetSkeleton(inferredTarget(run.baseline.sourceRef))
     if (!runIsActive(run)) {
       try { await Promise.all([loadCases(run.id), loadDecision(run.id)]) } catch (problem) {
-        setError(problem instanceof Error ? problem.message : t('evaluations.managedLoadError'))
+        if (selectedRun.current === selection) {
+          setError(problem instanceof Error ? problem.message : t('evaluations.managedLoadError'))
+        }
       }
     }
   }
@@ -258,20 +363,19 @@ export function ManagedEvaluations({ tab, draft }: { tab: ManagedTab; draft?: Ma
     return `${item.caseId} ${labels}`.toLowerCase().includes(query)
   }), [caseFilter, caseQuery, cases])
 
-  const currentSuite = suites.find((suite) => suite.id === currentRun?.suiteId && suite.suiteHash === currentRun?.suiteHash)
-  const eligible = eligibleCases(currentSuite)
   const evaluated = currentRun?.metrics?.casesTotal || 0
-  const suiteCaseCoverage = eligible ? evaluated / eligible * 100 : null
+  const eligible = currentRun?.metrics?.eligibleCases || 0
+  const suiteCaseCoverage = currentRun?.metrics?.suiteCaseCoveragePct ?? null
   const regressions = cases.filter((item) => item.baseline.pass && !item.candidate.pass)
   const evidenceSufficient = currentRun?.status === 'completed'
     && currentRun.gateResult === 'passed'
     && currentRun.evidenceFresh === true
     && evaluated > 0
     && suiteCaseCoverage === 100
+    && currentRun.gates.some((gate) => gate.id === 'suite-case-coverage' && gate.status === 'passed')
 
-  const saveDecision = async (value: ManagedDecisionValue) => {
-    if (!currentRun) throw new Error(t('evaluations.managedLoadError'))
-    return apiJson<{ decision: ManagedDecision }>(`/api/evaluation-runs/${encodeURIComponent(currentRun.id)}/decision`, {
+  const saveDecision = async (runId: string, value: ManagedDecisionValue) => {
+    return apiJson<{ decision: ManagedDecision }>(`/api/evaluations/${encodeURIComponent(runId)}/decision`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ decision: value }),
@@ -279,12 +383,17 @@ export function ManagedEvaluations({ tab, draft }: { tab: ManagedTab; draft?: Ma
   }
 
   const recordDecision = async (value: Exclude<ManagedDecisionValue, 'create-candidate'>) => {
-    if (decisionBusy) return
+    const runId = currentRun?.id
+    const selection = selectedRun.current
+    if (decisionBusy || !runId || decisionRunId !== runId || selection.runId !== runId) return
     setDecisionBusy(true)
     setError(null)
     setCandidateCapabilityId(null)
+    setCandidateEvidenceBound(false)
+    setCandidateConflict(false)
     try {
-      setDecision((await saveDecision(value)).decision)
+      const recorded = (await saveDecision(runId, value)).decision
+      if (selectedRun.current === selection) setDecision(recorded)
     } catch (problem) {
       setError(problem instanceof Error ? problem.message : t('evaluations.managedRunError'))
     } finally {
@@ -293,29 +402,39 @@ export function ManagedEvaluations({ tab, draft }: { tab: ManagedTab; draft?: Ma
   }
 
   const createCandidate = async () => {
-    if (!currentRun || !targetSkeleton.trim() || decisionBusy) return
+    const run = currentRun
+    const selection = selectedRun.current
+    if (!run || !evidenceSufficient || selection.runId !== run.id || decisionRunId !== run.id || !targetSkeleton.trim() || decisionBusy || candidateConflict
+      || (candidateCapabilityId && candidateEvidenceBound)
+      || (decision && (decision.evaluationRunId !== run.id || decision.decision !== 'create-candidate'))) return
     setDecisionBusy(true)
     setError(null)
-    setCandidateCapabilityId(null)
     try {
-      const nominated = await apiJson<{ capability: { id: string; latestEvidenceRunId?: string | null } }>('/api/capabilities', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          artifact: currentRun.candidate,
-          baseline: currentRun.baseline,
-          targetSkeleton: targetSkeleton.trim(),
-        }),
-      })
-      if (nominated.capability.latestEvidenceRunId !== currentRun.id) {
-        await apiJson(`/api/capabilities/${encodeURIComponent(nominated.capability.id)}/evaluate`, {
+      const recorded = await saveDecision(run.id, 'create-candidate')
+      const capability = candidateCapabilityId
+        ? { id: candidateCapabilityId, latestEvidenceRunId: candidateEvidenceBound ? run.id : null }
+        : (await apiJson<{ capability: { id: string; latestEvidenceRunId?: string | null } }>('/api/capabilities', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              artifact: run.candidate,
+              baseline: run.baseline,
+              targetSkeleton: targetSkeleton.trim(),
+              evaluationRunId: run.id,
+            }),
+          })).capability
+      if (capability.latestEvidenceRunId !== run.id) {
+        await apiJson(`/api/capabilities/${encodeURIComponent(capability.id)}/evaluate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ runId: currentRun.id }),
+          body: JSON.stringify({ runId: run.id }),
         })
       }
-      setDecision((await saveDecision('create-candidate')).decision)
-      setCandidateCapabilityId(nominated.capability.id)
+      if (selectedRun.current !== selection) return
+      setDecision(recorded.decision)
+      setCandidateCapabilityId(capability.id)
+      setCandidateEvidenceBound(true)
+      setCandidateConflict(false)
     } catch (problem) {
       setError(problem instanceof Error ? problem.message : t('evaluations.managedRunError'))
     } finally {
@@ -339,6 +458,13 @@ export function ManagedEvaluations({ tab, draft }: { tab: ManagedTab; draft?: Ma
                 <code>{item.suiteHash.slice(0, 12)}</code>
               </button>
             ))}</div> : <p className="managed-empty-copy" role="status">{t('evaluations.noSuites')}</p>}
+            {suitePageState.totalPages > 1 && <nav className="runs-pagination-bar registry-pagination" aria-label={t('common.pageOf', { page: formatNumber(suitePageState.page), count: formatNumber(suitePageState.totalPages) })}>
+              <div className="pagination-controls">
+                <button type="button" aria-label={t('common.previousPage')} disabled={!suitePageState.hasPrevious} onClick={() => setSuitePage((value) => Math.max(1, value - 1))}><ChevronLeft size={15} /></button>
+                <span role="status" aria-live="polite">{t('common.pageOf', { page: formatNumber(suitePageState.page), count: formatNumber(suitePageState.totalPages) })}</span>
+                <button type="button" aria-label={t('common.nextPage')} disabled={!suitePageState.hasNext} onClick={() => setSuitePage((value) => Math.min(suitePageState.totalPages, value + 1))}><ChevronRight size={15} /></button>
+              </div>
+            </nav>}
           </section>
 
           {selectedSuite && <section className="panel managed-run-form" aria-labelledby="managed-run-title">
@@ -378,12 +504,29 @@ export function ManagedEvaluations({ tab, draft }: { tab: ManagedTab; draft?: Ma
 
       {tab === 'history' && <section className="panel managed-history" aria-labelledby="managed-history-title">
         <header className="panel-header"><div><h2 id="managed-history-title">{t('evaluations.historyTitle')}</h2><span>{t('evaluations.historyDescription')}</span></div><History size={18} /></header>
+        {historySourceStatus === 'partial' && <div className="data-warning" role="alert">{t('cc.partial')}</div>}
         {runs.length ? <div className="managed-history-list">{runs.map((run) => (
           <button key={run.id} type="button" className={currentRun?.id === run.id ? 'managed-history-row selected' : 'managed-history-row'} onClick={() => void openRun(run)}>
             <span className={`managed-status ${run.status}`}>{runIsActive(run) ? <Clock3 size={13} /> : run.status === 'completed' ? <CheckCircle2 size={13} /> : <Ban size={13} />}{t(statusKeys[run.status])}</span>
             <strong>{run.suiteId || run.mode}</strong><span>{run.candidate.artifactId} · {run.candidate.version}</span><small>{formatDateTime(run.requestedAt)}</small>
           </button>
         ))}</div> : <p className="managed-empty-copy" role="status">{t('evaluations.noHistory')}</p>}
+        {(historyCursors.length > 0 || historyNextCursor) && <nav className="runs-pagination-bar registry-pagination" aria-label={t('evaluations.historyTitle')} aria-busy={historyPaging}>
+          <div className="pagination-controls">
+            <button type="button" aria-label={t('common.previousPage')} disabled={historyPaging || !historyCursors.length} onClick={() => {
+              const previous = historyCursors.at(-1) ?? null
+              changeHistoryPage(previous, historyCursors.slice(0, -1))
+            }}><ChevronLeft size={15} /></button>
+            <span role="status" aria-live="polite">{t('common.pageOf', {
+              page: formatNumber(historyCursors.length + 1),
+              count: historyNextCursor ? `${formatNumber(historyCursors.length + 2)}+` : formatNumber(historyCursors.length + 1),
+            })}</span>
+            <button type="button" aria-label={t('common.nextPage')} disabled={historyPaging || !historyNextCursor} onClick={() => {
+              if (!historyNextCursor) return
+              changeHistoryPage(historyNextCursor, [...historyCursors, historyCursor])
+            }}><ChevronRight size={15} /></button>
+          </div>
+        </nav>}
       </section>}
 
       {currentRun && <section className="panel managed-run-result" aria-labelledby="managed-result-title">
@@ -426,10 +569,10 @@ export function ManagedEvaluations({ tab, draft }: { tab: ManagedTab; draft?: Ma
           <h3 id="managed-decision-title">{t('evaluations.decisionTitle')}</h3>
           <label><span>{t('evaluations.targetSkeleton')}</span><input value={targetSkeleton} onChange={(event) => setTargetSkeleton(event.target.value)} placeholder="local-scan:codex:…/SKILL.md" /></label>
           <div>
-            <button className="button primary" type="button" disabled={decisionBusy || !targetSkeleton.trim()} onClick={() => void createCandidate()}>{t('evaluations.createCandidate')}</button>
-            <button className="button secondary" type="button" disabled={decisionBusy} onClick={() => void recordDecision('keep-baseline')}>{t('evaluations.keepBaseline')}</button>
-            <button className="button secondary" type="button" disabled={decisionBusy} onClick={() => void recordDecision('reject-candidate')}>{t('evaluations.rejectCandidate')}</button>
-            <button className="button secondary" type="button" disabled={decisionBusy} onClick={() => void recordDecision('collect-more-evidence')}>{t('evaluations.collectMoreEvidence')}</button>
+            <button className="button primary" type="button" disabled={!evidenceSufficient || decisionRunId !== currentRun.id || decisionBusy || !targetSkeleton.trim() || candidateConflict || Boolean(candidateCapabilityId && candidateEvidenceBound) || Boolean(decision && decision.decision !== 'create-candidate')} onClick={() => void createCandidate()}>{candidateCapabilityId && !candidateEvidenceBound ? t('evaluations.continueCandidate') : t('evaluations.createCandidate')}</button>
+            <button className="button secondary" type="button" disabled={decisionRunId !== currentRun.id || decisionBusy || Boolean(decision)} onClick={() => void recordDecision('keep-baseline')}>{t('evaluations.keepBaseline')}</button>
+            <button className="button secondary" type="button" disabled={decisionRunId !== currentRun.id || decisionBusy || Boolean(decision)} onClick={() => void recordDecision('reject-candidate')}>{t('evaluations.rejectCandidate')}</button>
+            <button className="button secondary" type="button" disabled={decisionRunId !== currentRun.id || decisionBusy || Boolean(decision)} onClick={() => void recordDecision('collect-more-evidence')}>{t('evaluations.collectMoreEvidence')}</button>
           </div>
           {decision && <p role="status">{t('evaluations.decisionRecorded', {
             decision: decision.decision === 'create-candidate'
@@ -440,7 +583,8 @@ export function ManagedEvaluations({ tab, draft }: { tab: ManagedTab; draft?: Ma
                   ? t('evaluations.rejectCandidate')
                   : t('evaluations.collectMoreEvidence'),
           })}</p>}
-          {candidateCapabilityId && <a className="button secondary" href={`/releases?capability=${encodeURIComponent(candidateCapabilityId)}`}>{t('evaluations.openReleases')}</a>}
+          {candidateConflict && <p className="evaluation-error" role="alert">{t('evaluations.candidateConflict')}</p>}
+          {candidateCapabilityId && candidateEvidenceBound && <a className="button secondary" href={`/releases?capability=${encodeURIComponent(candidateCapabilityId)}`}>{t('evaluations.openReleases')}</a>}
         </section>}
         {cases.length > 0 && <div className="managed-case-results">
           <div className="managed-case-toolbar"><strong>{t('evaluations.caseResults')}</strong><input aria-label={t('evaluations.filterCases')} placeholder={t('evaluations.filterCases')} value={caseQuery} onChange={(event) => setCaseQuery(event.target.value)} /><select aria-label={t('evaluations.caseStatus')} value={caseFilter} onChange={(event) => setCaseFilter(event.target.value as typeof caseFilter)}><option value="all">{t('common.all')}</option><option value="passed">{t('evaluations.passed')}</option><option value="failed">{t('evaluations.failed')}</option></select></div>

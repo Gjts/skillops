@@ -52,14 +52,14 @@ The result is a closed loop from runtime evidence to governed change, without tu
 
 | Surface | What it answers | Safety boundary |
 | --- | --- | --- |
-| **Command Center** | Is the local control plane healthy, and what deserves attention next? | Bounded aggregate projection; discovery never counts as execution |
+| **Command Center** | Is the local control plane healthy, and what deserves attention next today or across 7/14/30 days? | Seven-area readiness, at most three evidence-backed actions, honest ratio denominators, true empty state, and no discovery-as-execution |
 | **Agents** | Which Agent definitions exist, and which Agents have real lifecycle evidence? | Definitions and observed activity remain separate, runtime-scoped facts |
 | **Activity** | Which Skills ran, where, for how long, at what reported cost, and with which known outcome? | Server-paginated normalized metadata; missing cost stays unreported |
-| **Assets** | Which definitions are duplicated, disabled, shadowed, conflicting, or drifting? | Live scan, exact Diff, preview, backup, rescan, and undo |
-| **Benchmarks** | Is a candidate measurably better than its baseline? | Quick Compare stays in memory; only sanitized Managed Suite evidence persists |
-| **Releases** | Which immutable version has fresh evidence, independent approval, and a valid target? | Existing Capability stages, preview/apply, rescan, and rollback |
+| **Assets** | Which definitions are duplicated, disabled, shadowed, conflicting, or drifting? | Bounded server pages over cached metadata; explicit rescan, exact Diff, preview, backup, and undo |
+| **Benchmarks** | Is a candidate measurably better than its baseline, and what is the final decision for that run? | Quick Compare stays in memory; only sanitized Managed Suite evidence and one final Decision persist |
+| **Releases** | Which immutable version has fresh evidence, independent approval, and a valid target? | One Managed Suite run can originate at most one Release Candidate; approval requires an authenticated configured principal |
 | **Settings** | Are runtimes connected, where are provider settings stored, and how is local data controlled? | Loopback inspection, direct normalized export, backup-first clear, no credential echo |
-| **Advanced** | Which Team, template, Prompt Registry, and audit controls are available? | Local Git authority, scoped credentials, and explicit mutations |
+| **Advanced** | Which Team, template, Prompt Registry, and audit controls are available? | Canonical Team route is `/settings?section=advanced-team`; `/team` redirects there |
 
 Artifact identities are kind-scoped. Immutable versions bind the exact Git commit when available and a deterministic SHA-256 content hash.
 
@@ -100,6 +100,12 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173). Run one real Skill invocation and confirm a non-discovery lifecycle event before treating the connection as verified.
 
+The connection dialog reads `GET /api/setup/preflight` before installation. It
+reports the Node.js minimum/version check, Git availability, loopback API,
+local-data probe availability and writability, runtime inspection availability,
+and sanitized adapter reference health without returning configuration paths or
+credentials.
+
 Adapter details:
 
 - [Codex installation, scope, privacy, and uninstall](adapters/codex/README.md)
@@ -118,7 +124,9 @@ SkillOps is local software, not a hosted telemetry service.
 | **Credentials** | AI settings are written only after an explicit save to `data/ai-settings.json`. Keys never enter events, exports, diagnostics, or evaluation evidence. |
 | **Quick Compare** | Tasks, Skill bodies, workspace excerpts, outputs, and judge responses stay in browser memory. |
 | **Managed evaluation** | Promptfoo runs in an isolated temporary environment with cache, telemetry, update checks, sharing, and remote generation disabled. Only sanitized summaries and hashes persist. |
+| **Managed Decision** | A completed Managed Suite run accepts one final `create-candidate`, `keep-baseline`, `reject-candidate`, or `collect-more-evidence` Decision. Same-value retries are idempotent; changing the judgment requires a new run. |
 | **Evidence semantics** | Discovery proves presence, not execution. A completed lifecycle with `outcome: unknown` is not counted as success. |
+| **Approval identity** | Candidate approval and protected governance reads require a configured authenticated Bearer principal. The local OS-account fallback is not accepted for approval. |
 | **Release source** | Git commits and content hashes identify releasable assets. PromptHub cannot replace Stable or block offline rollback. |
 
 Read the full [privacy and security model](docs/develop/security/privacy-security.md) before connecting a provider or collecting Team metadata.
@@ -144,7 +152,7 @@ Run every command from the repository root.
 | Build and run the loopback production server | `npm run build && npm start` |
 | Run automated tests | `npm test` |
 | Run the production smoke scenario | `npm run smoke` |
-| Run deterministic 100k-event / 5k-definition performance acceptance | `npm run performance` |
+| Run deterministic 100k-event / 5k-definition endpoint acceptance (not the complete RC gate) | `npm run performance` |
 | Check Markdown links | `npm run docs:check` |
 | List Managed Suites | `npm run eval:list` |
 | Run a Managed Suite | `npm run eval:run -- --suite <id> --baseline <ref> --candidate <ref> --provider <id>` |
@@ -184,15 +192,22 @@ Start with the [system architecture](docs/develop/architecture/system_architectu
 | Prompt contributor | [Local Prompt Registry contract](docs/develop/integrations/prompt-registry.md) |
 | Event producer | [Event model](docs/develop/data/event_model.md) |
 | Security reviewer | [Privacy and security](docs/develop/security/privacy-security.md) |
-| Release reviewer | [Release Candidate evidence](docs/develop/operations/rc-evidence/v0.3.2-rc.1.md) |
+| Release reviewer | [Product RC verification record](docs/develop/operations/rc-evidence/v0.3.2-rc.1.md) |
 | Maintainer | [Complete documentation map](docs/README.md) |
 
 ## Current scope and known limits
 
 - Product state: local + Git **Limited Preview**. P0 implementation is present,
   but general RC promotion remains blocked on the five-person validation sample,
-  manual independent-review/keyboard evidence, and the deferred current-candidate
-  macOS run. See the [release evidence record](docs/develop/operations/rc-evidence/v0.3.2-rc.1.md).
+  independent defect/keyboard review, the corrected-candidate four-job matrix,
+  immutable-candidate real-runtime, Broken-to-Repair, performance, browser/axe
+  evidence, the dependency-risk decision, and complete evidence-packet fields.
+  See the [release evidence record](docs/develop/operations/rc-evidence/v0.3.2-rc.1.md).
+- The current four-job cross-platform baseline passed on Ubuntu/Node 22,
+  macOS/Node 22, Windows/Node 22, and Ubuntu/Node 24:
+  [GitHub Actions run 30145860716](https://github.com/Gjts/skillops/actions/runs/30145860716).
+- P1 remains gated until every P0 external and human evidence gate above is
+  closed; planned SET/ACT/AST work is not part of this implemented release.
 - PromptHub v1 is a read connector. It can list and diff remote versions, but cannot publish, promote, or provide the unsupported push-only and bidirectional modes.
 - Team mode remains local. SaaS tenancy, authenticated network deployment, SSO, and SCIM are deferred.
 - The pinned Promptfoo dependency inherits known transitive `npm audit` advisories. Isolation reduces exposure but does not remove dependency risk. See the [dated advisory and upgrade contract](docs/develop/integrations/promptfoo.md#known-dependency-advisory).

@@ -54,13 +54,14 @@ flowchart LR
 
 | 界面 | 能回答的问题 | 安全边界 |
 | --- | --- | --- |
-| **Overview 与 Runs** | 哪些 Skill 在哪里运行、耗时多久、报告了多少成本、结果是否已知？ | 仅归一化元数据 |
-| **Registry 与冲突中心** | 哪些定义重复、禁用、被遮蔽、冲突或发生漂移？ | 预览、精确 Diff、备份、重扫与撤销 |
-| **Skill Lab 与 Managed Suites** | 候选版本是否可测量地优于基线？ | Quick Compare 仅驻留内存，持久证据均已清洗 |
-| **Governance** | 哪个不可变版本具备新鲜证据、独立审批和有效发布目标？ | Candidate、Canary、Stable、弃用与回滚门禁 |
-| **Prompt Registry** | 当前使用了哪个已提交 Prompt 版本及组件哈希？ | Git 是事实源，Prompt 正文不会越过后端边界 |
-| **Team 控制平面** | 谁能审批、发布、收集元数据或批准策略例外？ | 本地 RBAC、最小权限令牌、保留策略与哈希链审计 |
-| **项目模板** | 受治理的团队基线能否预览、采用、升级和回滚？ | 迁移使用审查分支、精确哈希、不静默覆盖 |
+| **Command Center** | 本地控制平面是否健康；今天或最近 7/14/30 天最该处理什么？ | 七类 Readiness、最多三项有证据的 Next Action、公开分母的真实指标、真实空状态；Discovery 不计执行 |
+| **Agents** | 哪些 Agent 定义存在，哪些 Agent 有真实生命周期证据？ | Definitions 与 Observed Activity 分离，事实按 Runtime 隔离 |
+| **Activity** | 哪些 Skill 运行过、在哪里、多久、报告了多少成本、结果是否已知？ | 服务端分页的归一化元数据；缺失成本保持未报告 |
+| **Assets** | 哪些定义重复、禁用、被遮蔽、冲突或发生漂移？ | 缓存元数据的有界服务端分页；显式重扫、精确 Diff、预览、备份与撤销 |
+| **Benchmarks** | Candidate 是否优于 Baseline；本次 Run 的最终 Decision 是什么？ | Quick Compare 仅驻留内存；只持久化清洗后的 Managed Suite 证据与单一最终 Decision |
+| **Releases** | 哪个不可变版本具备新鲜证据、独立审批和有效发布目标？ | 一个 Managed Suite Run 最多产生一个 Release Candidate；审批必须使用已配置的认证 Principal |
+| **Settings** | Runtime 是否已连接、Provider 设置存在哪里、本地数据如何控制？ | Loopback 检查、直接归一化导出、先备份后清除、不回显凭据 |
+| **Advanced** | Team、模板、Prompt Registry 与审计控件有哪些？ | Team 的规范路由是 `/settings?section=advanced-team`；`/team` 会重定向到该地址 |
 
 Artifact 身份按种类隔离。不可变版本在可用时绑定精确 Git commit，并包含确定性的 SHA-256 内容哈希。
 
@@ -102,6 +103,10 @@ npm run dev
 
 打开 [http://localhost:5173](http://localhost:5173)。真实调用一次 Skill，并确认出现非 discovery 生命周期事件后，才能将连接视为已验证。
 
+安装前，连接对话框会读取 `GET /api/setup/preflight`，检查 Node.js
+最低/当前版本、Git、Loopback API、本地数据目录探测是否可用及是否可写、
+Runtime 检查是否可用及经过清洗的适配器引用健康状态；响应不会返回配置路径或凭据。
+
 适配器详情：
 
 - [Codex 安装、作用域、隐私与卸载](adapters/codex/README.md)
@@ -121,7 +126,9 @@ SkillOps 是本地软件，不是托管遥测服务。
 | **凭据** | 仅在用户显式保存后，AI 设置才写入 `data/ai-settings.json`。Key 不进入事件、导出、诊断或评测证据。 |
 | **Quick Compare** | 任务、Skill 正文、Workspace 摘录、输出和 Judge 响应只驻留浏览器内存。 |
 | **Managed Evaluation** | Promptfoo 在隔离临时环境中运行，缓存、遥测、更新检查、分享和远程生成均被禁用。仅持久化清洗后的摘要和哈希。 |
+| **Managed Decision** | 已完成的 Managed Suite Run 只接受一个最终的 `create-candidate`、`keep-baseline`、`reject-candidate` 或 `collect-more-evidence` Decision。同值重试幂等；改变判断必须新建 Run。 |
 | **证据语义** | Discovery 只证明存在，不证明执行。`outcome: unknown` 的完成生命周期不会计为成功。 |
+| **审批身份** | Candidate 审批和受保护的治理读取需要已配置、已认证的 Bearer Principal；审批不接受本地 OS 账号回退。 |
 | **发布事实源** | Git commit 与内容哈希标识可发布资产。PromptHub 不能替换 Stable，也不能阻止离线回滚。 |
 
 连接模型供应商或采集团队元数据前，请阅读完整的[隐私与安全模型](docs/develop/security/privacy-security.md)。
@@ -147,6 +154,7 @@ Codex 与 Claude Code 中的 Rules 可在资产清单中发现，但两者目前
 | 构建并运行 Loopback 生产服务 | `npm run build && npm start` |
 | 运行自动化测试 | `npm test` |
 | 运行生产 Smoke 场景 | `npm run smoke` |
+| 运行确定性的 100k 事件 / 5k 定义端点验收（不是完整 RC 门禁） | `npm run performance` |
 | 检查 Markdown 链接 | `npm run docs:check` |
 | 列出 Managed Suites | `npm run eval:list` |
 | 运行 Managed Suite | `npm run eval:run -- --suite <id> --baseline <ref> --candidate <ref> --provider <id>` |
@@ -192,7 +200,16 @@ data/                   Git 忽略的本地生成状态
 
 ## 当前范围与已知限制
 
-- 产品状态：本地 + Git 发布候选版本。
+- 产品状态：本地 + Git **Limited Preview**。P0 实现已经存在，但通用
+  RC 晋级仍受五人验证样本、独立缺陷/键盘审查、审计修正 Candidate
+  的四任务矩阵、不可变 Candidate 上的真实 Runtime、Broken→Repair、性能、
+  浏览器/axe 证据、依赖风险决策与完整证据包字段约束。
+  参见[产品 RC 验证记录](docs/develop/operations/rc-evidence/v0.3.2-rc.1.md)。
+- 当前四任务跨平台基线已在 Ubuntu/Node 22、macOS/Node 22、
+  Windows/Node 22 与 Ubuntu/Node 24 通过：
+  [GitHub Actions run 30145860716](https://github.com/Gjts/skillops/actions/runs/30145860716)。
+- 在上述全部 P0 外部与人工证据门禁关闭之前，P1 保持门禁状态；计划中的
+  SET/ACT/AST 不属于当前已实现版本。
 - PromptHub v1 是只读 Connector。它可以列出和 Diff 远程版本，但不能发布、提升，也不提供未受支持的 push-only 和双向模式。
 - Team 模式仍为本地模式。SaaS 租户、带认证的网络部署、SSO 与 SCIM 均已延后。
 - 固定版本的 Promptfoo 依赖继承了已知的传递性 `npm audit` 风险。隔离降低了暴露面，但不会消除依赖风险。参见[带日期的风险说明与升级契约](docs/develop/integrations/promptfoo.md#known-dependency-advisory)。

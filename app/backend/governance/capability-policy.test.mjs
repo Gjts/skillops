@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_GATE_POLICY, evaluateGatePolicy, evaluateRedteamGatePolicy, evidenceIsStale, gatePolicyHash, normalizeGatePolicy } from './capability-policy.mjs'
+import { canonicalJson } from '../evaluations/suite-registry.mjs'
+import { DEFAULT_GATE_POLICY, evaluateGatePolicy, evaluateRedteamGatePolicy, evidenceIsStale, gatePolicyHash, gatePolicyIntegrityMatches, normalizeGatePolicy } from './capability-policy.mjs'
 
 const metrics = {
-  baselineScore: 80, candidateScore: 80, scoreDeltaPp: 0, casesPassed: 100, casesTotal: 100,
+  baselineScore: 80, candidateScore: 80, scoreDeltaPp: 0, casesPassed: 100, casesTotal: 100, eligibleCases: 100, suiteCaseCoveragePct: 100,
   passRatePct: 100, regressionRatePct: 0, baselineTokens: null, candidateTokens: null,
   baselineCostUsd: null, candidateCostUsd: null, costDeltaPct: null,
   baselineP95LatencyMs: 100, candidateP95LatencyMs: 120, latencyDeltaPct: 20,
@@ -48,10 +50,23 @@ describe('capability gate policy', () => {
   it('rejects undersized samples and any failed case by default', () => {
     const result = evaluateGatePolicy({ metrics: { ...metrics, casesPassed: 0, casesTotal: 1 } })
     expect(result.gateResult).toBe('failed')
-    expect(result.gates.slice(0, 2)).toEqual([
+    expect(result.gates.filter((gate) => ['sample-size', 'failed-cases'].includes(gate.id))).toEqual([
       { id: 'sample-size', status: 'failed', blocking: true },
       { id: 'failed-cases', status: 'failed', blocking: true },
     ])
+  })
+
+  it('fails closed when authoritative Suite case coverage is incomplete or unavailable', () => {
+    const incomplete = evaluateGatePolicy({ metrics: { ...metrics, casesPassed: 99, casesTotal: 99 } })
+    expect(incomplete.gates.find((gate) => gate.id === 'suite-case-coverage')).toEqual({
+      id: 'suite-case-coverage', status: 'failed', blocking: true,
+    })
+    const legacy = evaluateGatePolicy({ metrics: { ...metrics, eligibleCases: undefined, suiteCaseCoveragePct: 100 } })
+    expect(legacy.gates.find((gate) => gate.id === 'suite-case-coverage')).toEqual({
+      id: 'suite-case-coverage', status: 'not-available', blocking: true,
+    })
+    expect(incomplete.gateResult).toBe('failed')
+    expect(legacy.gateResult).toBe('failed')
   })
 
   it('fails values immediately outside every threshold', () => {
@@ -62,7 +77,7 @@ describe('capability gate policy', () => {
       criticalFindings: 1, highFindings: 1,
     } })
     expect(result.gates.filter((gate) => gate.status === 'failed').map((gate) => gate.id)).toEqual([
-      'sample-size', 'failed-cases', 'candidate-score', 'score-delta', 'pass-rate',
+      'sample-size', 'suite-case-coverage', 'failed-cases', 'candidate-score', 'score-delta', 'pass-rate',
       'regression-rate', 'cost-increase', 'latency-increase', 'critical-findings',
       'high-findings',
     ])
@@ -76,9 +91,21 @@ describe('capability gate policy', () => {
     expect(evidenceIsStale({ policyHash: hash }, { ...DEFAULT_GATE_POLICY, minCandidateScore: 81 })).toBe(true)
   })
 
+  it('accepts only the exact pre-coverage Policy Pack hash', () => {
+    const legacyPolicy = { ...DEFAULT_GATE_POLICY }
+    delete legacyPolicy.minSuiteCaseCoveragePct
+    const legacyHash = createHash('sha256').update(canonicalJson(legacyPolicy), 'utf8').digest('hex')
+
+    expect(gatePolicyIntegrityMatches(legacyPolicy, legacyHash)).toBe(true)
+    expect(gatePolicyIntegrityMatches({ ...legacyPolicy, minCandidateScore: 81 }, legacyHash)).toBe(false)
+    expect(gatePolicyIntegrityMatches(DEFAULT_GATE_POLICY, legacyHash)).toBe(false)
+    expect(gatePolicyIntegrityMatches(undefined, gatePolicyHash())).toBe(false)
+  })
+
   it('validates the versioned Policy-as-Code schema and optional Runtime compatibility gate', () => {
     expect(normalizeGatePolicy()).toEqual(expect.objectContaining({ schemaVersion: 1, id: 'default-v1', requireCompatibility: false }))
     expect(() => normalizeGatePolicy({ ...DEFAULT_GATE_POLICY, unknownGate: true })).toThrow('unsupported field')
+    expect(() => normalizeGatePolicy({ ...DEFAULT_GATE_POLICY, minSuiteCaseCoveragePct: 101 })).toThrow('between 0 and 100')
     const compatible = evaluateGatePolicy({
       metrics,
       candidate: { runtimeTargets: ['codex'], compatibility: { codex: 'supported' } },

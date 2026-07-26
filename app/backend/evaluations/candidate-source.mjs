@@ -100,7 +100,7 @@ export async function remoteRequest(url, options = {}, fetchImpl = fetch, timeou
       if (error instanceof EvaluationError) throw error
       lastError = controller.signal.aborted
         ? new EvaluationError('The remote request timed out.', 504)
-        : new EvaluationError(error instanceof Error ? `Remote request failed: ${error.message}` : 'Remote request failed.', 502)
+        : new EvaluationError('Remote request failed.', 502)
       if (attempt === 1) throw lastError
     } finally {
       clearTimeout(timer)

@@ -1,5 +1,6 @@
 import { syncCodexDesktopEvents } from './codex-desktop-ingest.mjs'
-import { readEvents as readStoredEvents } from './event-store.mjs'
+import { sendApiError } from './api-response.mjs'
+import { readEventsWithStatus as readStoredEvents } from './event-store.mjs'
 import { EvaluationError } from './evaluations/errors.mjs'
 import { assertLocalApiRequest } from './evaluations/request-guard.mjs'
 
@@ -82,6 +83,20 @@ function compareRuns(left, right, sort) {
   return (leftId < rightId ? -1 : leftId > rightId ? 1 : 0) * direction
 }
 
+let orderedRunSource
+let orderedRunsDescending = []
+
+function orderedTerminalRuns(events, sort) {
+  if (!events.length) return []
+  if (events !== orderedRunSource) {
+    orderedRunSource = events
+    orderedRunsDescending = events
+      .filter((event) => TERMINAL_EVENTS.has(event.event) && event.skillId && Number.isFinite(Date.parse(event.timestamp)))
+      .sort((left, right) => compareRuns(left, right, 'timestamp_desc'))
+  }
+  return sort === 'timestamp_asc' ? [...orderedRunsDescending].reverse() : orderedRunsDescending
+}
+
 function runTimeline(events, run) {
   const correlated = events
     .filter((event) => {
@@ -121,10 +136,8 @@ export function queryRuns(events, params) {
   const dateTo = selectedDate(params, 'dateTo')
   if (dateFrom !== undefined && dateTo !== undefined && dateFrom > dateTo) throw badRequest('dateFrom must not be later than dateTo.')
 
-  const matches = events.filter((event) => {
-    if (!TERMINAL_EVENTS.has(event.event) || !event.skillId) return false
+  const matches = orderedTerminalRuns(events, sort).filter((event) => {
     const timestamp = Date.parse(event.timestamp)
-    if (!Number.isFinite(timestamp)) return false
     if (runtime && event.runtime !== runtime) return false
     if (outcome && eventOutcome(event) !== outcome) return false
     if (dateFrom !== undefined && timestamp < dateFrom) return false
@@ -134,7 +147,7 @@ export function queryRuns(events, params) {
     if (cost === 'reported' && !eventHasCost(event)) return false
     if (cost === 'unreported' && eventHasCost(event)) return false
     return true
-  }).sort((left, right) => compareRuns(left, right, sort))
+  })
 
   const totalItems = matches.length
   const totalPages = Math.ceil(totalItems / pageSize)
@@ -179,18 +192,19 @@ export async function handleRunsApi(request, response, pathname, {
       if (!runId) throw badRequest('Run id is required.')
     }
     await syncEvents()
-    const events = await readEvents()
+    const eventSnapshot = await readEvents()
+    const events = Array.isArray(eventSnapshot) ? eventSnapshot : eventSnapshot.events
+    const sourceStatus = Array.isArray(eventSnapshot) ? 'ok' : eventSnapshot.sourceStatus
     response.statusCode = 200
     if (runId) {
       const run = events.find((event) => event.id === runId && TERMINAL_EVENTS.has(event.event) && event.skillId)
       if (!run) throw new EvaluationError('Run not found.', 404)
-      response.end(JSON.stringify({ run, ...runTimeline(events, run) }))
+      response.end(JSON.stringify({ run, ...runTimeline(events, run), sourceStatus }))
     } else {
-      response.end(JSON.stringify(queryRuns(events, url.searchParams)))
+      response.end(JSON.stringify({ ...queryRuns(events, url.searchParams), generatedAt: new Date().toISOString(), sourceStatus }))
     }
   } catch (error) {
-    response.statusCode = Number.isInteger(error?.status) ? error.status : 500
-    response.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Run query failed.' }))
+    sendApiError(response, error, 'Run query failed.')
   }
   return true
 }

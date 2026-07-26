@@ -34,6 +34,62 @@ function response(body: unknown, status = 200) {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.history.replaceState({}, '', '/') })
 
 describe('governance UI', () => {
+  it('requests Capability pages from the server', async () => {
+    const second = { ...capability('candidate'), id: 'cap-2', artifact: { ...artifact, artifactId: 'second-skill' } }
+    const fetchMock = vi.fn((input: string) => {
+      if (input === '/api/capabilities') return response({
+        items: [capability('candidate')], page: 1, pageSize: 50, totalItems: 51, totalPages: 2, hasPrevious: false, hasNext: true,
+      })
+      if (input === '/api/capabilities?page=2&pageSize=50') return response({
+        items: [second], page: 2, pageSize: 50, totalItems: 51, totalPages: 2, hasPrevious: true, hasNext: false,
+      })
+      return response({ error: { message: 'Not found' } }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<GovernancePage />)
+    expect((await screen.findAllByText('review-skill')).length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+    expect((await screen.findAllByText('second-skill')).length).toBeGreaterThan(0)
+    expect(fetchMock).toHaveBeenCalledWith('/api/capabilities?page=2&pageSize=50', undefined)
+    expect(screen.getByRole('button', { name: 'Next page' }).hasAttribute('disabled')).toBe(true)
+  })
+
+  it('pages protected Governance audit with the same memory-only credential', async () => {
+    const selected = capability('ready')
+    const first = {
+      id: 'audit-1', action: 'evidence.bound', actor: 'Evaluator', outcome: 'committed',
+      capabilityId: selected.id, fromStage: 'candidate', toStage: 'ready', at: '2026-07-21T00:00:00.000Z',
+    }
+    const second = { ...first, id: 'audit-51', action: 'approval.decided', actor: 'Reviewer', fromStage: 'ready', toStage: 'approved' }
+    const fetchMock = vi.fn((input: string) => {
+      if (input === '/api/capabilities') return response({ items: [selected] })
+      if (input === '/api/evaluation-runs/run-1') return response({ id: 'run-1' })
+      if (input === '/api/capabilities/cap-1/audit') return response({
+        items: [first], page: 1, pageSize: 50, totalItems: 51, totalPages: 2, hasPrevious: false, hasNext: true, sourceStatus: 'ok',
+      })
+      if (input === '/api/capabilities/cap-1/audit?page=2&pageSize=50') return response({
+        items: [second], page: 2, pageSize: 50, totalItems: 51, totalPages: 2, hasPrevious: true, hasNext: false, sourceStatus: 'ok',
+      })
+      return response({ error: { message: 'Not found' } }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<GovernancePage />)
+    const token = await screen.findByLabelText('Audit access token (not stored)')
+    fireEvent.change(token, { target: { value: 'viewer-token' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Load protected audit' }))
+    expect(await screen.findByText('Evidence bound')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+    expect(await screen.findByText('Approval decided')).toBeTruthy()
+    expect(fetchMock).toHaveBeenCalledWith('/api/capabilities/cap-1/audit?page=2&pageSize=50', {
+      headers: { Authorization: 'Bearer viewer-token' },
+    })
+    expect((token as HTMLInputElement).value).toBe('')
+  })
+
   it('shows the pipeline, evidence provenance, and stale state', async () => {
     vi.stubGlobal('fetch', vi.fn().mockReturnValue(response({ items: [capability('blocked', true)] })))
     render(<GovernancePage />)
@@ -140,8 +196,23 @@ describe('governance UI', () => {
   })
 
   it('routes requalified superseded evidence through the current Stable rollback', async () => {
-    const previous = { ...capability('approved'), id: 'cap-previous', requalifiesStage: 'superseded' as const }
-    const stable = { ...capability('stable'), id: 'cap-stable' }
+    const previous = {
+      ...capability('approved'),
+      id: 'cap-previous',
+      targetKey: 'C:/project-a/skills/review/SKILL.md',
+      requalifiesStage: 'superseded' as const,
+      releaseTarget: { stableCapabilityId: 'cap-stable', previousStableCapabilityId: 'cap-previous' },
+    }
+    const wrongProjectStable = {
+      ...capability('stable'),
+      id: 'cap-wrong-project',
+      targetKey: 'C:/project-b/skills/review/SKILL.md',
+    }
+    const stable = {
+      ...capability('stable'),
+      id: 'cap-stable',
+      targetKey: 'C:/project-a/skills/review/SKILL.md',
+    }
     const preview = {
       previewToken: 'rollback-1',
       capabilityId: stable.id,
@@ -156,7 +227,7 @@ describe('governance UI', () => {
       expiresAt: '2026-07-21T01:00:00.000Z',
     }
     const fetchMock = vi.fn((input: string, init?: RequestInit) => {
-      if (input === '/api/capabilities' && !init) return response({ items: [previous, stable] })
+      if (input === '/api/capabilities' && !init) return response({ items: [previous, wrongProjectStable, stable] })
       if (input === '/api/capabilities/cap-stable/rollback') return response(preview)
       return response({ error: { message: 'Not found' } }, 404)
     })
@@ -169,6 +240,33 @@ describe('governance UI', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/capabilities/cap-stable/rollback', expect.objectContaining({
       body: expect.stringContaining('"action":"apply"'),
     }))
+    expect(fetchMock.mock.calls.some(([input]) => input === '/api/capabilities/cap-wrong-project/rollback')).toBe(false)
+  })
+
+  it('shows the lock-authoritative previous Stable across more than two generations', async () => {
+    const current = {
+      ...capability('stable'),
+      id: 'cap-current',
+      artifact: { ...artifact, version: '3.0.0' },
+      releaseTarget: { stableCapabilityId: 'cap-current', previousStableCapabilityId: 'cap-previous' },
+    }
+    const oldest = {
+      ...capability('superseded'),
+      id: 'cap-oldest',
+      artifact: { ...artifact, version: '1.0.0' },
+    }
+    const previous = {
+      ...capability('superseded'),
+      id: 'cap-previous',
+      artifact: { ...artifact, version: '2.0.0' },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(response({ items: [current, oldest, previous] })))
+
+    render(<GovernancePage />)
+
+    expect(await screen.findByText('Previous Stable')).toBeTruthy()
+    expect(await screen.findByText('review-skill · 2.0.0')).toBeTruthy()
+    expect(screen.queryByText('review-skill · 1.0.0')).toBeNull()
   })
 
   it('requires preview plus a second confirmation before Stable', async () => {
@@ -236,16 +334,19 @@ describe('governance UI', () => {
       id: 'cap-target',
       artifact: { ...artifact, version: '3.0.0', sourceRef: 'github:https://github.com/acme/review#v3/SKILL.md' },
       baseline,
+      releaseTarget: { stableCapabilityId: 'cap-stable', previousStableCapabilityId: null },
     }
     const previousStable = { ...capability('stable'), id: 'cap-stable', artifact: { ...artifact, version: '2.0.0' } }
     window.history.replaceState({}, '', '/releases?capability=cap-target')
-    const fetchMock = vi.fn((input: string) => {
-      if (input === '/api/capabilities') return response({ items: [{ ...capability('candidate'), id: 'cap-first' }, selected, previousStable] })
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      if (input === '/api/capabilities') return response({ items: [{ ...capability('candidate'), id: 'cap-first' }] })
+      if (input === '/api/capabilities/cap-target') return response(selected)
+      if (input === '/api/capabilities/cap-stable') return response(previousStable)
       if (input === '/api/evaluation-runs/run-1') return response({
         id: 'run-1', status: 'completed', gateResult: 'passed', evidenceFresh: true,
         metrics: { casesPassed: 4, casesTotal: 4 }, gates: [{ id: 'quality', status: 'passed', blocking: true }],
       })
-      if (input === '/api/capabilities/cap-target/audit') return response({ items: [{
+      if (input === '/api/capabilities/cap-target/audit') return response({ sourceStatus: 'partial', items: [{
         id: 'audit-1', action: 'evidence.bound', actor: 'Evaluator', outcome: 'committed',
         capabilityId: 'cap-target', fromStage: 'candidate', toStage: 'ready', at: '2026-07-21T00:00:00.000Z',
       }] })
@@ -256,12 +357,44 @@ describe('governance UI', () => {
 
     expect(await screen.findByRole('heading', { name: 'Release pipeline' })).toBeTruthy()
     expect(screen.getAllByText('Ready for independent review').length).toBeGreaterThan(0)
+    expect(fetchMock).toHaveBeenCalledWith('/api/capabilities/cap-target', undefined)
     expect(await screen.findByText('4 evaluated cases')).toBeTruthy()
+    expect(await screen.findByText('review-skill · 2.0.0')).toBeTruthy()
+    expect(fetchMock).toHaveBeenCalledWith('/api/capabilities/cap-stable', undefined)
     expect(screen.getByText('Previous Stable')).toBeTruthy()
     expect(screen.getAllByText('2.0.0').length).toBeGreaterThan(0)
     expect(screen.getByRole('region', { name: 'Release comparison' })).toBeTruthy()
-    expect(within(screen.getByRole('region', { name: 'Audit timeline' })).getByText('Evidence bound')).toBeTruthy()
+    expect(screen.getByText('Audit records are protected. Enter an access token to load them.')).toBeTruthy()
+    expect(fetchMock.mock.calls.some(([input]) => input === '/api/capabilities/cap-target/audit')).toBe(false)
+    const auditToken = screen.getByLabelText('Audit access token (not stored)')
+    fireEvent.change(auditToken, { target: { value: 'viewer-token' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Load protected audit' }))
+    expect(await within(screen.getByRole('region', { name: 'Audit timeline' })).findByText('Evidence bound')).toBeTruthy()
+    expect(within(screen.getByRole('region', { name: 'Audit timeline' })).getByRole('alert').textContent).toContain('Some local sources are unavailable or partial.')
+    expect(fetchMock).toHaveBeenCalledWith('/api/capabilities/cap-target/audit', expect.objectContaining({
+      headers: { Authorization: 'Bearer viewer-token' },
+    }))
+    expect((auditToken as HTMLInputElement).value).toBe('')
     expect((screen.getByRole('button', { name: 'Independent approval' }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByText('Advanced release tools').closest('details')?.open).toBe(false)
+  })
+
+  it('does not present a rejected protected-audit request as an empty audit', async () => {
+    const selected = capability('ready')
+    vi.stubGlobal('fetch', vi.fn((input: string) => {
+      if (input === '/api/capabilities') return response({ items: [selected] })
+      if (input === '/api/evaluation-runs/run-1') return response({ id: 'run-1' })
+      if (input === '/api/capabilities/cap-1/audit') return response({ error: { message: 'Authentication required' } }, 403)
+      return response({ error: { message: 'Not found' } }, 404)
+    }))
+    render(<GovernancePage />)
+
+    const auditToken = await screen.findByLabelText('Audit access token (not stored)')
+    fireEvent.change(auditToken, { target: { value: 'bad-token' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Load protected audit' }))
+
+    expect((await screen.findByRole('alert')).textContent).toContain('Protected audit records could not be loaded.')
+    expect(screen.queryByText('No audit records for this Candidate yet.')).toBeNull()
+    expect((auditToken as HTMLInputElement).value).toBe('')
   })
 })

@@ -181,9 +181,12 @@ the failed batch were appended.
 
 ## 12. Event file has a partial line
 
-Readers ignore a malformed line and keep valid records available. The next
-append repairs a missing trailing newline before writing. Preserve the file for
-diagnosis, export valid events, and only perform cleanup after making a backup.
+Readers expose the valid prefix with `sourceStatus: partial` only when the final
+record is malformed and lacks a terminating newline. Appends and maintenance
+rewrites refuse that state without changing the file. Preserve it for
+diagnosis, export the valid prefix, and repair or clean up only after making a
+backup. A complete malformed record is reported as corruption rather than
+Partial.
 
 ## 13. Event history grows too large
 

@@ -45,10 +45,12 @@ saved through loopback `GET`/`PUT /api/ai-settings` into local
 | `/benchmarks` | Benchmarks | Quick Compare + Managed Suite APIs |
 | `/releases` | Releases | Capability/evidence/approval/release APIs |
 | `/settings` | Settings | connections + bounded event summary/settings |
-| `/team` and other Advanced paths | Advanced | existing Team, policy, template, Prompt, and audit APIs |
+| `/settings?section=advanced-team` | Advanced Team | existing Team, policy, template, Prompt, and audit APIs |
 
 Legacy `/skills`, `/runs`, `/evaluations`, `/registry`, and `/governance` paths
-map to the corresponding canonical product page.
+map to the corresponding canonical product page. Legacy `/team` is replaced
+with `/settings?section=advanced-team` so refresh/history use one canonical
+location.
 
 `popstate` restores the matching page. Navigation updates browser history. The
 production server falls back to `index.html` for extensionless SPA paths.
@@ -74,8 +76,8 @@ production server falls back to `index.html` for extensionless SPA paths.
   held only while the Benchmark page is mounted;
 - AI provider settings loaded from `/api/ai-settings`; credentials are never
   written to browser storage or rendered in full by the settings modal;
-- Team state, derived Artifact catalog, Approval Inbox, and Release Queue loaded
-  only on `/team`.
+- Team count/adoption summary plus independently paged Artifact catalog,
+  Approval Inbox, and Release Queue loaded only on `/team`.
 
 Evaluation request/result and Artifact types come from the shared Evaluation
 Schema declaration. The frontend does not define parallel Candidate/result
@@ -97,11 +99,21 @@ Assets owns only its current live scan result. Derived UI state is not persisted
 
 ### Command Center
 
-- requests `/api/command-center` with runtime and 7/14/30-day scope;
+- requests `/api/command-center` with runtime and Today/7/14/30-day scope;
+- treats Today as the server-projected local calendar day;
 - refreshes the bounded snapshot every 3 seconds;
 - marks data receipt and primary-content readiness for browser performance
   acceptance;
-- keeps deterministic Demo data visibly separate after an initial failure.
+- keeps deterministic Demo data visibly separate through later failed refreshes
+  and keeps its readiness facts consistent with its suggested actions;
+- localizes action reason/impact, readiness reason-code labels, and metric
+  definitions through stable IDs instead of rendering server-authored English;
+- distinguishes an unavailable event source from a factual zero: partial
+  sources retain known metrics, while unavailable metrics/recent runs use an
+  explicit unavailable state and cannot trigger empty onboarding;
+- requires complete connection facts before empty arrays can mean that no
+  Runtime is connected;
+- opens every recent row through the canonical Activity Run Detail route.
 
 ### Activity
 
@@ -124,11 +136,18 @@ Assets owns only its current live scan result. Derived UI state is not persisted
 
 ### Connections and Settings
 
-- `GET /api/connections` on mount and every 5 seconds;
+- the connection dialog requests sanitized `/api/setup/preflight` prerequisites
+  before install and never receives runtime config paths or credentials;
+- unavailable and negative data-directory probes both disable review
+  confirmation without conflating unavailable with read-only, and the install
+  command is rendered only after the user confirms the redacted dry-run review;
+- **Check installation** refreshes both connection facts and sanitized preflight
+  facts, so a repaired adapter cannot retain a stale unhealthy reference result;
+- one bounded `GET /api/connections` page on mount and every 5 seconds;
 - connection failure maps Codex/Claude Code to `unavailable` while Cursor stays
   `preview`;
 - Settings requests `/api/events?summary=1` and `/api/ai-settings`, never the
-  full event array, and exports through a direct
+  full event array, warns when the event source is partial, and exports through a direct
   `/api/events?download=1` navigation.
 
 ### Assets
@@ -161,9 +180,18 @@ Missing cost fields are treated as unreported, not as evidence of zero provider 
 
 ### Command Center
 
-`CommandCenter` renders readiness, five provenance-aware metrics, deterministic
-issues/next actions, and at most five recent lifecycle records from one bounded
-aggregate. No chart or success claim is synthesized when evidence is absent.
+`CommandCenter` renders seven readiness facts, deterministic issues, and at most
+three Next Actions from one bounded aggregate. Each action has priority, reason,
+evidence references, impact, and one CTA. Six metric cards expose backend
+definitions and ratio numerators/denominators; unavailable success/cost remains
+unavailable rather than becoming zero. At most eight terminal Recent Runs are
+full-row Run Detail links.
+
+A true empty snapshot (`terminalRuns === 0` and `observedAssets === 0`) replaces
+the KPI cards with a privacy explanation and three-step quick start. Five Quick
+Actions cover scan, connection verification, a Managed Suite, Candidate review,
+and export. Demo mode keeps a persistent label and never merges demo and local
+records.
 
 ### Agents
 
@@ -181,11 +209,15 @@ requests correlation only when opened.
 
 ### Assets
 
-`RegistryPage` owns the live scan and client-side 50-row display page. Runtime is
-the primary workspace filter; source, provider, enabled state, definition kind,
-and duplicate/conflict/disabled/missing classifications follow that scope.
-`ArtifactRegistry` supplies immutable Artifact metadata and desired/observed
-state without returning definition bodies.
+`RegistryPage` requests one server-filtered 50-row page from the latest live
+scan snapshot. Runtime is the primary workspace filter; source, provider,
+enabled state, definition kind, and duplicate/conflict/disabled/missing
+classifications follow that scope. Counts are computed from the complete
+backend snapshot, while row issues and shared-name keys are returned only for
+the current page. `ArtifactRegistry` independently requests one filtered
+Artifact page and receives versions and installations only for those rows. Both
+tables keep their filter/page state in the URL and reuse cached metadata until
+an explicit refresh; neither receives definition bodies or a complete list.
 
 ### Settings
 
@@ -235,6 +267,7 @@ and disables incompatible agent runs.
 | Component | Responsibility |
 | --- | --- |
 | `Sidebar` | Responsive navigation, global theme chooser, and local-mode identity |
+| `CommandCenter` | Readiness, evidence-backed actions, honest metrics, true empty state, Recent Runs, and Quick Actions |
 | `ThemeChooser` | System/Light/Dark stable choices plus the localized 25-style catalog (remaining choices experimental), synchronized selection, miniature previews, and accessible popover behavior |
 | `SettingsPage` | Connection evidence, provider status/configuration, appearance, bounded data controls, and Advanced links |
 | `KpiStrip` | Outcome-aware summary metrics |
@@ -266,6 +299,7 @@ in demo mode. Clearing is disabled unless the local API is active.
 | Initial event request pending | Loading mode; do not assert zero data yet |
 | Local API unavailable initially | Labeled demo data plus warning |
 | Local API returns empty array | Genuine local zero state |
+| Command Center has no terminal runs or observed assets | Privacy/setup guidance; do not render zero KPI cards |
 | Connection API unavailable | Unavailable status, not not-installed |
 | Registry scan fails | Warning plus last successful/discovered fallback |
 | Import invalid | No server append; visible failure reason |
@@ -298,6 +332,9 @@ Tests should use visible outcomes through each module's interface:
 - analytics functions for outcome and date semantics;
 - charts for scale/empty rendering;
 - connect modal for copy, status, focus, and refresh behavior;
+- setup preflight and Command Center for prerequisite truth, action bounds,
+  metric denominators, empty/demo separation, Quick Actions, and Recent Run
+  routing;
 - registry for scope/category/issue calculations;
 - app tests for local/demo mode, routing, polling, import, and clearing;
 - internationalization tests for catalog completeness, persistence, translated
@@ -320,14 +357,27 @@ Implemented frontend boundaries:
   keeps tasks and model content memory-only while loading explicitly saved AI
   settings from the local backend.
 - Managed runs expose polling, cancellation, multi-case metrics, gates,
-  sanitized evidence details, and JSON/HTML report actions.
+  sanitized evidence details, JSON/HTML report actions, and one final
+  `create-candidate`, `keep-baseline`, `reject-candidate`, or
+  `collect-more-evidence` Decision per completed run. Same-value retries reuse
+  the Decision; changing it requires a new run. History consumes the stable
+  backend cursor and exposes previous/next pages instead of hiding records
+  after the first 50; navigation remains disabled while a cursor request is in
+  flight so rapid input cannot duplicate the cursor stack.
 - Governance shows Candidate-to-Stable provenance, exact hash bindings,
-  independent approvals, stale evidence, preview/confirm installation, and
-  rollback results.
+  independent authenticated approvals, stale evidence, preview/confirm
+  installation, and rollback results. Candidate recovery matches the immutable
+  `originEvaluationRunId`; later evidence updates do not create or rebind a
+  second Release Candidate from the same run. Capability audit is explicitly
+  unlocked with a transient Bearer token; a rejected read is never rendered as
+  an empty audit. Candidate recovery uses a run-filtered Capability page, while
+  release deep links and previous-Stable metadata use detail reads when the
+  referenced Capability is outside the current page.
 - The Local Prompt Registry browses Git branch/commit metadata without
   displaying Prompt bodies, lets the user set immutable baseline/Candidate
-  references, compares component hashes, applies model hints explicitly, and
-  requires a separate action to create a governed Candidate.
+  references, pages through bounded server results, compares component hashes,
+  applies model hints explicitly, and requires a separate action to create a
+  governed Candidate.
 - The Unified Artifact Registry filters the five kind-scoped asset types,
   displays immutable version metadata, compatibility, dependencies, and
   desired/observed installation state, and keeps GitHub import and version Diff

@@ -1,14 +1,17 @@
 import { Bot, CheckCircle2, ChevronLeft, ChevronRight, Code2, GitPullRequest, Layers3, MousePointer2, RefreshCw, Search, XCircle } from 'lucide-react'
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArtifactRegistry } from './ArtifactRegistry'
 import { ConflictDetailPage } from './ConflictDetailPage'
 import { useI18n } from '../i18n/I18nProvider'
 import type { MessageKey } from '../i18n/messages'
 import { runtimeLabel } from '../lib/analytics'
-import { buildInventoryIssues, countInventoryIssues, definitionKey, issuesForDefinition, normalizedSkillId } from '../lib/skill-inventory'
+import { buildInventoryIssues, countInventoryIssues, definitionKey, issuesForDefinition, normalizedSkillId, type InventoryIssue } from '../lib/skill-inventory'
 import type { ConfigurationSource, DefinitionStatus, InstalledSkill, Runtime, SkillScanMetadata, SkillScanResponse } from '../types'
 
 type AttentionFilter = 'all' | 'attention' | 'conflict' | 'duplicate' | 'disabled' | 'missing'
+type RuntimeFilter = Runtime | 'all'
+type SourceFilter = InstalledSkill['source'] | 'all'
+type StatusFilter = 'enabled' | 'disabled' | 'all'
 
 function nominationKey(skill: InstalledSkill) {
   return `${skill.runtime}:${skill.sourcePath}:${skill.contentHash || skill.skillVersion}`
@@ -124,22 +127,72 @@ function CategoryPanel({ title, items }: { title: string; items: CategoryItem[] 
 }
 
 const PAGE_SIZE = 50
+const attentionFilters = new Set<AttentionFilter>(['all', 'attention', 'conflict', 'duplicate', 'disabled', 'missing'])
+const runtimeFilters = new Set<RuntimeFilter>(['all', ...runtimeOrder])
+const sourceFilters = new Set<SourceFilter>(['all', ...sourceOrder])
+const statusFilters = new Set<StatusFilter>(['enabled', 'disabled', 'all'])
+const registryPathnames = new Set(['/assets', '/skills', '/registry'])
+
+function readRegistryLocation() {
+  const params = new URLSearchParams(window.location.search)
+  const attention = params.get('attention') as AttentionFilter | null
+  const runtime = params.get('runtime') as RuntimeFilter | null
+  const source = params.get('source') as SourceFilter | null
+  const status = params.get('status') as StatusFilter | null
+  const requestedPage = Number.parseInt(params.get('page') || '', 10)
+  const resolvedAttention = attention && attentionFilters.has(attention) ? attention : 'all'
+  return {
+    query: (params.get('query') || '').slice(0, 120),
+    runtime: runtime && runtimeFilters.has(runtime) ? runtime : 'all' as RuntimeFilter,
+    source: source && sourceFilters.has(source) ? source : 'all' as SourceFilter,
+    provider: (params.get('provider') || 'all').slice(0, 120),
+    status: status && statusFilters.has(status) ? status : resolvedAttention === 'all' ? 'enabled' : 'all' as StatusFilter,
+    attention: resolvedAttention as AttentionFilter,
+    page: Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1,
+  }
+}
+
+function registryScanPath(filters: {
+  query: string
+  runtime: RuntimeFilter
+  source: SourceFilter
+  provider: string
+  status: StatusFilter
+  attention: AttentionFilter
+  page: number
+}, refresh = false) {
+  const params = new URLSearchParams()
+  if (filters.query) params.set('query', filters.query)
+  if (filters.runtime !== 'all') params.set('runtime', filters.runtime)
+  if (filters.source !== 'all') params.set('source', filters.source)
+  if (filters.provider !== 'all') params.set('provider', filters.provider)
+  if (filters.status !== 'enabled') params.set('status', filters.status)
+  if (filters.attention !== 'all') params.set('attention', filters.attention)
+  if (filters.page > 1) params.set('page', String(filters.page))
+  if (refresh) params.set('refresh', '1')
+  return `/api/scan${params.size ? `?${params}` : ''}`
+}
 
 export function RegistryPage() {
   const { formatNumber, t } = useI18n()
+  const initialLocation = useMemo(readRegistryLocation, [])
   const displayProvider = useCallback((provider: string) => provider === 'Project' ? t('registry.project') : provider, [t])
   const [scannedSkills, setScannedSkills] = useState<InstalledSkill[] | null>(null)
   const [scanStatus, setScanStatus] = useState<'scanning' | 'complete' | 'failed'>('scanning')
   const [scanMetadata, setScanMetadata] = useState<SkillScanMetadata | null>(null)
-  const [query, setQuery] = useState('')
-  const [runtimeFilter, setRuntimeFilter] = useState<Runtime | 'all'>('all')
-  const [sourceFilter, setSourceFilter] = useState<InstalledSkill['source'] | 'all'>('all')
-  const [providerFilter, setProviderFilter] = useState('all')
-  const [statusFilter, setStatusFilter] = useState<'enabled' | 'disabled' | 'all'>('enabled')
-  const [attentionFilter, setAttentionFilter] = useState<AttentionFilter>('all')
+  const [scanProjection, setScanProjection] = useState<SkillScanResponse | null>(null)
+  const [query, setQuery] = useState(initialLocation.query)
+  const [debouncedQuery, setDebouncedQuery] = useState(initialLocation.query)
+  const [runtimeFilter, setRuntimeFilter] = useState<RuntimeFilter>(initialLocation.runtime)
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>(initialLocation.source)
+  const [providerFilter, setProviderFilter] = useState(initialLocation.provider)
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(initialLocation.status)
+  const [attentionFilter, setAttentionFilter] = useState<AttentionFilter>(initialLocation.attention)
   const [nominationStatus, setNominationStatus] = useState<Record<string, 'busy' | 'done' | 'failed'>>({})
   const [selectedConflict, setSelectedConflict] = useState<InstalledSkill | null>(null)
-  const [page, setPage] = useState(1)
+  const [page, setPage] = useState(initialLocation.page)
+  const scanRequest = useRef(0)
+  const serverDriven = useRef<boolean | null>(null)
 
   const nominate = async (skill: InstalledSkill) => {
     const sourceRef = `local-scan:${skill.runtime}:${skill.sourcePath}`
@@ -158,30 +211,86 @@ export function RegistryPage() {
     }
   }
 
-  const scan = useCallback(async () => {
+  const scan = useCallback(async (refresh = false) => {
+    if (!refresh && (serverDriven.current === false || query !== debouncedQuery)) return
+    const requestId = ++scanRequest.current
     setScanStatus('scanning')
     try {
-      const response = await fetch('/api/scan', { method: 'POST' })
+      const response = await fetch(serverDriven.current === false
+        ? '/api/scan'
+        : registryScanPath({
+          query: refresh ? query : debouncedQuery,
+          runtime: runtimeFilter,
+          source: sourceFilter,
+          provider: providerFilter,
+          status: statusFilter,
+          attention: attentionFilter,
+          page,
+        }, refresh), { method: 'POST' })
       if (!response.ok) throw new Error('Scan failed')
-      const result = await response.json() as SkillScanResponse | Array<Partial<InstalledSkill>>
+      const result = await response.json() as Partial<SkillScanResponse> | Array<Partial<InstalledSkill>>
       const definitions = Array.isArray(result) ? result : result.definitions
       if (!Array.isArray(definitions)) throw new Error('Scan returned an invalid response')
+      if (requestId !== scanRequest.current) return
+      const projected = !Array.isArray(result) && result.page && result.aggregates && result.definitionIssues && result.sharedDefinitionKeys
+        ? result as SkillScanResponse
+        : null
+      serverDriven.current = projected !== null
       setScannedSkills(definitions.map(normalizeInstalledSkill))
-      setScanMetadata(Array.isArray(result) ? null : result.scan)
+      setScanProjection(projected)
+      setScanMetadata(Array.isArray(result) ? null : result.scan ?? null)
+      if (projected && projected.page.page !== page) setPage(projected.page.page)
       setScanStatus('complete')
     } catch {
-      setScanStatus('failed')
+      if (requestId === scanRequest.current) setScanStatus('failed')
     }
-  }, [])
+  }, [attentionFilter, debouncedQuery, page, providerFilter, query, runtimeFilter, sourceFilter, statusFilter])
 
   useEffect(() => { void scan() }, [scan])
-  useEffect(() => { setPage(1) }, [attentionFilter, providerFilter, query, runtimeFilter, sourceFilter, statusFilter])
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setDebouncedQuery(query), 200)
+    return () => window.clearTimeout(timeout)
+  }, [query])
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (query) params.set('query', query)
+    else params.delete('query')
+    if (runtimeFilter !== 'all') params.set('runtime', runtimeFilter)
+    else params.delete('runtime')
+    if (sourceFilter !== 'all') params.set('source', sourceFilter)
+    else params.delete('source')
+    if (providerFilter !== 'all') params.set('provider', providerFilter)
+    else params.delete('provider')
+    if (statusFilter !== 'enabled') params.set('status', statusFilter)
+    else params.delete('status')
+    if (attentionFilter !== 'all') params.set('attention', attentionFilter)
+    else params.delete('attention')
+    if (page > 1) params.set('page', String(page))
+    else params.delete('page')
+    const pathname = registryPathnames.has(window.location.pathname) ? window.location.pathname : '/assets'
+    const next = `${pathname}${params.size ? `?${params}` : ''}`
+    if (`${window.location.pathname}${window.location.search}` !== next) window.history.replaceState({}, '', next)
+  }, [attentionFilter, page, providerFilter, query, runtimeFilter, sourceFilter, statusFilter])
+  useEffect(() => {
+    const restoreLocation = () => {
+      const restored = readRegistryLocation()
+      setQuery(restored.query)
+      setRuntimeFilter(restored.runtime)
+      setSourceFilter(restored.source)
+      setProviderFilter(restored.provider)
+      setStatusFilter(restored.status)
+      setAttentionFilter(restored.attention)
+      setPage(restored.page)
+    }
+    window.addEventListener('popstate', restoreLocation)
+    return () => window.removeEventListener('popstate', restoreLocation)
+  }, [])
 
 
   const rows = useMemo(() => [...(scannedSkills ?? [])], [scannedSkills])
   const allEnabledDefinitions = useMemo(() => rows.filter((row) => row.enabled), [rows])
   const allEnabledSkills = useMemo(() => allEnabledDefinitions.filter((row) => row.kind === 'skill'), [allEnabledDefinitions])
-  const runtimeStats = useMemo(() => runtimeOrder.map((runtime) => {
+  const clientRuntimeStats = useMemo(() => runtimeOrder.map((runtime) => {
     const definitions = allEnabledDefinitions.filter((row) => row.runtime === runtime)
     return {
       runtime,
@@ -190,7 +299,8 @@ export function RegistryPage() {
       sources: countBy(definitions, sourceOrder, (row) => row.source),
     }
   }), [allEnabledDefinitions])
-  const sharedSkillIds = useMemo(() => {
+  const runtimeStats = scanProjection?.aggregates.runtimes ?? clientRuntimeStats
+  const legacySharedSkillIds = useMemo(() => {
     const runtimeBySkill = new Map<string, Set<Runtime>>()
     allEnabledSkills.forEach((row) => {
       const skillId = normalizedSkillId(row.skillId)
@@ -200,12 +310,22 @@ export function RegistryPage() {
     })
     return new Set([...runtimeBySkill].filter(([, runtimes]) => runtimes.size > 1).map(([skillId]) => skillId))
   }, [allEnabledSkills])
-  const issueByDefinition = useMemo(() => buildInventoryIssues(rows), [rows])
+  const sharedDefinitionKeys = useMemo(() => new Set(scanProjection?.sharedDefinitionKeys ?? []), [scanProjection])
+  const isShared = useCallback((row: InstalledSkill) => scanProjection
+    ? sharedDefinitionKeys.has(definitionKey(row))
+    : legacySharedSkillIds.has(normalizedSkillId(row.skillId)), [legacySharedSkillIds, scanProjection, sharedDefinitionKeys])
+  const sharedSkillCount = scanProjection?.aggregates.sharedSkillCount ?? legacySharedSkillIds.size
+  const allEnabledDefinitionCount = scanProjection?.aggregates.enabledDefinitionCount ?? allEnabledDefinitions.length
+  const issueByDefinition = useMemo(() => scanProjection
+    ? new Map(Object.entries(scanProjection.definitionIssues)
+      .map(([key, issues]) => [key, new Set<InventoryIssue>(issues)]))
+    : buildInventoryIssues(rows), [rows, scanProjection])
   const issuesFor = useCallback((row: InstalledSkill) => issuesForDefinition(issueByDefinition, row), [issueByDefinition])
-  const attentionCounts = useMemo(
+  const clientAttentionCounts = useMemo(
     () => countInventoryIssues(rows, issueByDefinition, runtimeFilter),
     [issueByDefinition, rows, runtimeFilter],
   )
+  const attentionCounts = scanProjection?.aggregates.attention ?? clientAttentionCounts
   const scopeRows = useMemo(() => rows.filter((row) => runtimeFilter === 'all' || row.runtime === runtimeFilter), [rows, runtimeFilter])
   const enabledSkills = useMemo(() => scopeRows.filter((row) => row.kind === 'skill' && row.enabled), [scopeRows])
   const enabledDefinitions = useMemo(() => scopeRows.filter((row) => row.enabled), [scopeRows])
@@ -214,15 +334,19 @@ export function RegistryPage() {
   const uniqueSkills = useMemo(() => new Set(enabledSkills.map((row) => normalizedSkillId(row.skillId))).size, [enabledSkills])
   const pluginSkills = useMemo(() => enabledSkills.filter((row) => row.source === 'plugin').length, [enabledSkills])
   const disabledSkills = useMemo(() => scopeRows.filter((row) => row.kind === 'skill' && !row.enabled).length, [scopeRows])
-  const sourceCounts = useMemo(() => countBy(categoryDefinitions, sourceOrder, (row) => row.source), [categoryDefinitions])
+  const clientSourceCounts = useMemo(() => countBy(categoryDefinitions, sourceOrder, (row) => row.source), [categoryDefinitions])
+  const sourceCounts = scanProjection?.aggregates.sources ?? clientSourceCounts
   const providerRows = useMemo(() => categoryDefinitions.filter((row) => sourceFilter === 'all' || row.source === sourceFilter), [categoryDefinitions, sourceFilter])
-  const providers = useMemo(() => [...new Set(providerRows.map((row) => row.provider))].sort(), [providerRows])
-  const providerCounts = useMemo(() => providers
+  const clientProviders = useMemo(() => [...new Set(providerRows.map((row) => row.provider))].sort(), [providerRows])
+  const clientProviderCounts = useMemo(() => clientProviders
     .map((provider) => ({ provider, count: providerRows.filter((row) => row.provider === provider).length }))
     .filter((item) => item.count > 0)
-    .sort((left, right) => right.count - left.count || left.provider.localeCompare(right.provider)), [providerRows, providers])
+    .sort((left, right) => right.count - left.count || left.provider.localeCompare(right.provider)), [clientProviders, providerRows])
+  const providerCounts = scanProjection?.aggregates.providers ?? clientProviderCounts
+  const providers = useMemo(() => providerCounts.map((item) => item.provider), [providerCounts])
 
   const filteredRows = useMemo(() => {
+    if (scanProjection) return rows
     const needle = query.trim().toLowerCase()
     return rows.filter((row) =>
       (runtimeFilter === 'all' || row.runtime === runtimeFilter) &&
@@ -233,25 +357,36 @@ export function RegistryPage() {
       (!needle || `${row.skillId} ${row.provider} ${displayProvider(row.provider)} ${row.sourcePath}`.toLowerCase().includes(needle)))
       .sort((left, right) => runtimeOrder.indexOf(left.runtime) - runtimeOrder.indexOf(right.runtime) ||
         Number(right.enabled) - Number(left.enabled) || left.skillId.localeCompare(right.skillId) || left.sourcePath.localeCompare(right.sourcePath))
-  }, [attentionFilter, displayProvider, issuesFor, providerFilter, query, rows, runtimeFilter, sourceFilter, statusFilter])
+  }, [attentionFilter, displayProvider, issuesFor, providerFilter, query, rows, runtimeFilter, scanProjection, sourceFilter, statusFilter])
 
-  const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE))
-  const currentPage = Math.min(page, totalPages)
-  const pagedRows = useMemo(() => filteredRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE), [currentPage, filteredRows])
-  const visibleRuntimeCounts = useMemo(() => new Map(runtimeOrder.map((runtime) => [runtime, filteredRows.filter((row) => row.runtime === runtime).length])), [filteredRows])
+  const totalItems = scanProjection?.page.totalItems ?? filteredRows.length
+  const totalDefinitions = scanProjection?.aggregates.totalDefinitions ?? rows.length
+  const totalPages = scanProjection?.page.totalPages ?? Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE))
+  const currentPage = scanProjection?.page.page ?? Math.min(page, totalPages)
+  const pagedRows = useMemo(() => scanProjection
+    ? filteredRows
+    : filteredRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE), [currentPage, filteredRows, scanProjection])
+  const visibleRuntimeCounts = useMemo(() => new Map(scanProjection
+    ? scanProjection.aggregates.visibleRuntimes.map((item) => [item.runtime, item.count])
+    : runtimeOrder.map((runtime) => [runtime, filteredRows.filter((row) => row.runtime === runtime).length])), [filteredRows, scanProjection])
   const scopeLabel = runtimeFilter === 'all' ? t('registry.combined') : runtimeLabel[runtimeFilter]
 
-  const selectRuntime = (runtime: Runtime | 'all') => {
+  useEffect(() => {
+    if (!scanProjection && scanStatus === 'complete' && page > totalPages) setPage(totalPages)
+  }, [page, scanProjection, scanStatus, totalPages])
+
+  const selectRuntime = (runtime: RuntimeFilter) => {
     setRuntimeFilter(runtime)
     setSourceFilter('all')
     setProviderFilter('all')
+    setPage(1)
   }
 
   const metrics = [
-    { label: t('registry.availableSkills'), value: uniqueSkills, note: t('registry.uniqueEnabled') },
-    { label: t('registry.enabledDefinitions'), value: enabledDefinitions.length, note: t('registry.filesAvailable') },
-    { label: t('registry.pluginSkills'), value: pluginSkills, note: t('registry.enabledPluginDefinitions') },
-    { label: t('registry.disabledSkills'), value: disabledSkills, note: t('registry.installedDisabled') },
+    { label: t('registry.availableSkills'), value: scanProjection?.aggregates.metrics.uniqueEnabledSkills ?? uniqueSkills, note: t('registry.uniqueEnabled') },
+    { label: t('registry.enabledDefinitions'), value: scanProjection?.aggregates.metrics.enabledDefinitions ?? enabledDefinitions.length, note: t('registry.filesAvailable') },
+    { label: t('registry.pluginSkills'), value: scanProjection?.aggregates.metrics.pluginEnabledSkills ?? pluginSkills, note: t('registry.enabledPluginDefinitions') },
+    { label: t('registry.disabledSkills'), value: scanProjection?.aggregates.metrics.disabledSkills ?? disabledSkills, note: t('registry.installedDisabled') },
   ]
   const attentionItems: Array<{ value: AttentionFilter; label: string; count: number; note: string }> = [
     { value: 'attention', label: t('registry.needsAttention'), count: attentionCounts.attention, note: t('registry.attentionNote') },
@@ -261,19 +396,19 @@ export function RegistryPage() {
     { value: 'missing', label: t('registry.missingMetadata'), count: attentionCounts.missing, note: t('registry.missingNote') },
   ]
 
-  if (selectedConflict) return <ConflictDetailPage skill={selectedConflict} onBack={() => setSelectedConflict(null)} onChanged={() => void scan()} />
+  if (selectedConflict) return <ConflictDetailPage skill={selectedConflict} onBack={() => setSelectedConflict(null)} onChanged={() => void scan(true)} />
 
   return (
     <div className="single-page registry-page">
       <div className="page-intro">
         <div><h2>{t('registry.inventoryTitle')}</h2><p>{t('registry.inventoryDescription')}</p></div>
-        <button className="button secondary" type="button" disabled={scanStatus === 'scanning'} onClick={scan}>
+        <button className="button secondary" type="button" disabled={scanStatus === 'scanning'} onClick={() => void scan(true)}>
           <RefreshCw size={15} className={scanStatus === 'scanning' ? 'spin' : ''} />
           {scanStatus === 'scanning' ? t('registry.scanning') : scanStatus === 'failed' ? t('registry.retry') : t('registry.scanAgain')}
         </button>
       </div>
 
-      <ArtifactRegistry inventory={rows} inventoryIssues={issueByDefinition} refreshToken={scanMetadata?.id} />
+      <ArtifactRegistry refreshToken={scanMetadata?.id} />
 
       {scanMetadata ? (
         <section className="panel registry-scan-summary" aria-label={t('registry.scanSummary')}>
@@ -295,11 +430,11 @@ export function RegistryPage() {
           <p>{t('registry.workspaceDescription')}</p>
         </header>
         <div className="runtime-workspace-grid">
-          <button className={`runtime-workspace-card runtime-all ${runtimeFilter === 'all' ? 'is-selected' : ''}`} type="button" aria-pressed={runtimeFilter === 'all'} aria-label={t('registry.showCombined', { count: formatNumber(allEnabledDefinitions.length) })} onClick={() => selectRuntime('all')}>
+          <button className={`runtime-workspace-card runtime-all ${runtimeFilter === 'all' ? 'is-selected' : ''}`} type="button" aria-pressed={runtimeFilter === 'all'} aria-label={t('registry.showCombined', { count: formatNumber(allEnabledDefinitionCount) })} onClick={() => selectRuntime('all')}>
             <span className="runtime-workspace-icon"><RuntimeIcon runtime="all" /></span>
             <span className="runtime-workspace-copy"><strong>{t('registry.combined')}</strong><small>{t('common.allRuntimes')}</small></span>
-            <b>{formatNumber(allEnabledDefinitions.length)}</b>
-            <span className="runtime-workspace-meta">{t('registry.sharedNames', { count: formatNumber(sharedSkillIds.size), unit: t(sharedSkillIds.size === 1 ? 'registry.name' : 'registry.names') })}</span>
+            <b>{formatNumber(allEnabledDefinitionCount)}</b>
+            <span className="runtime-workspace-meta">{t('registry.sharedNames', { count: formatNumber(sharedSkillCount), unit: t(sharedSkillCount === 1 ? 'registry.name' : 'registry.names') })}</span>
           </button>
           {runtimeStats.map((item) => (
             <button className={`runtime-workspace-card runtime-${item.runtime} ${runtimeFilter === item.runtime ? 'is-selected' : ''}`} type="button" key={item.runtime} disabled={item.count === 0} aria-pressed={runtimeFilter === item.runtime} aria-label={t('registry.showRuntime', { runtime: runtimeLabel[item.runtime], count: formatNumber(item.count) })} onClick={() => selectRuntime(item.runtime)}>
@@ -317,11 +452,12 @@ export function RegistryPage() {
       </section>
 
       <section className="registry-health" aria-labelledby="registry-health-title">
-        <header><div><span>{t('registry.health')}</span><h3 id="registry-health-title">{t('registry.needsAttention')}</h3></div><button type="button" className={attentionFilter === 'all' ? 'is-selected' : ''} onClick={() => setAttentionFilter('all')}>{t('registry.showAllDefinitions')}</button></header>
-        <div>{attentionItems.map((item) => <button type="button" className={attentionFilter === item.value ? 'is-selected' : ''} aria-pressed={attentionFilter === item.value} key={item.value} onClick={() => { setAttentionFilter((current) => current === item.value ? 'all' : item.value); setStatusFilter('all') }}><span><strong>{item.label}</strong><b>{formatNumber(item.count)}</b></span><small>{item.note}</small></button>)}</div>
+        <header><div><span>{t('registry.health')}</span><h3 id="registry-health-title">{t('registry.needsAttention')}</h3></div><button type="button" className={attentionFilter === 'all' ? 'is-selected' : ''} onClick={() => { setAttentionFilter('all'); setPage(1) }}>{t('registry.showAllDefinitions')}</button></header>
+        <div>{attentionItems.map((item) => <button type="button" className={attentionFilter === item.value ? 'is-selected' : ''} aria-pressed={attentionFilter === item.value} key={item.value} onClick={() => { setAttentionFilter((current) => current === item.value ? 'all' : item.value); setStatusFilter('all'); setPage(1) }}><span><strong>{item.label}</strong><b>{formatNumber(item.count)}</b></span><small>{item.note}</small></button>)}</div>
       </section>
 
       {scanStatus === 'failed' ? <div className="registry-warning" role="alert">{t(scannedSkills ? 'registry.scanFailedKeep' : 'registry.scanFailedFallback')}</div> : null}
+      {scanProjection?.sourceStatus === 'partial' ? <div className="registry-warning" role="alert">{t('cc.partial')}</div> : null}
 
       <div className="registry-categories">
         <CategoryPanel title={t('registry.bySource')} items={sourceCounts.map((item) => ({
@@ -331,6 +467,7 @@ export function RegistryPage() {
           onSelect: () => {
             setSourceFilter((current) => current === item.value ? 'all' : item.value)
             setProviderFilter('all')
+            setPage(1)
           },
         }))} />
       </div>
@@ -338,21 +475,21 @@ export function RegistryPage() {
       <section className="panel provider-panel">
         <div><h3>{t('registry.byProvider')}</h3><span>{t('registry.statusDefinitions', { scope: scopeLabel, status: t(statusFilter === 'all' ? 'common.all' : statusFilter === 'enabled' ? 'common.enabled' : 'common.disabled') })}</span></div>
         <div className="provider-pills">
-          {providerCounts.map((item) => <button className={providerFilter === item.provider ? 'is-selected' : ''} type="button" key={item.provider} onClick={() => setProviderFilter((current) => current === item.provider ? 'all' : item.provider)} aria-pressed={providerFilter === item.provider}><span>{displayProvider(item.provider)}</span><strong>{formatNumber(item.count)}</strong></button>)}
+          {providerCounts.map((item) => <button className={providerFilter === item.provider ? 'is-selected' : ''} type="button" key={item.provider} onClick={() => { setProviderFilter((current) => current === item.provider ? 'all' : item.provider); setPage(1) }} aria-pressed={providerFilter === item.provider}><span>{displayProvider(item.provider)}</span><strong>{formatNumber(item.count)}</strong></button>)}
         </div>
       </section>
 
       <section className="panel registry-table-wrap">
         <div className="registry-table-heading">
           <div><span>{t('registry.definitionInventory')}</span><h3>{t('registry.scopeInventory', { scope: scopeLabel })}</h3></div>
-          <strong>{t('registry.inventoryShown', { scope: scopeLabel, count: formatNumber(filteredRows.length) })}</strong>
+          <strong>{t('registry.inventoryShown', { scope: scopeLabel, count: formatNumber(totalItems) })}</strong>
         </div>
         <header className="registry-toolbar">
-          <label className="search-control"><Search size={14} /><input aria-label={t('registry.search')} type="search" placeholder={t('registry.search')} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-          <label><span>{t('common.source')}</span><select aria-label={t('registry.sourceLabel')} value={sourceFilter} onChange={(event) => { setSourceFilter(event.target.value as InstalledSkill['source'] | 'all'); setProviderFilter('all') }}><option value="all">{t('common.allSources')}</option>{sourceOrder.map((source) => <option value={source} key={source}>{t(sourceLabel[source])}</option>)}</select></label>
-          <label><span>{t('common.provider')}</span><select aria-label={t('registry.providerLabel')} value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)}><option value="all">{t('common.allProviders')}</option>{providers.map((provider) => <option value={provider} key={provider}>{displayProvider(provider)}</option>)}</select></label>
-          <label><span>{t('common.status')}</span><select aria-label={t('registry.statusLabel')} value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value as 'enabled' | 'disabled' | 'all'); setProviderFilter('all') }}><option value="enabled">{t('common.enabled')}</option><option value="disabled">{t('common.disabled')}</option><option value="all">{t('common.allStatuses')}</option></select></label>
-          <span className="registry-result-count">{t('registry.resultCount', { shown: formatNumber(filteredRows.length), scanned: formatNumber(rows.length) })}</span>
+          <label className="search-control"><Search size={14} /><input aria-label={t('registry.search')} type="search" placeholder={t('registry.search')} value={query} onChange={(event) => { setQuery(event.target.value); setPage(1) }} /></label>
+          <label><span>{t('common.source')}</span><select aria-label={t('registry.sourceLabel')} value={sourceFilter} onChange={(event) => { setSourceFilter(event.target.value as SourceFilter); setProviderFilter('all'); setPage(1) }}><option value="all">{t('common.allSources')}</option>{sourceOrder.map((source) => <option value={source} key={source}>{t(sourceLabel[source])}</option>)}</select></label>
+          <label><span>{t('common.provider')}</span><select aria-label={t('registry.providerLabel')} value={providerFilter} onChange={(event) => { setProviderFilter(event.target.value); setPage(1) }}><option value="all">{t('common.allProviders')}</option>{providers.map((provider) => <option value={provider} key={provider}>{displayProvider(provider)}</option>)}</select></label>
+          <label><span>{t('common.status')}</span><select aria-label={t('registry.statusLabel')} value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value as StatusFilter); setProviderFilter('all'); setPage(1) }}><option value="enabled">{t('common.enabled')}</option><option value="disabled">{t('common.disabled')}</option><option value="all">{t('common.allStatuses')}</option></select></label>
+          <span className="registry-result-count">{t('registry.resultCount', { shown: formatNumber(totalItems), scanned: formatNumber(totalDefinitions) })}</span>
         </header>
         <div className="registry-table-scroll">
           <table className="registry-table">
@@ -366,7 +503,7 @@ export function RegistryPage() {
                 return <Fragment key={definitionKey(skill)}>
                   {runtimeFilter === 'all' && pagedRows[index - 1]?.runtime !== skill.runtime ? <tr className={`registry-runtime-group runtime-${skill.runtime}`}><th scope="rowgroup" colSpan={10}><span className="registry-runtime-badge"><RuntimeIcon runtime={skill.runtime} />{runtimeLabel[skill.runtime]}</span><strong>{t('registry.runtimeGroup', { runtime: runtimeLabel[skill.runtime], count: formatNumber(visibleRuntimeCounts.get(skill.runtime) ?? 0) })}</strong></th></tr> : null}
                   <tr className={definitionStatus === 'active' ? '' : `is-${definitionStatus}`}>
-                    <td><span className="registry-skill-name"><strong>{skill.skillId}</strong>{runtimeFilter === 'all' && sharedSkillIds.has(normalizedSkillId(skill.skillId)) ? <span className="shared-skill">{t('registry.shared')}</span> : null}{[...issuesFor(skill)].map((issue) => <span className={`registry-issue ${issue}`} key={issue}>{t(issueLabel[issue])}</span>)}</span></td>
+                    <td><span className="registry-skill-name"><strong>{skill.skillId}</strong>{runtimeFilter === 'all' && isShared(skill) ? <span className="shared-skill">{t('registry.shared')}</span> : null}{[...issuesFor(skill)].map((issue) => <span className={`registry-issue ${issue}`} key={issue}>{t(issueLabel[issue])}</span>)}</span></td>
                     <td>{t(kindLabel[skill.kind])}</td>
                     <td><span className="version">{skill.skillVersion === 'unversioned' ? t('common.unversioned') : skill.skillVersion}</span></td>
                     <td><span className={`registry-runtime-badge runtime-${skill.runtime}`}><RuntimeIcon runtime={skill.runtime} />{runtimeLabel[skill.runtime]}</span></td>
@@ -379,7 +516,7 @@ export function RegistryPage() {
                   </tr>
                 </Fragment>
               })}
-              {!filteredRows.length ? <tr><td className="registry-empty" colSpan={10}>{scanStatus === 'scanning' ? t('registry.scanningLocations') : t('registry.noMatches')}</td></tr> : null}
+              {!totalItems ? <tr><td className="registry-empty" colSpan={10}>{scanStatus === 'scanning' ? t('registry.scanningLocations') : t('registry.noMatches')}</td></tr> : null}
             </tbody>
           </table>
         </div>

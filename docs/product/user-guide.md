@@ -25,14 +25,30 @@ npm run dev
 
 Open `http://127.0.0.1:5173/`.
 
-Connect Codex:
+Open the connection dialog first. Its `GET /api/setup/preflight` check reports:
+
+- the current and minimum supported Node.js versions;
+- Git and loopback API availability;
+- whether the configured local data path probe completed and, separately,
+  whether that path is an actual writable directory;
+- whether runtime inspection completed; and
+- sanitized Codex, Claude Code, and Cursor configuration/reference health.
+
+It does not return runtime configuration paths, hook commands, or credentials.
+A writable regular file does not satisfy the directory check. A probe that
+cannot complete is reported as unavailable, not as a factual read-only result.
+Either state disables the dry-run review confirmation and keeps the Install
+command hidden. When preflight is eligible, select **I reviewed the redacted
+dry-run preview.** to reveal the command.
+
+For manual CLI installation, connect Codex with:
 
 ```powershell
 npm run codex:dry-run
 npm run codex:install
 ```
 
-Connect Claude Code:
+Connect Claude Code with:
 
 ```powershell
 npm run claude:dry-run
@@ -46,7 +62,9 @@ open `/hooks`, inspect the SkillOps commands, and approve them.
 
 Use the language selector at the bottom of the sidebar. The dashboard supports
 Chinese, English, French, Russian, Spanish, and Japanese. The selected language
-is saved in this browser and restored on the next visit.
+is saved in this browser and restored on the next visit. Command Center action
+reasons and impacts, readiness reason-code labels, and metric definitions use
+the same six-language message catalog rather than server-authored English.
 
 ## 3. Confirm that setup is real
 
@@ -57,11 +75,15 @@ has fired.
 To verify end to end:
 
 1. Open Settings and confirm the adapter says **Installed**.
-2. Record the current time.
+2. Click **Check installation**. SkillOps derives the verification boundary
+   from the current configuration and referenced hook files, and refreshes the
+   sanitized preflight facts at the same time.
 3. Explicitly invoke one known Skill in Codex or Claude Code.
 4. Finish the turn.
-5. Open Activity and search for the Skill name.
-6. Confirm the runtime, timestamp, session, detection method, and terminal event.
+5. Click **Check installation** again and confirm the adapter says
+   **Verified**.
+6. Open Activity, search for the Skill name, and confirm the runtime,
+   timestamp, session, detection method, and terminal event.
 
 Command-line verification:
 
@@ -79,13 +101,42 @@ to isolate one session.
 
 ### Command Center
 
-Use runtime and date filters to inspect a bounded deterministic projection from
-`GET /api/command-center`. Readiness separates installed configuration from
-verified post-install lifecycle evidence. Issues and next actions link to the
-relevant filtered page; they do not claim that an AI inferred causality.
-Success rate is unavailable when no run has a known outcome. Reported cost sums
-only terminal Runtime Skill runs with finite `costUsd`; missing cost is
-unreported, and explicit zero remains `$0.00`.
+Use the runtime filter plus **Today**, 7-day, 14-day, or 30-day range to inspect
+one bounded deterministic projection from `GET /api/command-center`. **Today**
+starts at midnight in the local server timezone; it is not a rolling 24-hour
+window.
+
+The Readiness panel checks Runtime evidence, Git, local data, inventory,
+provider configuration, Managed Evaluations, and Governance separately. Each
+fact has an explicit ready/attention/blocked/unknown state, check time, reason,
+and a link to the owning page. Installed configuration remains distinct from
+verified post-install lifecycle evidence.
+Runtime readiness depends on both the event and connection sources. If either
+source is unavailable or partial, Runtime is `unknown` with
+`source-unavailable`; an empty fallback is never treated as verification truth.
+
+**Next Actions** contains at most three deterministic actions. Every action
+shows its priority, reason, evidence references, impact, and exactly one CTA.
+Issues use the same backend facts; neither section claims that an AI inferred
+causality.
+
+Metric cards expose their definitions and ratio numerators/denominators.
+Success rate is unavailable when no run has a known outcome. Outcome coverage
+is known outcomes divided by all terminal Skill runs. Reported cost sums only
+terminal runs with finite `costUsd`; its coverage is reported-cost runs divided
+by terminal runs. Missing cost stays unreported, while explicit zero remains
+`$0.00`.
+
+When the event and connection sources were read completely, no Runtime is
+installed or verified, and there are no terminal runs or observed assets, the
+Command Center shows a privacy explanation and three-step quick start instead
+of fabricated zero KPI cards. A verified Runtime with no activity in the
+selected window shows truthful zero metrics instead of connection setup.
+Partial or unavailable event or connection sources never trigger onboarding.
+**Recent Runs** contains only terminal Skill runs, and every row opens Run
+Detail. Quick Actions link directly to asset scan, connection verification, a
+Managed Suite, Candidate review, and data export. Demo data always has a
+persistent Demo label and is never mixed with local facts.
 
 ### Agents
 
@@ -193,6 +244,12 @@ installations. `drifted` means the path exists but its observed hash differs
 from the locked version; `missing` means the desired path was not found;
 `unmanaged` means scanning found a definition with no desired lock.
 
+Both definition and Artifact tables use stable server-side filtering and
+50-row pages. The browser receives the current rows and aggregate counts, not
+the complete inventory. Filter and page state remains in the URL. **Scan
+again** or **Refresh** explicitly replaces the relevant in-memory snapshot;
+ordinary search, filter, and page changes reuse it.
+
 **Preview a GitHub Candidate** resolves the entered branch or tag to an exact
 commit and displays metadata without persisting the body or changing Stable.
 When an Artifact has multiple versions, **Compare versions** returns changed
@@ -224,9 +281,37 @@ not a conflict.
 
 Quick Compare can carry an in-memory Candidate draft into Managed Suites, but it
 cannot create a Capability or bind governed evidence. A completed Managed Suite
-can nominate the exact baseline/candidate/evidence hashes. Releases preserves
-the authoritative Capability stages, blocks stale or insufficient evidence,
-requires an independent reviewer for approval, and uses preview, confirmation,
+must receive one final Decision: **Create Candidate**, **Keep baseline**,
+**Reject Candidate**, or **Collect more evidence**. The canonical API is
+`GET/POST /api/evaluations/:runId/decision`; the older
+`/api/evaluation-runs/:runId/decision` path remains compatible.
+
+The persisted Decision contains exactly `decisionId`, `evaluationRunId`,
+`artifactId`, `candidateRefHash`, `decision`, and `recordedAt`. Retrying the
+same Decision returns the existing record. A different judgment or
+supplemental evidence requires a new Managed Suite run.
+
+Suite case coverage is persisted as evaluated cases divided by the run's
+authoritative eligible-case count. **Create Candidate** requires current,
+passing evidence at exactly 100% coverage; incomplete or legacy evidence
+without an eligible-case count can only be kept, rejected, or sent back for
+more evidence.
+
+Registry and PromptHub import flows may first persist an exact-revision
+**Candidate** proposal without evaluation evidence. It remains at Candidate and
+cannot enter Ready or any release stage. Only a final **Create Candidate**
+Decision may claim that proposal, or create a new one, as a **Release
+Candidate**. That run ID becomes the immutable `originEvaluationRunId`: one run
+can own at most one Release Candidate, including under concurrent requests.
+Later re-evaluation may update `latestEvidenceRunId` but cannot reassign the
+origin. Every quality-evidence refresh must first receive its own final
+**Create Candidate** Decision; **Keep baseline**, **Reject Candidate**, and
+**Collect more evidence** runs cannot be bound for release. Every approval,
+Canary, Stable, install, rollback, and pending Canary/Stable forward-release
+recovery revalidates the origin and latest-evidence Decisions and fails closed
+if either is missing or invalid. The release service preserves the authoritative
+Capability stages, blocks stale or insufficient evidence, requires an
+independent reviewer for approval, and uses preview, confirmation,
 authoritative rescan, and rollback for filesystem changes.
 
 ### Settings
@@ -306,7 +391,7 @@ transcripts, or other telemetry. Only sanitized result summaries and identity
 hashes are kept as evaluation evidence; raw prompts and outputs stay out of
 the evidence store.
 
-Use the **Suites** and **History** tabs on `/evaluations` to start, cancel, and
+Use the **Suites** and **History** tabs on `/benchmarks` to start, cancel, and
 inspect asynchronous Promptfoo runs. Completed and failed runs expose
 downloadable JSON and read-only HTML reports containing sanitized evidence
 only. Saved credentials live only in local `data/ai-settings.json`; each run
@@ -319,10 +404,12 @@ already has a Stable Artifact, nomination automatically binds that exact
 version as the baseline and rejects evidence produced against another version.
 Ready additionally requires an independent approval before Canary or Stable.
 
-The browser cannot submit owner, reviewer, or release-operator IDs. Requests
-without credentials use the account running the local SkillOps server. To
-review without restarting the server under another operating-system account,
-set `SKILLOPS_GOVERNANCE_PRINCIPALS` before startup, for example:
+The browser cannot submit owner, reviewer, or release-operator IDs. Ordinary
+local governance operations without a Bearer credential resolve to the account
+running the local SkillOps server. Approval is stricter: it requires an
+authenticated principal configured through `SKILLOPS_GOVERNANCE_PRINCIPALS`
+and never falls back to that operating-system account. Configure a distinct
+reviewer before startup, for example:
 
 ```json
 [{"id":"reviewer:alice","displayName":"Alice","token":"REPLACE_WITH_32_OR_MORE_RANDOM_CHARACTERS"}]
@@ -330,9 +417,14 @@ set `SKILLOPS_GOVERNANCE_PRINCIPALS` before startup, for example:
 
 Enter that value in **Reviewer access token** only when approving. It is sent
 as a Bearer credential, cleared after the request, and is not persisted by the
-browser or SkillOps. An owner still cannot approve the same Candidate.
-Direct API reads of `/api/project-skeleton-lock` and `/api/governance-audit`
-also require a configured Bearer credential.
+browser or SkillOps. A missing, unknown, or malformed token fails closed, and
+an owner still cannot approve the same Candidate. Direct API reads of
+`/api/project-skeleton-lock`, `/api/governance-audit`, and
+`/api/capabilities/:capabilityId/audit` use the same authenticated-principal
+requirement with no OS fallback. The Candidate audit timeline therefore starts
+locked rather than pretending a rejected read is empty. Enter an **Audit access
+token** and choose **Load protected audit**; that token is also kept only in
+component memory and cleared immediately after the request.
 
 After approval, enter an **absolute Canary project root** that resolves to a
 different physical directory from every governed Stable project, plus a path
@@ -374,10 +466,12 @@ temporarily unavailable. See the
 
 ### Local Team control plane
 
-Open **Team** or `/team`. On first use, choose a stable Team ID and display
-name. SkillOps assigns the account running the local server as `Owner`; the UI
-then shows the Registry-derived Artifact directory, project usage, lifecycle
-status, owner, Evidence Hash, Approval Inbox, and Release Queue.
+Open **Settings → Advanced → Team**. Its canonical URL is
+`/settings?section=advanced-team`; the legacy `/team` route immediately replaces
+itself with that canonical location. On first use, choose a stable Team ID and
+display name. SkillOps assigns the account running the local server as `Owner`;
+the UI then shows the Registry-derived Artifact directory, project usage,
+lifecycle status, owner, Evidence Hash, Approval Inbox, and Release Queue.
 
 Team entity and role mutations use the loopback `/api/team/entities/*`,
 `/api/team/devices/*`, and `/api/team/exceptions/*` routes. Roles are ordered
@@ -402,9 +496,14 @@ tool input/output, and provider credentials are never stored there.
 
 **Create backup** writes a sanitized Team export under
 `SKILLOPS_DATA_DIR/backups/`. `PUT /api/team/retention` changes the local
-collector-retention window and prunes expired records under the same file lock.
-Team audit records remain append-only and hash chained. Team mode is currently
-local + Git only: network deployment, SSO, and SCIM are not available.
+collector-retention window and prunes expired records under the ordered
+governance-release, Team, and Capability locks. The prune preserves every
+Capability's immutable origin run, latest evidence run, and referenced
+quality/Red Team runs so a retained Candidate cannot point to deleted
+provenance, including during concurrent release or registry activity. Team
+audit records remain append-only and hash chained.
+Team mode is currently local + Git only: network deployment, SSO, and SCIM are
+not available.
 
 ### Governed Team project templates
 
@@ -522,3 +621,13 @@ refresh Settings afterward.
 - [Runtime adapter guarantees](../develop/integrations/runtime_adapters.md)
 - [Troubleshooting](../develop/operations/troubleshooting.md)
 - [Privacy and security](../develop/security/privacy-security.md)
+
+This release remains a local + Git Limited Preview. P0 implementation is
+present, but the five-person validation sample, independent manual
+review/keyboard evidence, the corrected-candidate four-job matrix,
+immutable-candidate real-runtime, Broken-to-Repair, performance, browser/axe
+evidence, complete packet fields, and the dependency-risk decision remain
+external release gates.
+P1 SET/ACT/AST work stays gated until those P0 gates close. The current
+four-job cross-platform baseline is
+[GitHub Actions run 30145860716](https://github.com/Gjts/skillops/actions/runs/30145860716).

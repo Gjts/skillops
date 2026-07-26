@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createDefaultAiSettings } from '../lib/ai-settings'
 import { EvaluationWorkspace } from './EvaluationWorkspace'
@@ -84,6 +84,7 @@ function mockApi(handlers: Record<string, (init?: RequestInit) => Promise<unknow
 }
 
 beforeEach(() => {
+  window.history.replaceState({}, '', '/benchmarks')
   window.sessionStorage.clear()
   window.localStorage.clear()
   vi.stubGlobal('fetch', mockApi())
@@ -95,6 +96,33 @@ afterEach(() => {
 })
 
 describe('EvaluationWorkspace', () => {
+  it('opens the requested Managed Suites tab and Provider configuration from a deep link', async () => {
+    window.history.replaceState({}, '', '/benchmarks?tab=suites&configure=provider')
+    render(<EvaluationWorkspace />)
+
+    expect(screen.getByRole('tab', { name: 'Suites' }).getAttribute('aria-selected')).toBe('true')
+    expect(await screen.findByRole('dialog', { name: 'AI settings' })).toBeTruthy()
+  })
+
+  it('writes the active tab to compatible URLs and restores it on popstate', async () => {
+    window.history.replaceState({}, '', '/evaluations?source=legacy')
+    render(<EvaluationWorkspace />)
+
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+    expect(screen.getByRole('tab', { name: 'History' }).getAttribute('aria-selected')).toBe('true')
+    expect(window.location.pathname).toBe('/evaluations')
+    expect(new URLSearchParams(window.location.search).get('tab')).toBe('history')
+    expect(new URLSearchParams(window.location.search).get('source')).toBe('legacy')
+
+    await act(async () => {
+      window.history.pushState({}, '', '/evaluations?tab=suites&source=back')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+
+    expect(screen.getByRole('tab', { name: 'Suites' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByRole('tab', { name: 'History' }).getAttribute('aria-selected')).toBe('false')
+  })
+
   it('replaces the empty workflow guide with the analyzed evaluation stages', async () => {
     render(<EvaluationWorkspace />)
 

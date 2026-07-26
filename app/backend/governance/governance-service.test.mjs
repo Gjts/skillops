@@ -33,7 +33,7 @@ function runSummary(id, candidate, baseline = artifact('0.9.0', '9'), overrides 
     id, mode: 'suite', status: 'completed', suiteId: 'quality', suiteVersion: '1.0.0', suiteHash: 'd'.repeat(64), datasetHash: 'e'.repeat(64),
     baseline, candidate, engine: { name: 'promptfoo', version: '0.121.19' }, provider: { id: 'openai', model: 'gpt-test' },
     metrics: {
-      baselineScore: 80, candidateScore: 90, scoreDeltaPp: 10, casesPassed: 2, casesTotal: 2, passRatePct: 100,
+      baselineScore: 80, candidateScore: 90, scoreDeltaPp: 10, casesPassed: 2, casesTotal: 2, eligibleCases: 2, suiteCaseCoveragePct: 100, passRatePct: 100,
       regressionRatePct: 0, baselineTokens: null, candidateTokens: null, baselineCostUsd: null, candidateCostUsd: null,
       costDeltaPct: null, baselineP95LatencyMs: 10, candidateP95LatencyMs: 11, latencyDeltaPct: 10,
       attackSuccessRatePct: null, criticalFindings: 0, highFindings: 0,
@@ -118,6 +118,7 @@ async function ready(service, evaluations, candidate, suffix = '1', baseline, no
   const nominated = await service.nominate({ artifact: candidate, owner: 'Artifact Owner', targetSkeleton: 'codex:project-review', ...nomination })
   const quality = runSummary(`quality-${suffix}`, candidate, baseline)
   await evaluations.appendRun(quality)
+  await evaluations.appendDecision(quality.id, 'create-candidate')
   return { capability: await service.bindEvidence(nominated.capability.id, { runId: quality.id, actor: 'Operator' }), quality }
 }
 
@@ -210,8 +211,295 @@ describe('capability governance', () => {
     await expect(service.bindEvidence(nominated.capability.id, { runId: forged.id, actor: 'Operator' })).rejects.toThrow('Managed Suite')
     const trusted = runSummary('trusted-1', candidate)
     await evaluations.appendRun(trusted)
+    await expect(service.bindEvidence(nominated.capability.id, { runId: trusted.id, actor: 'Operator' }))
+      .rejects.toThrow('create-candidate Decision')
+    expect(await service.get(nominated.capability.id)).toEqual(expect.objectContaining({
+      stage: 'candidate',
+      originEvaluationRunId: null,
+      latestEvidenceRunId: null,
+    }))
+    await evaluations.appendDecision(trusted.id, 'create-candidate')
     expect(await service.bindEvidence(nominated.capability.id, { runId: trusted.id, actor: 'Operator' })).toEqual(expect.objectContaining({ stage: 'ready', approvals: [] }))
   })
+
+  it('creates at most one Release Candidate from a final Managed Suite Decision across retries and re-evaluation', async () => {
+    const { dataDir, evaluations, registry, service } = await setup()
+    const candidate = artifact('1.0.0', 'a')
+    const trusted = runSummary('single-candidate-run', candidate)
+    const rerun = runSummary('single-candidate-rerun', candidate)
+    await evaluations.appendRun(trusted)
+    await evaluations.appendRun(rerun)
+    await evaluations.appendDecision(trusted.id, 'create-candidate')
+    await evaluations.appendDecision(rerun.id, 'create-candidate')
+    const first = await service.nominate({
+      artifact: candidate,
+      owner: 'Owner',
+      targetSkeleton: 'codex:first',
+      originEvaluationRunId: trusted.id,
+    })
+    expect(await service.nominate({
+      artifact: candidate,
+      owner: 'Owner',
+      targetSkeleton: 'codex:first',
+      originEvaluationRunId: trusted.id,
+    })).toEqual(expect.objectContaining({ reused: true, capability: expect.objectContaining({ id: first.capability.id }) }))
+    await expect(service.nominate({
+      artifact: candidate,
+      owner: 'Owner',
+      targetSkeleton: 'codex:second',
+      originEvaluationRunId: trusted.id,
+    })).rejects.toMatchObject({ status: 409 })
+    await expect(service.nominate({
+      artifact: candidate,
+      baseline: artifact('0.8.0', '8'),
+      owner: 'Owner',
+      targetSkeleton: 'codex:first',
+      originEvaluationRunId: trusted.id,
+    })).rejects.toThrow('baseline')
+    const second = await service.nominate({ artifact: candidate, owner: 'Owner', targetSkeleton: 'codex:second' })
+
+    await service.bindEvidence(first.capability.id, { runId: trusted.id, actor: 'Operator' })
+    await service.bindEvidence(first.capability.id, { runId: rerun.id, actor: 'Operator' })
+    for (const decision of ['keep-baseline', 'reject-candidate', 'collect-more-evidence']) {
+      const decided = runSummary(`decided-${decision}`, candidate)
+      await evaluations.appendRun(decided)
+      await evaluations.appendDecision(decided.id, decision)
+      await expect(service.bindEvidence(first.capability.id, { runId: decided.id, actor: 'Operator' }))
+        .rejects.toThrow('create-candidate Decision')
+    }
+    const undecided = runSummary('undecided-re-evaluation', candidate)
+    await evaluations.appendRun(undecided)
+    await expect(service.bindEvidence(first.capability.id, { runId: undecided.id, actor: 'Operator' }))
+      .rejects.toThrow('final create-candidate Decision')
+    await evaluations.appendDecision(undecided.id, 'reject-candidate')
+    await expect(service.bindEvidence(first.capability.id, { runId: undecided.id, actor: 'Operator' }))
+      .rejects.toThrow('create-candidate Decision')
+    await expect(service.bindEvidence(second.capability.id, { runId: trusted.id, actor: 'Operator' })).rejects.toMatchObject({ status: 409 })
+    await expect(service.bindEvidence(second.capability.id, { runId: rerun.id, actor: 'Operator' })).rejects.toMatchObject({ status: 409 })
+    const stored = JSON.parse(await readFile(path.join(dataDir, 'capabilities.json'), 'utf8'))
+    expect(stored).toEqual(expect.objectContaining({ schemaVersion: 2 }))
+    expect(stored.capabilities.find((item) => item.id === first.capability.id)?.originEvaluationRunId).toBe(trusted.id)
+    expect(stored.capabilities.find((item) => item.id === first.capability.id)?.baseline).toEqual(trusted.baseline)
+    await expect(registry.update(first.capability.id, (current) => ({ ...current, originEvaluationRunId: null }))).rejects.toThrow('immutable')
+    await expect(registry.mutateAll((current) => current.map((item) => item.id === first.capability.id
+      ? { ...item, originEvaluationRunId: null }
+      : item))).rejects.toThrow('immutable')
+
+    const keepBaseline = runSummary('keep-baseline-run', candidate)
+    await evaluations.appendRun(keepBaseline)
+    await evaluations.appendDecision(keepBaseline.id, 'keep-baseline')
+    await expect(service.nominate({
+      artifact: candidate,
+      owner: 'Owner',
+      targetSkeleton: 'codex:third',
+      originEvaluationRunId: keepBaseline.id,
+    })).rejects.toThrow('create-candidate Decision')
+
+    const otherOrigin = runSummary('other-origin-run', candidate)
+    await evaluations.appendRun(otherOrigin)
+    await evaluations.appendDecision(otherOrigin.id, 'create-candidate')
+    await expect(service.nominate({
+      artifact: candidate,
+      owner: 'Owner',
+      targetSkeleton: 'codex:first',
+      originEvaluationRunId: otherOrigin.id,
+    })).rejects.toMatchObject({ status: 409 })
+    expect((await registry.get(first.capability.id)).originEvaluationRunId).toBe(trusted.id)
+  })
+
+  it('blocks release when persisted Candidate origin no longer has its final Decision', async () => {
+    const { evaluations, service } = await setup()
+    const candidate = artifact('1.0.0', 'a')
+    const quality = runSummary('missing-origin-decision', candidate)
+    await evaluations.appendRun(quality)
+    await evaluations.appendDecision(quality.id, 'create-candidate')
+    const nominated = await service.nominate({
+      artifact: candidate,
+      owner: 'Owner',
+      targetSkeleton: 'codex:review',
+      originEvaluationRunId: quality.id,
+    })
+    await service.bindEvidence(nominated.capability.id, { runId: quality.id, actor: 'Operator' })
+    await service.approve(nominated.capability.id, { reviewer: 'Reviewer' })
+
+    const records = (await readFile(evaluations.storeFile, 'utf8'))
+      .trimEnd()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.type !== 'decision')
+    await writeFile(evaluations.storeFile, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`)
+
+    expect(await service.get(nominated.capability.id)).toEqual(expect.objectContaining({
+      stage: 'ready',
+      evidenceStale: true,
+      approvals: [],
+    }))
+    await expect(service.previewCanary(nominated.capability.id))
+      .rejects.toThrow('create-candidate Decision')
+  })
+
+  it('reads v1 capability files without inventing origin provenance and writes v2', async () => {
+    const { dataDir, evaluations, service } = await setup()
+    const candidate = artifact('1.0.0', 'a')
+    const nominated = await service.nominate({ artifact: candidate, owner: 'Owner', targetSkeleton: 'codex:review' })
+    const trusted = runSummary('legacy-reserved-run', candidate)
+    await evaluations.appendRun(trusted)
+    await evaluations.appendDecision(trusted.id, 'create-candidate')
+    await service.bindEvidence(nominated.capability.id, { runId: trusted.id, actor: 'Operator' })
+
+    const file = path.join(dataDir, 'capabilities.json')
+    const legacy = JSON.parse(await readFile(file, 'utf8'))
+    legacy.schemaVersion = 1
+    legacy.capabilities.forEach((item) => { delete item.originEvaluationRunId })
+    await writeFile(file, `${JSON.stringify(legacy)}\n`)
+
+    const registry = createCapabilityRegistry({ dataDir })
+    const [migrated] = await registry.list()
+    expect(migrated.originEvaluationRunId).toBeNull()
+    expect(migrated.latestEvidenceRunId).toBe(trusted.id)
+    await registry.update(migrated.id, (current) => current)
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual(expect.objectContaining({ schemaVersion: 2 }))
+
+    const rerun = runSummary('legacy-reserved-rerun', candidate)
+    await evaluations.appendRun(rerun)
+    await evaluations.appendDecision(rerun.id, 'create-candidate')
+    await service.bindEvidence(migrated.id, { runId: rerun.id, actor: 'Operator' })
+    expect((await registry.get(migrated.id)).originEvaluationRunId).toBe(trusted.id)
+    await expect(service.nominate({
+      artifact: candidate,
+      owner: 'Owner',
+      targetSkeleton: 'codex:other',
+      originEvaluationRunId: trusted.id,
+    })).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('rejects duplicate legacy evaluation-run reservations at the registry boundary', async () => {
+    const { dataDir, evaluations, service } = await setup()
+    const { capability } = await ready(service, evaluations, artifact('1.0.0', 'a'))
+    const file = path.join(dataDir, 'capabilities.json')
+    const legacy = JSON.parse(await readFile(file, 'utf8'))
+    const original = legacy.capabilities.find((item) => item.id === capability.id)
+    delete original.originEvaluationRunId
+    legacy.schemaVersion = 1
+    legacy.capabilities.push({
+      ...original,
+      id: `${original.id}-duplicate`,
+      targetSkeleton: 'codex:duplicate-review',
+    })
+    await writeFile(file, `${JSON.stringify(legacy)}\n`)
+
+    await expect(createCapabilityRegistry({ dataDir }).list())
+      .rejects.toThrow('duplicate evaluation run reservation')
+  })
+
+  it('rejects evidence whose declared latest run differs from its quality binding', async () => {
+    const { dataDir, evaluations, service } = await setup()
+    const { capability } = await ready(service, evaluations, artifact('1.0.0', 'a'))
+    const file = path.join(dataDir, 'capabilities.json')
+    const stored = JSON.parse(await readFile(file, 'utf8'))
+    stored.capabilities.find((item) => item.id === capability.id).latestEvidenceRunId = 'other-run'
+    await writeFile(file, `${JSON.stringify(stored)}\n`)
+
+    await expect(createCapabilityRegistry({ dataDir }).list())
+      .rejects.toThrow('latest evidence run does not match')
+  })
+
+  it('fails closed when an injected Registry splits latest from quality evidence', async () => {
+    const setupResult = await setup()
+    const candidate = artifact('1.0.0', 'a')
+    const { capability } = await ready(setupResult.service, setupResult.evaluations, candidate)
+    const rerun = runSummary('split-evidence-rerun', candidate)
+    await setupResult.evaluations.appendRun(rerun)
+    await setupResult.evaluations.appendDecision(rerun.id, 'create-candidate')
+    const rebound = await setupResult.service.bindEvidence(capability.id, { runId: rerun.id, actor: 'Operator' })
+    const injectedRegistry = {
+      ...setupResult.registry,
+      async get(id) {
+        const current = await setupResult.registry.get(id)
+        return current?.id === rebound.id
+          ? { ...current, latestEvidenceRunId: current.originEvaluationRunId }
+          : current
+      },
+    }
+    const injectedService = createGovernanceService({
+      evaluations: setupResult.evaluations,
+      registry: injectedRegistry,
+      skeletonLock: setupResult.skeletonLock,
+      installer: setupResult.installer,
+    })
+
+    expect(await injectedService.get(rebound.id)).toEqual(expect.objectContaining({
+      evidenceStale: true,
+      approvals: [],
+    }))
+    await expect(injectedService.approve(rebound.id, { reviewer: 'Reviewer' }))
+      .rejects.toThrow('latest evidence run does not match')
+  })
+
+  it('rejects duplicate Capability IDs at the registry boundary', async () => {
+    const { dataDir, evaluations, service } = await setup()
+    const { capability } = await ready(service, evaluations, artifact('1.0.0', 'a'))
+    const file = path.join(dataDir, 'capabilities.json')
+    const stored = JSON.parse(await readFile(file, 'utf8'))
+    const original = stored.capabilities.find((item) => item.id === capability.id)
+    stored.capabilities.push({ ...original, targetSkeleton: 'codex:duplicate-id' })
+    await writeFile(file, `${JSON.stringify(stored)}\n`)
+
+    await expect(createCapabilityRegistry({ dataDir }).list())
+      .rejects.toThrow('duplicate Capability ID')
+  })
+
+  it('preserves a legacy Candidate Decision origin before nomination can reclaim it', async () => {
+    const { dataDir, evaluations, service } = await setup()
+    const candidate = artifact('1.0.0', 'a')
+    const origin = runSummary('legacy-nomination-origin', candidate)
+    const replacement = runSummary('legacy-nomination-replacement', candidate)
+    await evaluations.appendRun(origin)
+    await evaluations.appendRun(replacement)
+    const nominated = await service.nominate({ artifact: candidate, owner: 'Owner', targetSkeleton: 'codex:review' })
+    await evaluations.appendDecision(origin.id, 'create-candidate')
+    await evaluations.appendDecision(replacement.id, 'create-candidate')
+    await service.bindEvidence(nominated.capability.id, { runId: origin.id, actor: 'Operator' })
+
+    const file = path.join(dataDir, 'capabilities.json')
+    const legacy = JSON.parse(await readFile(file, 'utf8'))
+    legacy.schemaVersion = 1
+    legacy.capabilities.forEach((item) => {
+      delete item.originEvaluationRunId
+      delete item.ownerIdentityAssurance
+    })
+    await writeFile(file, `${JSON.stringify(legacy)}\n`)
+
+    await expect(service.nominate({
+      artifact: candidate,
+      owner: 'Owner',
+      targetSkeleton: 'codex:review',
+      originEvaluationRunId: replacement.id,
+    })).rejects.toMatchObject({ status: 409 })
+    await expect(service.nominate({
+      artifact: candidate,
+      baseline: artifact('0.8.0', '8'),
+      owner: 'Owner',
+      targetSkeleton: 'codex:review',
+    })).rejects.toThrow('baseline')
+
+    const reclaimed = await service.nominate({
+      artifact: candidate,
+      owner: 'Owner',
+      targetSkeleton: 'codex:review',
+    })
+    expect(reclaimed.capability).toEqual(expect.objectContaining({
+      id: nominated.capability.id,
+      originEvaluationRunId: origin.id,
+    }))
+    await expect(service.nominate({
+      artifact: candidate,
+      owner: 'Owner',
+      targetSkeleton: 'codex:other',
+      originEvaluationRunId: origin.id,
+    })).rejects.toMatchObject({ status: 409 })
+  })
+
   it('applies a Team Policy Pack and only waives it after independent exception approval', async () => {
     const setupResult = await setup()
     const owner = { id: 'user:owner', displayName: 'Owner' }
@@ -248,6 +536,7 @@ describe('capability governance', () => {
     })
     const quality = runSummary('team-policy-quality', candidate)
     await setupResult.evaluations.appendRun(quality)
+    await setupResult.evaluations.appendDecision(quality.id, 'create-candidate')
 
     expect(await service.bindEvidence(nominated.capability.id, { runId: quality.id, actor: 'Operator' })).toEqual(expect.objectContaining({
       projectId: 'project-a',
@@ -311,6 +600,7 @@ describe('capability governance', () => {
     const first = await service.nominate({ artifact: firstArtifact, owner: 'Owner', targetSkeleton: 'Skills/Review/SKILL.md' })
     const firstRun = runSummary('target-alias-first', firstArtifact)
     await evaluations.appendRun(firstRun)
+    await evaluations.appendDecision(firstRun.id, 'create-candidate')
     await service.bindEvidence(first.capability.id, { runId: firstRun.id, actor: 'Operator' })
     await service.approve(first.capability.id, { reviewer: 'Reviewer' })
     await startCanary(service, first.capability.id, 'Operator')
@@ -396,6 +686,30 @@ describe('capability governance', () => {
       at: expect.any(String),
     }))
   })
+  it('does not upgrade a legacy Approval without a valid Release Candidate origin', async () => {
+    const { dataDir, evaluations, service } = await setup()
+    const { capability } = await ready(service, evaluations, artifact('1.0.0', 'a'))
+    await service.approve(capability.id, { reviewer: 'Legacy Reviewer' })
+
+    const capabilityFile = path.join(dataDir, 'capabilities.json')
+    const legacy = JSON.parse(await readFile(capabilityFile, 'utf8'))
+    legacy.schemaVersion = 1
+    legacy.capabilities.forEach((item) => {
+      delete item.originEvaluationRunId
+      item.approvals = item.approvals.map(({ identityAssurance: _identityAssurance, ...approval }) => approval)
+    })
+    await writeFile(capabilityFile, `${JSON.stringify(legacy)}\n`)
+
+    const evidenceRecords = (await readFile(evaluations.storeFile, 'utf8'))
+      .trimEnd()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.type !== 'decision')
+    await writeFile(evaluations.storeFile, `${evidenceRecords.map((record) => JSON.stringify(record)).join('\n')}\n`)
+
+    await expect(service.approve(capability.id, { reviewer: 'Authenticated Reviewer' }))
+      .rejects.toThrow('create-candidate Decision')
+  })
   it('blocks Stable preview when the verified Canary deployment drifts', async () => {
     const { evaluations, installer, service } = await setup()
     const { capability } = await ready(service, evaluations, artifact('1.0.0', 'a'))
@@ -431,6 +745,56 @@ describe('capability governance', () => {
     expect((await setupResult.service.get(capability.id)).approvals).toHaveLength(1)
   })
 
+  it('serializes origin nomination across service instances', async () => {
+    const setupResult = await setup()
+    const peer = createGovernanceService({
+      evaluations: setupResult.evaluations,
+      registry: createCapabilityRegistry({ dataDir: setupResult.dataDir }),
+      skeletonLock: createSkeletonLock({ dataDir: setupResult.dataDir }),
+      installer: setupResult.installer,
+      audit: createGovernanceAuditLog({ dataDir: setupResult.dataDir }),
+    })
+    await peer.initialize()
+    const candidate = artifact('1.0.0', 'a')
+    const sameTargetRun = runSummary('concurrent-same-target', candidate)
+    await setupResult.evaluations.appendRun(sameTargetRun)
+    await setupResult.evaluations.appendDecision(sameTargetRun.id, 'create-candidate')
+    const sameInput = {
+      artifact: candidate,
+      owner: 'Owner',
+      targetSkeleton: 'codex:same-target',
+      originEvaluationRunId: sameTargetRun.id,
+    }
+    const sameTarget = await Promise.all([
+      setupResult.service.nominate(sameInput),
+      peer.nominate(sameInput),
+    ])
+    expect(new Set(sameTarget.map((item) => item.capability.id)).size).toBe(1)
+
+    const differentCandidate = artifact('2.0.0', 'b')
+    const differentTargetRun = runSummary('concurrent-different-target', differentCandidate)
+    await setupResult.evaluations.appendRun(differentTargetRun)
+    await setupResult.evaluations.appendDecision(differentTargetRun.id, 'create-candidate')
+    const differentTarget = await Promise.allSettled([
+      setupResult.service.nominate({
+        artifact: differentCandidate,
+        owner: 'Owner',
+        targetSkeleton: 'codex:first-target',
+        originEvaluationRunId: differentTargetRun.id,
+      }),
+      peer.nominate({
+        artifact: differentCandidate,
+        owner: 'Owner',
+        targetSkeleton: 'codex:second-target',
+        originEvaluationRunId: differentTargetRun.id,
+      }),
+    ])
+    expect(differentTarget.filter((item) => item.status === 'fulfilled')).toHaveLength(1)
+    expect(differentTarget.filter((item) => item.status === 'rejected')).toHaveLength(1)
+    expect(differentTarget.find((item) => item.status === 'rejected')?.reason).toMatchObject({ status: 409 })
+    expect((await setupResult.registry.list()).filter((item) => item.originEvaluationRunId === differentTargetRun.id)).toHaveLength(1)
+  })
+
   it('finishes a release after restart when the lock committed before the registry', async () => {
     const setupResult = await setup()
     const { evaluations, registry, skeletonLock, installer, service } = setupResult
@@ -454,6 +818,15 @@ describe('capability governance', () => {
       installer,
       audit: createGovernanceAuditLog({ dataDir: setupResult.dataDir }),
     })
+    const records = (await readFile(evaluations.storeFile, 'utf8'))
+      .trimEnd()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.type !== 'decision')
+    await writeFile(evaluations.storeFile, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`)
+    await expect(restarted.initialize()).rejects.toThrow('create-candidate Decision')
+    expect((await registry.get(capability.id)).stage).toBe('canary')
+    await evaluations.appendDecision(capability.originEvaluationRunId, 'create-candidate')
     await restarted.initialize()
 
     expect(await restarted.get(capability.id)).toEqual(expect.objectContaining({ stage: 'stable' }))
@@ -506,7 +879,7 @@ describe('capability governance', () => {
     const prepared = await service.audit.prepare({
       action: 'candidate.nominated',
       actor: 'Local Owner',
-      capability: nominated.capability,
+      capability: await registry.get(nominated.capability.id),
       fromStage: null,
       toStage: 'candidate',
     })
@@ -522,6 +895,41 @@ describe('capability governance', () => {
 
     expect((await restarted.listAudit({ capabilityId: nominated.capability.id }))
       .find((record) => record.transactionId === prepared.transactionId)?.outcome).toBe('committed')
+  })
+
+  it('fails a pending origin claim when the capability write never happened', async () => {
+    const setupResult = await setup()
+    const { evaluations, registry, skeletonLock, installer, service } = setupResult
+    const nominated = await service.nominate({
+      artifact: artifact('1.0.0', 'a'),
+      owner: 'Owner',
+      targetSkeleton: 'codex:review',
+    })
+    const current = await registry.get(nominated.capability.id)
+    const prepared = await service.audit.prepare({
+      action: 'candidate.nominated',
+      actor: 'Owner',
+      capability: {
+        ...current,
+        originEvaluationRunId: 'run-that-was-not-written',
+        updatedAt: new Date(Date.parse(current.updatedAt) + 1_000).toISOString(),
+      },
+      fromStage: 'candidate',
+      toStage: 'candidate',
+    })
+    const restarted = createGovernanceService({
+      evaluations,
+      registry: createCapabilityRegistry({ dataDir: setupResult.dataDir }),
+      skeletonLock: createSkeletonLock({ dataDir: setupResult.dataDir }),
+      installer,
+      audit: createGovernanceAuditLog({ dataDir: setupResult.dataDir }),
+    })
+
+    await restarted.initialize()
+
+    expect((await restarted.get(nominated.capability.id)).originEvaluationRunId).toBeNull()
+    expect((await restarted.listAudit({ capabilityId: nominated.capability.id }))
+      .find((record) => record.transactionId === prepared.transactionId)?.outcome).toBe('failed')
   })
 
 
@@ -568,6 +976,7 @@ describe('capability governance', () => {
     const nominated = await service.nominate({ artifact: candidate, baseline, owner: 'Artifact Owner', targetSkeleton: 'codex:project-review' })
     const quality = runSummary('audit-failure', candidate, baseline)
     await evaluations.appendRun(quality)
+    await evaluations.appendDecision(quality.id, 'create-candidate')
     await service.bindEvidence(nominated.capability.id, { runId: quality.id, actor: 'Operator' })
     await service.approve(nominated.capability.id, { reviewer: 'Reviewer One' })
     await startCanary(service, nominated.capability.id, 'Operator', 'SKILL.md', canaryRoot)
@@ -583,6 +992,61 @@ describe('capability governance', () => {
       expect.objectContaining({ action: 'stable.promoted', outcome: 'failed' }),
     ]))
   })
+
+  it('restores a lazy legacy origin claim when Canary evidence audit fails', async () => {
+    const setupResult = await setup()
+    const candidate = artifact('1.0.0', 'a')
+    const origin = runSummary('canary-legacy-origin', candidate)
+    await setupResult.evaluations.appendRun(origin)
+    const nominated = await setupResult.service.nominate({ artifact: candidate, owner: 'Owner', targetSkeleton: 'codex:review' })
+    await setupResult.evaluations.appendDecision(origin.id, 'create-candidate')
+    await setupResult.service.bindEvidence(nominated.capability.id, { runId: origin.id, actor: 'Operator' })
+    await setupResult.service.approve(nominated.capability.id, { reviewer: 'Reviewer' })
+    await startCanary(setupResult.service, nominated.capability.id, 'Operator')
+
+    const file = path.join(setupResult.dataDir, 'capabilities.json')
+    const legacy = JSON.parse(await readFile(file, 'utf8'))
+    legacy.schemaVersion = 1
+    legacy.capabilities.forEach((item) => { delete item.originEvaluationRunId })
+    await writeFile(file, `${JSON.stringify(legacy)}\n`)
+
+    const replacement = runSummary('canary-legacy-replacement', candidate)
+    await setupResult.evaluations.appendRun(replacement)
+    await setupResult.evaluations.appendDecision(replacement.id, 'create-candidate')
+    const auditLog = createGovernanceAuditLog({ dataDir: setupResult.dataDir })
+    const audit = {
+      prepare: (...args) => auditLog.prepare(...args),
+      commit: async (record) => {
+        if (record.action === 'evidence.bound') throw new Error('evidence audit failed')
+        return auditLog.commit(record)
+      },
+      fail: (...args) => auditLog.fail(...args),
+      list: (...args) => auditLog.list(...args),
+    }
+    const service = createGovernanceService({
+      evaluations: setupResult.evaluations,
+      registry: createCapabilityRegistry({ dataDir: setupResult.dataDir }),
+      skeletonLock: setupResult.skeletonLock,
+      installer: setupResult.installer,
+      audit,
+    })
+
+    await expect(service.bindEvidence(nominated.capability.id, {
+      runId: replacement.id,
+      actor: 'Operator',
+    })).rejects.toThrow('evidence audit failed')
+    expect(await service.get(nominated.capability.id)).toEqual(expect.objectContaining({
+      stage: 'canary',
+      originEvaluationRunId: null,
+      latestEvidenceRunId: origin.id,
+      evidence: expect.objectContaining({ qualityRunId: origin.id }),
+    }))
+    expect((await service.lockState()).targets['codex:review'].canary).toEqual(expect.objectContaining({
+      capabilityId: nominated.capability.id,
+      observedContentHash: candidate.contentHash,
+    }))
+  })
+
   it('retains installer recovery when lock compensation is not durable', async () => {
     const setupResult = await setup()
     const candidate = artifact('1.0.0', 'a')
@@ -706,6 +1170,7 @@ describe('capability governance', () => {
     await startCanary(service, capability.id, 'Operator')
     const rerun = runSummary('quality-rerun', candidate)
     await evaluations.appendRun(rerun)
+    await evaluations.appendDecision(rerun.id, 'create-candidate')
 
     const rebound = await service.bindEvidence(capability.id, { runId: rerun.id, actor: 'Operator' })
 
@@ -784,10 +1249,21 @@ describe('capability governance', () => {
     await expect(changedService.previewRollback(capability.id)).rejects.toThrow('fresh evaluation')
     const freshRun = runSummary('deprecated-requalified', capability.artifact, capability.baseline, { gatePolicy: changedPolicy })
     await evaluations.appendRun(freshRun)
+    await evaluations.appendDecision(freshRun.id, 'create-candidate')
     const requalified = await changedService.bindEvidence(capability.id, { runId: freshRun.id, actor: 'Operator' })
     expect(requalified).toEqual(expect.objectContaining({ stage: 'ready', requalifiesStage: 'deprecated' }))
     await changedService.approve(capability.id, { reviewer: 'Reviewer Two' })
     await expect(changedService.canary(capability.id, { actor: 'Operator' })).rejects.toThrow('requalified')
+    const originDecisionRecords = (await readFile(evaluations.storeFile, 'utf8'))
+      .trimEnd()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    await writeFile(evaluations.storeFile, `${originDecisionRecords
+      .filter((record) => record.type !== 'decision' || record.decision.evaluationRunId !== capability.originEvaluationRunId)
+      .map((record) => JSON.stringify(record))
+      .join('\n')}\n`)
+    await expect(changedService.previewRollback(capability.id)).rejects.toThrow('create-candidate Decision')
+    await evaluations.appendDecision(capability.originEvaluationRunId, 'create-candidate')
     const restorePreview = await changedService.previewRollback(capability.id)
     expect((await changedService.rollback(capability.id, {
       previewToken: restorePreview.previewToken,
@@ -832,6 +1308,7 @@ describe('capability governance', () => {
       gatePolicy: changedPolicy,
     })
     await evaluations.appendRun(requalificationRun)
+    await evaluations.appendDecision(requalificationRun.id, 'create-candidate')
     await changedService.bindEvidence(first.capability.id, { runId: requalificationRun.id, actor: 'Operator' })
     await changedService.approve(first.capability.id, { reviewer: 'Reviewer Three' })
 
@@ -878,6 +1355,15 @@ describe('capability governance', () => {
       installer: setupResult.installer,
       policy: changedPolicy,
     })
+    const records = (await readFile(evaluations.storeFile, 'utf8'))
+      .trimEnd()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.type !== 'decision'
+        || record.decision.evaluationRunId !== first.capability.originEvaluationRunId)
+    await writeFile(evaluations.storeFile, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`)
+    await expect(stalePolicyService.previewRollback(second.capability.id)).rejects.toThrow('create-candidate Decision')
+    await evaluations.appendDecision(first.capability.originEvaluationRunId, 'create-candidate')
     const rolledBack = await rollback(stalePolicyService, second.capability.id)
     expect(restorePreviews.at(-1)).toEqual(expect.objectContaining({
       recoveryToken: expect.stringMatching(/^[a-f0-9-]{36}$/),

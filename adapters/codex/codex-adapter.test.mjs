@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { spawn } from 'node:child_process'
-import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { access, link, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -30,6 +30,21 @@ function runHook(input, environment) {
     child.on('error', reject)
     child.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`Hook exited ${code}: ${stderr}`)))
     child.stdin.end(JSON.stringify(input))
+  })
+}
+
+function runRawHook(input, cwd, environment) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.resolve('adapters/codex/hook.mjs')], {
+      cwd,
+      env: { ...process.env, ...environment },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    let stderr = ''
+    child.stderr.on('data', (chunk) => { stderr += chunk })
+    child.on('error', reject)
+    child.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`Hook exited ${code}: ${stderr}`)))
+    child.stdin.end(input)
   })
 }
 
@@ -108,6 +123,61 @@ describe('Codex hook installer', () => {
 })
 
 describe('Codex lifecycle adapter', () => {
+  it('redacts legacy raw diagnostics before normal hook processing', async () => {
+    const root = await temporaryDirectory('skillops-codex-legacy-diagnostic-')
+    const dataDir = path.join(root, 'data')
+    const project = path.join(root, 'project')
+    const diagnosticFile = path.join(dataDir, 'codex-adapter-errors.log')
+    await mkdir(dataDir, { recursive: true })
+    await mkdir(project, { recursive: true })
+    await writeFile(diagnosticFile, 'SyntaxError: GP10_LEGACY_CODEX_STACK\n    at private-source.js:1:1\n')
+
+    const input = {
+      session_id: 'legacy-diagnostic-session',
+      turn_id: 'legacy-diagnostic-turn',
+      cwd: project,
+      hook_event_name: 'SessionStart',
+    }
+    await runHook(input, { SKILLOPS_DATA_DIR: dataDir })
+    await runHook(input, { SKILLOPS_DATA_DIR: dataDir })
+
+    expect(await readFile(diagnosticFile, 'utf8')).toBe('CODEX_ADAPTER_DIAGNOSTICS_REDACTED\n')
+  })
+
+  it('replaces a linked diagnostic entry without changing its target', async () => {
+    const root = await temporaryDirectory('skillops-codex-linked-diagnostic-')
+    const dataDir = path.join(root, 'data')
+    const project = path.join(root, 'project')
+    const diagnosticFile = path.join(dataDir, 'codex-adapter-errors.log')
+    const linkedTarget = path.join(root, 'unrelated-user-file.txt')
+    const outside = 'GP10_LINKED_CODEX_TARGET_MUST_SURVIVE\n'
+    await mkdir(dataDir, { recursive: true })
+    await mkdir(project, { recursive: true })
+    await writeFile(linkedTarget, outside)
+    await link(linkedTarget, diagnosticFile)
+
+    await runRawHook('{"rawError":GP10_LINKED_INPUT}', project, { SKILLOPS_DATA_DIR: dataDir })
+
+    expect(await readFile(linkedTarget, 'utf8')).toBe(outside)
+    const diagnostic = await readFile(diagnosticFile, 'utf8')
+    expect(diagnostic).toContain('CODEX_ADAPTER_FAILURE Hook processing failed.')
+    expect(diagnostic).not.toContain('GP10_LINKED')
+  })
+
+  it('writes only a fixed safe diagnostic when hook input is malformed', async () => {
+    const root = await temporaryDirectory('skillops-codex-private-diagnostic-')
+    const dataDir = path.join(root, 'data')
+    const project = path.join(root, 'project')
+    await mkdir(project, { recursive: true })
+
+    await runRawHook('{"rawError":GP10LEAK}', project, { SKILLOPS_DATA_DIR: dataDir })
+
+    const diagnostic = await readFile(path.join(dataDir, 'codex-adapter-errors.log'), 'utf8')
+    expect(diagnostic).toContain('CODEX_ADAPTER_FAILURE Hook processing failed.')
+    expect(diagnostic).not.toContain('GP10LEAK')
+    expect(diagnostic).not.toContain('SyntaxError')
+  })
+
   it('does not activate explicitly disabled plugin Skills', async () => {
     const root = await temporaryDirectory('skillops-codex-disabled-plugin-')
     const codexHome = path.join(root, 'codex-home')

@@ -80,11 +80,29 @@ export interface ArtifactInstallationRecord {
 export interface ArtifactRegistrySnapshot {
   schemaVersion: 1
   generatedAt: string
+  sourceStatus?: 'complete' | 'partial'
   artifacts: ArtifactRecord[]
   versions: ArtifactVersionRecord[]
   installations: ArtifactInstallationRecord[]
   compatibility: Record<ArtifactKind, Record<RuntimeTarget, CompatibilityStatus>>
-  warnings: Array<{ source: 'prompt-registry', code: 'PROMPT_SOURCE_UNAVAILABLE' }>
+  warnings: Array<
+    | { source: 'prompt-registry'; code: 'PROMPT_SOURCE_UNAVAILABLE' }
+    | { source: 'git'; code: 'GIT_ARTIFACT_SOURCE_UNAVAILABLE' }
+  >
+  page: number
+  pageSize: number
+  totalItems: number
+  totalPages: number
+  hasPrevious: boolean
+  hasNext: boolean
+  stats: { totalArtifacts: number; driftedInstallations: number }
+  facets: {
+    kinds: Array<{ value: ArtifactKind; count: number }>
+    sources: Array<{ value: ArtifactSource; count: number }>
+    statuses: Array<{ value: ArtifactStatus; count: number }>
+    runtimes: Array<{ value: RuntimeTarget; count: number }>
+    owners: Array<{ value: string; count: number }>
+  }
 }
 
 export interface CandidateRef {
@@ -152,6 +170,8 @@ export interface EvaluationMetrics {
   scoreDeltaPp: number | null
   casesPassed: number
   casesTotal: number
+  eligibleCases: number | null
+  suiteCaseCoveragePct: number | null
   passRatePct: number | null
   regressionRatePct: number | null
   baselineTokens: number | null
@@ -246,9 +266,14 @@ export interface Capability {
   projectId?: string | null
   projectRoot?: string | null
   targetKey?: string | null
+  releaseTarget?: {
+    stableCapabilityId: string | null
+    previousStableCapabilityId: string | null
+  }
   stage: CapabilityStage
   requalifiesStage?: 'deprecated' | 'superseded' | null
   policyId: string
+  originEvaluationRunId?: string | null
   latestEvidenceRunId?: string | null
   evidence: CapabilityEvidence | null
   approvals: CapabilityApproval[]

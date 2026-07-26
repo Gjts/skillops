@@ -25,9 +25,12 @@ describe('governance audit log', () => {
     const first = await audit.append({ action: 'candidate.nominated', actor: 'Owner', capability, fromStage: null, toStage: 'candidate' })
     await audit.append({ action: 'evidence.bound', actor: 'Evaluator', capability: { ...capability, id: 'cap-2' }, fromStage: 'candidate', toStage: 'ready' })
     await appendFile(audit.file, '{"partial":', 'utf8')
-    const recovered = await audit.append({ action: 'approval.decided', actor: 'Reviewer', capability, fromStage: 'ready', toStage: 'approved' })
+    const partial = await readFile(audit.file, 'utf8')
 
-    expect(await audit.list({ capabilityId: capability.id })).toEqual([recovered, first])
+    expect(await audit.list({ capabilityId: capability.id })).toEqual([first])
+    expect(await audit.health()).toEqual({ sourceStatus: 'partial' })
+    await expect(audit.append({ action: 'approval.decided', actor: 'Reviewer', capability, fromStage: 'ready', toStage: 'approved' })).rejects.toThrow('partial trailing record')
+    expect(await readFile(audit.file, 'utf8')).toBe(partial)
     expect(first).toEqual(expect.objectContaining({
       action: 'candidate.nominated', actor: 'Owner', capabilityId: capability.id,
       artifact: expect.objectContaining({ artifactId: 'review', contentHash: 'b'.repeat(64) }),
@@ -43,5 +46,60 @@ describe('governance audit log', () => {
     temporaryDirectories.push(dataDir)
     const audit = createGovernanceAuditLog({ dataDir })
     await expect(audit.append({ action: 'candidate.nominated', actor: 'Owner', capability, fromStage: null, toStage: 'candidate', contents: 'secret' })).rejects.toThrow('unsupported field')
+  })
+
+  it('stably paginates collapsed audit transactions with source health', async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), 'skillops-governance-audit-'))
+    temporaryDirectories.push(dataDir)
+    const audit = createGovernanceAuditLog({ dataDir })
+    const records = []
+    for (let index = 0; index < 21; index += 1) {
+      records.push(await audit.append({
+        action: 'candidate.nominated',
+        actor: `Owner-${index}`,
+        capability,
+        fromStage: null,
+        toStage: 'candidate',
+      }))
+    }
+
+    const expected = [...records].sort((left, right) => {
+      if (left.at !== right.at) return left.at > right.at ? -1 : 1
+      if (left.transactionId !== right.transactionId) return left.transactionId > right.transactionId ? -1 : 1
+      return left.id > right.id ? -1 : left.id < right.id ? 1 : 0
+    })
+    expect(await audit.page({ page: 1, pageSize: 20 })).toEqual({
+      items: expected.slice(0, 20),
+      page: 1,
+      pageSize: 20,
+      totalItems: 21,
+      totalPages: 2,
+      hasPrevious: false,
+      hasNext: true,
+      sourceStatus: 'ok',
+    })
+    expect((await audit.page({ page: 2, pageSize: 20 })).items).toEqual(expected.slice(20))
+  })
+
+  it('rejects a fully written malformed record without changing the audit file', async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), 'skillops-governance-audit-'))
+    temporaryDirectories.push(dataDir)
+    const audit = createGovernanceAuditLog({ dataDir })
+    await audit.append({ action: 'candidate.nominated', actor: 'Owner', capability, fromStage: null, toStage: 'candidate' })
+    await appendFile(audit.file, '{"malformed":}\n', 'utf8')
+    const corrupted = await readFile(audit.file, 'utf8')
+
+    await expect(audit.list()).rejects.toThrow('corrupted; no data was changed')
+    await expect(audit.append({ action: 'approval.decided', actor: 'Reviewer', capability, fromStage: 'ready', toStage: 'approved' })).rejects.toThrow('corrupted; no data was changed')
+    expect(await readFile(audit.file, 'utf8')).toBe(corrupted)
+  })
+
+  it.each(['{}', 'not-json'])('does not misclassify a complete invalid record without a newline as partial: %s', async (record) => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), 'skillops-governance-audit-'))
+    temporaryDirectories.push(dataDir)
+    const audit = createGovernanceAuditLog({ dataDir })
+    await appendFile(audit.file, record, 'utf8')
+
+    await expect(audit.health()).rejects.toThrow('corrupted; no data was changed')
   })
 })

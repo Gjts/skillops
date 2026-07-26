@@ -5,14 +5,15 @@ import type { MessageKey } from '../i18n/messages'
 import type { Outcome, Runtime, SkillEvent } from '../types'
 
 type AgentTab = 'observed' | 'definitions'
-type AgentEvidenceState = 'unverified' | 'observed-recently' | 'idle' | 'telemetry-gap' | 'definition-issue'
+type AgentEvidenceState = 'unverified' | 'observed-recently' | 'idle' | 'telemetry-gap'
+type AgentConfigurationState = 'active' | 'disabled' | 'shadowed' | 'missing' | 'conflicted'
 
 export interface AgentProjection {
   key: string
   name: string
   runtime: Runtime
   definition?: Partial<SkillEvent>
-  configurationState: 'active' | 'disabled' | 'shadowed' | 'missing' | 'conflicted'
+  configurationState: AgentConfigurationState
   evidenceState: AgentEvidenceState
   lastVerifiedAt?: string
   terminalRuns: SkillEvent[]
@@ -32,6 +33,7 @@ interface AgentPageResponse {
   available: number
   hasPrevious: boolean
   hasNext: boolean
+  sourceStatus?: 'ok' | 'partial'
 }
 
 function readLocation(): { tab: AgentTab; runtime: Runtime | 'all'; days: number; query: string; page: number } {
@@ -53,7 +55,14 @@ const stateKeys: Record<AgentEvidenceState, MessageKey> = {
   'observed-recently': 'agents.observedRecently',
   idle: 'agents.idle',
   'telemetry-gap': 'agents.telemetryGap',
-  'definition-issue': 'agents.definitionIssue',
+}
+
+const configurationKeys: Record<AgentConfigurationState, MessageKey> = {
+  active: 'agents.configuration.active',
+  disabled: 'agents.configuration.disabled',
+  shadowed: 'agents.configuration.shadowed',
+  missing: 'agents.configuration.missing',
+  conflicted: 'agents.configuration.conflicted',
 }
 
 export function AgentsPage({ onOpen }: { onOpen: (href: string) => void }) {
@@ -185,6 +194,7 @@ export function AgentsPage({ onOpen }: { onOpen: (href: string) => void }) {
           >{t(item === 'observed' ? 'agents.observedTab' : 'agents.definitionsTab')}</button>)}
         </div>
         <div id="agents-tabpanel" role="tabpanel" aria-labelledby={`agents-tab-${tab}`}>
+        {result?.sourceStatus === 'partial' && <div className="data-warning" role="alert">{t('cc.partial')}</div>}
         <div className="registry-toolbar agents-toolbar">
           <label className="search-control"><Search size={15} /><input aria-label={t('agents.search')} value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); setSelected(null) }} placeholder={t('agents.search')} /></label>
           <label><span>{t('common.runtime')}</span><select aria-label={t('common.runtime')} value={runtime} onChange={(event) => { setRuntime(event.target.value as Runtime | 'all'); setPage(1); setSelected(null) }}><option value="all">{t('common.allRuntimes')}</option><option value="codex">Codex</option><option value="claude-code">Claude Code</option><option value="cursor">Cursor</option></select></label>
@@ -197,13 +207,14 @@ export function AgentsPage({ onOpen }: { onOpen: (href: string) => void }) {
           <div className="registry-table-scroll">
             <table className="registry-table agents-table">
               <caption className="sr-only">{t('nav.agents')}</caption>
-              <thead><tr><th>{t('registry.name')}</th><th>{t('common.runtime')}</th><th>{t('agents.source')}</th><th>{t('common.version')}</th><th>{t('agents.state')}</th><th>{t('agents.lastVerified')}</th><th>{t('agents.terminalRuns')}</th><th>{t('agents.outcomeCoverage')}</th><th>{t('agents.latestOutcome')}</th></tr></thead>
+              <thead><tr><th>{t('registry.name')}</th><th>{t('common.runtime')}</th><th>{t('agents.source')}</th><th>{t('common.version')}</th><th>{t('agents.configurationState')}</th><th>{t('agents.state')}</th><th>{t('agents.lastVerified')}</th><th>{t('agents.terminalRuns')}</th><th>{t('agents.outcomeCoverage')}</th><th>{t('agents.latestOutcome')}</th></tr></thead>
               <tbody>{rows.map((item) => (
                 <tr key={item.key}>
                   <td><button className="text-button" type="button" aria-label={t('agents.inspect', { name: item.name })} onClick={() => inspect(item)}><Bot size={14} />{item.name}</button></td>
                   <td>{item.runtime === 'claude-code' ? 'Claude Code' : item.runtime === 'codex' ? 'Codex' : 'Cursor'}</td>
                   <td><span className="source-path mono">{item.definition?.sourcePath || item.configurationState}</span></td>
                   <td>{item.definition?.skillVersion || t('common.unversioned')}</td>
+                  <td><span className={`agent-state ${item.configurationState}`}>{t(configurationKeys[item.configurationState])}</span></td>
                   <td><span className={`agent-state ${item.evidenceState}`}>{t(stateKeys[item.evidenceState])}</span></td>
                   <td>{item.lastVerifiedAt ? formatDateTime(item.lastVerifiedAt) : t('agents.noLastActivity')}</td>
                   <td>{formatNumber(item.terminalRuns.length)}</td>
@@ -233,6 +244,7 @@ export function AgentsPage({ onOpen }: { onOpen: (href: string) => void }) {
             <dl>
               <div><dt>{t('common.runtime')}</dt><dd>{selected.runtime}</dd></div>
               <div><dt>{t('agents.source')}</dt><dd className="mono">{selected.definition?.sourcePath || selected.configurationState}</dd></div>
+              <div><dt>{t('agents.configurationState')}</dt><dd>{t(configurationKeys[selected.configurationState])}</dd></div>
               <div><dt>{t('agents.state')}</dt><dd>{t(stateKeys[selected.evidenceState])}</dd></div>
               <div><dt>{t('agents.lastVerified')}</dt><dd>{selected.lastVerifiedAt ? formatDateTime(selected.lastVerifiedAt) : t('agents.noLastActivity')}</dd></div>
               <div><dt>{t('agents.terminalRuns')}</dt><dd>{formatNumber(selected.terminalRuns.length)}</dd></div>

@@ -1,8 +1,10 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { appendFile, open, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { ARTIFACT_KINDS, ARTIFACT_SOURCES, normalizeArtifactDefinition } from '../../shared/evaluation-schema.mjs'
+import { canonicalJson } from '../evaluations/suite-registry.mjs'
 import { EvaluationError } from '../evaluations/errors.mjs'
+import { createPageEnvelope } from '../page-envelope.mjs'
 import { CAPABILITY_STAGES } from './capability-registry.mjs'
 import { withGovernanceFileLock } from './skeleton-lock.mjs'
 
@@ -12,7 +14,7 @@ const ACTIONS = new Set([
 ])
 const STAGES = new Set(CAPABILITY_STAGES)
 const INPUT_FIELDS = new Set(['action', 'actor', 'capability', 'fromStage', 'toStage'])
-const RECORD_FIELDS = new Set(['id', 'transactionId', 'outcome', 'action', 'actor', 'capabilityId', 'artifact', 'evidenceHash', 'fromStage', 'toStage', 'at'])
+const RECORD_FIELDS = new Set(['id', 'transactionId', 'outcome', 'action', 'actor', 'capabilityId', 'artifact', 'evidenceHash', 'capabilityStateHash', 'fromStage', 'toStage', 'at'])
 const ARTIFACT_FIELDS = new Set(['kind', 'artifactId', 'version', 'source', 'contentHash', 'gitCommit'])
 const ALLOWED_ARTIFACT_KINDS = new Set(ARTIFACT_KINDS)
 const ALLOWED_ARTIFACT_SOURCES = new Set(ARTIFACT_SOURCES)
@@ -72,6 +74,29 @@ function artifactIdentity(value) {
   }
 }
 
+export function governanceCapabilityStateHash(value) {
+  return createHash('sha256').update(canonicalJson({
+    id: value.id,
+    artifact: artifactIdentity(value.artifact),
+    baseline: value.baseline ? artifactIdentity(value.baseline) : null,
+    owner: value.owner || null,
+    ownerIdentityAssurance: value.ownerIdentityAssurance || null,
+    targetSkeleton: value.targetSkeleton || null,
+    projectId: value.projectId || null,
+    projectRoot: value.projectRoot || null,
+    targetKey: value.targetKey || null,
+    stage: value.stage || null,
+    requalifiesStage: value.requalifiesStage || null,
+    policyId: value.policyId || null,
+    originEvaluationRunId: value.originEvaluationRunId || null,
+    latestEvidenceRunId: value.latestEvidenceRunId || null,
+    evidence: value.evidence || null,
+    approvals: value.approvals || [],
+    createdAt: value.createdAt || null,
+    updatedAt: value.updatedAt || null,
+  }), 'utf8').digest('hex')
+}
+
 function persistedRecord(value) {
   const record = object(value, 'Governance audit record')
   onlyKeys(record, RECORD_FIELDS, 'Governance audit record')
@@ -79,6 +104,8 @@ function persistedRecord(value) {
   if (Number.isNaN(Date.parse(at))) throw new EvaluationError('Governance audit time is invalid.', 500)
   const evidenceHash = record.evidenceHash === null ? null : text(record.evidenceHash, 'Governance audit evidence hash', 64)
   if (evidenceHash && !/^[a-f0-9]{64}$/.test(evidenceHash)) throw new EvaluationError('Governance audit evidence hash is invalid.', 500)
+  const capabilityStateHash = record.capabilityStateHash == null ? null : text(record.capabilityStateHash, 'Governance capability state hash', 64)
+  if (capabilityStateHash && !/^[a-f0-9]{64}$/.test(capabilityStateHash)) throw new EvaluationError('Governance capability state hash is invalid.', 500)
   if (!ACTIONS.has(record.action)) throw new EvaluationError('Governance audit action is invalid.', 500)
   const outcome = record.outcome || 'committed'
   if (!['pending', 'committed', 'failed'].includes(outcome)) throw new EvaluationError('Governance audit outcome is invalid.', 500)
@@ -91,6 +118,7 @@ function persistedRecord(value) {
     capabilityId: text(record.capabilityId, 'Governance audit capability ID'),
     artifact: artifactIdentity(record.artifact),
     evidenceHash,
+    capabilityStateHash,
     fromStage: stage(record.fromStage, 'Governance audit source stage', true),
     toStage: stage(record.toStage, 'Governance audit target stage'),
     at: new Date(at).toISOString(),
@@ -100,20 +128,39 @@ function persistedRecord(value) {
 function parseRecords(contents) {
   const records = []
   const lines = contents.split('\n')
+  let sourceStatus = 'ok'
   for (let index = 0; index < lines.length; index += 1) {
     if (!lines[index].trim()) continue
-    try { records.push(persistedRecord(JSON.parse(lines[index]))) } catch (error) {
-      if (index === lines.length - 1 || lines.slice(index + 1).every((line) => !line.trim())) break
-      throw error
+    let value
+    try { value = JSON.parse(lines[index]) } catch (error) {
+      const position = Number(error?.message?.match(/position (\d+)/)?.[1])
+      const incomplete = lines[index].trimStart().startsWith('{')
+        && (error?.message === 'Unexpected end of JSON input'
+          || error?.message?.startsWith('Unterminated string')
+          || Number.isInteger(position) && position >= lines[index].length)
+      if (!contents.endsWith('\n') && incomplete && lines.slice(index + 1).every((line) => !line.trim())) {
+        sourceStatus = 'partial'
+        break
+      }
+      throw new EvaluationError('Governance audit log is corrupted; no data was changed.', 409)
+    }
+    try { records.push(persistedRecord(value)) } catch {
+      throw new EvaluationError('Governance audit log is corrupted; no data was changed.', 409)
     }
   }
-  return records
+  return { records, sourceStatus }
 }
 
 function collapseRecords(records) {
   const latest = new Map()
   for (const record of records) latest.set(record.transactionId, record)
   return [...latest.values()]
+}
+
+function compareRecords(left, right) {
+  if (left.at !== right.at) return left.at > right.at ? -1 : 1
+  if (left.transactionId !== right.transactionId) return left.transactionId > right.transactionId ? -1 : 1
+  return left.id > right.id ? -1 : left.id < right.id ? 1 : 0
 }
 
 export function createGovernanceAuditLog(options = {}) {
@@ -124,7 +171,7 @@ export function createGovernanceAuditLog(options = {}) {
 
   async function read() {
     try { return parseRecords(await readFile(file, 'utf8')) } catch (error) {
-      if (error?.code === 'ENOENT') return []
+      if (error?.code === 'ENOENT') return { records: [], sourceStatus: 'ok' }
       throw error
     }
   }
@@ -138,16 +185,12 @@ export function createGovernanceAuditLog(options = {}) {
       if (!info.size) return
       const last = Buffer.alloc(1)
       await handle.read(last, 0, 1, info.size - 1)
-      if (last[0] === 10) return
       const contents = await readFile(file, 'utf8')
-      const lastNewline = contents.lastIndexOf('\n')
-      const trailing = contents.slice(lastNewline + 1)
-      try {
-        persistedRecord(JSON.parse(trailing))
-        await appendFile(file, '\n', 'utf8')
-      } catch {
-        await handle.truncate(Buffer.byteLength(contents.slice(0, lastNewline + 1), 'utf8'))
+      if (parseRecords(contents).sourceStatus === 'partial') {
+        throw new EvaluationError('Governance audit has a partial trailing record; no data was changed.', 409)
       }
+      if (last[0] === 10) return
+      await appendFile(file, '\n', 'utf8')
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error
     } finally { await handle?.close() }
@@ -190,6 +233,7 @@ export function createGovernanceAuditLog(options = {}) {
       capabilityId: text(capability.id, 'Governance audit capability ID'),
       artifact: artifactIdentity(capability.artifact),
       evidenceHash: capability.evidence?.evidenceHash || null,
+      capabilityStateHash: governanceCapabilityStateHash({ ...capability, stage: input.toStage }),
       fromStage: stage(input.fromStage, 'Governance audit source stage', true),
       toStage: stage(input.toStage, 'Governance audit target stage'),
       at: new Date().toISOString(),
@@ -217,12 +261,29 @@ export function createGovernanceAuditLog(options = {}) {
       return finish(prepared, 'committed')
     },
     async pending() {
-      return collapseRecords(await read()).filter((entry) => entry.outcome === 'pending')
+      return collapseRecords((await read()).records).filter((entry) => entry.outcome === 'pending')
     },
     async list(filters = {}) {
       const capabilityId = filters.capabilityId ? text(filters.capabilityId, 'Capability ID') : null
       const limit = Math.min(1_000, Math.max(1, Number(filters.limit) || 100))
-      return collapseRecords(await read()).filter((entry) => !capabilityId || entry.capabilityId === capabilityId).reverse().slice(0, limit)
+      return collapseRecords((await read()).records)
+        .filter((entry) => !capabilityId || entry.capabilityId === capabilityId)
+        .sort(compareRecords)
+        .slice(0, limit)
+    },
+    async page(filters = {}) {
+      const capabilityId = filters.capabilityId ? text(filters.capabilityId, 'Capability ID') : null
+      const result = await read()
+      return {
+        ...createPageEnvelope(
+          collapseRecords(result.records).filter((entry) => !capabilityId || entry.capabilityId === capabilityId),
+          { page: filters.page, pageSize: filters.pageSize, compare: compareRecords },
+        ),
+        sourceStatus: result.sourceStatus,
+      }
+    },
+    async health() {
+      return { sourceStatus: (await read()).sourceStatus }
     },
   }
 }

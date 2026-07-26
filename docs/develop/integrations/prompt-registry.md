@@ -74,14 +74,20 @@ commit and rechecks the semantic hash.
 
 | Method | Route | Behavior |
 | --- | --- | --- |
-| `GET` | `/api/prompt-registry/status` | Repository label, directory, current commit, and local branches |
-| `POST` | `/api/prompt-registry/prompts` | Metadata-only list for an exact branch or commit with search/provider/model filters |
+| `GET` | `/api/prompt-registry/status` | Repository label, directory, current commit, and one stable local-branch page |
+| `POST` | `/api/prompt-registry/prompts` | Metadata-only stable page for an exact branch or commit with search/provider/model filters and `page`/`pageSize` |
 | `POST` | `/api/prompt-registry/compare` | Component-hash comparison for two versions of the same Prompt ID |
 | `POST` | `/api/prompt-registry/nominate` | Explicitly create or reuse a metadata-only governed Candidate |
 
 POST bodies use the same loopback, Origin, JSON content-type, size, and unknown
 field guards as Managed Evaluations. List, comparison, Candidate, evaluation,
-and governance responses never include Prompt bodies.
+and governance responses never include Prompt bodies. Prompt pages accept only
+20, 50, or 100 rows and include the immutable revision/commit plus the shared
+page envelope. Status applies the same envelope metadata under `branchesPage`
+and returns only that page of branch names; the browser exposes previous/next
+controls for those branch suggestions while keeping the revision field
+free-form. Prompt-list parse diagnostics are reduced to `warningCount`;
+individual warning rows are not copied into every Prompt page.
 
 ## Evaluation and governance
 

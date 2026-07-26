@@ -40,18 +40,34 @@ function ensureStableLegacyEventId(event, line, occurrence) {
 function parseEventLines(contents) {
   const events = []
   const occurrences = new Map()
-  for (const line of contents.split('\n')) {
+  const lines = contents.split('\n')
+  let sourceStatus = 'ok'
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]
     if (!line.trim()) continue
+    let event
     try {
-      const event = JSON.parse(line)
-      const occurrence = occurrences.get(line) ?? 0
-      occurrences.set(line, occurrence + 1)
-      if (event && typeof event === 'object') events.push(ensureStableLegacyEventId(event, line, occurrence))
-    } catch {
-      // A crashed writer can leave one partial JSONL record. Keep all other events readable.
+      event = JSON.parse(line)
+    } catch (error) {
+      const position = Number(error?.message?.match(/position (\d+)/)?.[1])
+      const incomplete = line.trimStart().startsWith('{')
+        && (error?.message === 'Unexpected end of JSON input'
+          || error?.message?.startsWith('Unterminated string')
+          || Number.isInteger(position) && position >= line.length)
+      if (!contents.endsWith('\n') && lines.slice(index + 1).every((candidate) => !candidate.trim()) && incomplete) {
+        sourceStatus = 'partial'
+        break
+      }
+      throw new Error('Event store contains a malformed record.')
     }
+    if (!event || typeof event !== 'object' || Array.isArray(event)) {
+      throw new Error('Event store contains a malformed record.')
+    }
+    const occurrence = occurrences.get(line) ?? 0
+    occurrences.set(line, occurrence + 1)
+    events.push(ensureStableLegacyEventId(event, line, occurrence))
   }
-  return events
+  return { events, sourceStatus }
 }
 
 async function loadSessionIdentityKey() {
@@ -133,36 +149,42 @@ async function replaceEventFile(contents) {
   }
 }
 
-async function readEventsUnlocked() {
+async function readEventStoreUnlocked() {
   const fingerprint = await eventFingerprint()
-  if (eventCache?.fingerprint === fingerprint) return eventCache.events
+  if (eventCache?.fingerprint === fingerprint) return eventCache
   let contents
   try {
     contents = await readFile(eventFile, 'utf8')
   } catch (error) {
     if (error?.code === 'ENOENT') {
-      eventCache = { fingerprint, events: [] }
-      return eventCache.events
+      eventCache = { fingerprint, events: [], sourceStatus: 'ok' }
+      return eventCache
     }
     throw error
   }
-  const events = await Promise.all(parseEventLines(contents).map(async (event) => {
-    try {
-      return await anonymizeEventSession(normalizeEvent(event))
-    } catch {
-      return undefined
-    }
-  })).then((values) => values.filter(Boolean))
-  eventCache = { fingerprint, events }
-  return events
+  const parsed = parseEventLines(contents)
+  const events = await Promise.all(parsed.events.map(async (event) => anonymizeEventSession(normalizeEvent(event))))
+  eventCache = { fingerprint, events, sourceStatus: parsed.sourceStatus }
+  return eventCache
+}
+
+async function readEventsUnlocked() {
+  return (await readEventStoreUnlocked()).events
 }
 
 export function readEvents() {
   return withEventLock(readEventsUnlocked)
 }
 
-export function migrateLegacyEvents({ backup = true } = {}) {
+export function readEventsWithStatus() {
   return withEventLock(async () => {
+    const snapshot = await readEventStoreUnlocked()
+    return { events: snapshot.events, sourceStatus: snapshot.sourceStatus }
+  })
+}
+
+export function migrateLegacyEvents({ backup = true } = {}) {
+  return withEventMutationLock(async () => {
     let contents
     try {
       contents = await readFile(eventFile, 'utf8')
@@ -195,10 +217,9 @@ export function migrateLegacyEvents({ backup = true } = {}) {
     const suffix = new Date().toISOString().replace(/[:.]/g, '-')
     const backupFile = backup ? `${eventFile}.backup-${suffix}` : undefined
     if (backupFile) await copyFile(eventFile, backupFile)
-    await replaceEventFile(lines.length ? `${lines.join('\n')}\n` : '')
-    await writeDiscoveryIndex(new Set(events
+    await mutateEventFileAndIndex(contents, lines.length ? `${lines.join('\n')}\n` : '', new Set(events
       .filter((event) => event.event === 'skill.discovered')
-      .map(discoveryKey)))
+      .map(discoveryKey)), backupFile, 'Event migration')
     return { migrated, removed, backupFile }
   })
 }
@@ -216,7 +237,8 @@ export async function eventVersion() {
 export async function appendEvent(event) {
   const normalized = await anonymizeEventSession(normalizeEvent(event))
   return withEventLock(async () => {
-    await readEventsUnlocked()
+    const snapshot = await readEventStoreUnlocked()
+    if (snapshot.sourceStatus === 'partial') throw new Error('Event store has a partial trailing record; no data was changed.')
     await repairTrailingNewline()
     await appendFile(eventFile, `${JSON.stringify(normalized)}\n`, 'utf8')
     invalidateEventCache()
@@ -227,7 +249,9 @@ export async function appendEvent(event) {
 export async function appendEvents(events) {
   const normalized = await Promise.all(normalizeEvents(events).map(anonymizeEventSession))
   return withEventLock(async () => {
-    const existingIds = new Set((await readEventsUnlocked()).map((event) => event.id).filter(Boolean))
+    const snapshot = await readEventStoreUnlocked()
+    if (snapshot.sourceStatus === 'partial') throw new Error('Event store has a partial trailing record; no data was changed.')
+    const existingIds = new Set(snapshot.events.map((event) => event.id).filter(Boolean))
     const batchIds = new Set()
     const created = normalized.filter((event) => {
       if (existingIds.has(event.id) || batchIds.has(event.id)) return false
@@ -243,29 +267,31 @@ export async function appendEvents(events) {
 }
 
 export function clearEvents({ backup = true } = {}) {
-  return withEventLock(async () => {
-    const events = await readEventsUnlocked()
-    let existing = false
+  return withEventMutationLock(async () => {
+    let contents
     try {
-      await stat(eventFile)
-      existing = true
+      contents = await readFile(eventFile, 'utf8')
     } catch (error) {
-      if (error?.code !== 'ENOENT') throw error
+      if (error?.code === 'ENOENT') return { removed: 0, backupFile: undefined }
+      throw error
     }
-    if (!existing) return { removed: 0, backupFile: undefined }
+    const snapshot = await readEventStoreUnlocked()
+    if (snapshot.sourceStatus === 'partial') throw new Error('Event store has a partial trailing record; no data was changed.')
     const suffix = new Date().toISOString().replace(/[:.]/g, '-')
     const backupFile = backup ? `${eventFile}.backup-${suffix}` : undefined
     if (backupFile) await copyFile(eventFile, backupFile)
-    await replaceEventFile('')
-    await writeDiscoveryIndex(new Set())
-    return { removed: events.length, backupFile }
+    await mutateEventFileAndIndex(contents, '', new Set(), backupFile, 'Event clear')
+    return { removed: snapshot.events.length, backupFile }
   })
 }
 
 export function removeEventsByIdPrefix(prefix, { backup = true } = {}) {
   if (typeof prefix !== 'string' || !prefix) throw new Error('A non-empty event id prefix is required.')
-  return withEventLock(async () => {
-    await readEventsUnlocked()
+  return withEventMutationLock(async () => {
+    const snapshot = await readEventStoreUnlocked()
+    if (snapshot.sourceStatus === 'partial') {
+      throw new Error('Event store has a partial trailing record; no data was changed.')
+    }
     let contents
     try {
       contents = await readFile(eventFile, 'utf8')
@@ -292,11 +318,11 @@ export function removeEventsByIdPrefix(prefix, { backup = true } = {}) {
     const suffix = new Date().toISOString().replace(/[:.]/g, '-')
     const backupFile = backup ? `${eventFile}.backup-${suffix}` : undefined
     if (backupFile) await copyFile(eventFile, backupFile)
-    await replaceEventFile(kept.length ? `${kept.join('\n')}\n` : '')
-    const discoveryKeys = new Set(parseEventLines(kept.join('\n'))
+    const postimage = kept.length ? `${kept.join('\n')}\n` : ''
+    const discoveryKeys = new Set(parseEventLines(kept.join('\n')).events
       .filter((event) => event.event === 'skill.discovered')
       .map(discoveryKey))
-    await writeDiscoveryIndex(discoveryKeys)
+    await mutateEventFileAndIndex(contents, postimage, discoveryKeys, backupFile, 'Selective event removal')
     return { removed, backupFile }
   })
 }
@@ -325,6 +351,27 @@ async function writeDiscoveryIndex(keys) {
   await rename(temporary, discoveryIndexFile)
 }
 
+async function mutateEventFileAndIndex(preimage, postimage, keys, backupFile, label) {
+  let replaced = false
+  try {
+    await replaceEventFile(postimage)
+    replaced = true
+    await writeDiscoveryIndex(keys)
+  } catch (error) {
+    await rm(`${discoveryIndexFile}.${process.pid}.tmp`, { force: true }).catch(() => undefined)
+    if (!replaced) throw error
+    try {
+      await replaceEventFile(preimage)
+    } catch (recoveryError) {
+      const reference = backupFile ? ` Recovery backup: ${path.basename(backupFile)}.` : ''
+      const failure = new AggregateError([error, recoveryError], `${label} failed and automatic recovery was incomplete.${reference}`)
+      failure.backupFile = backupFile
+      throw failure
+    }
+    throw error
+  }
+}
+
 async function readDiscoveryIndex() {
   try {
     const values = JSON.parse(await readFile(discoveryIndexFile, 'utf8'))
@@ -341,18 +388,19 @@ async function readDiscoveryIndex() {
   return keys
 }
 
-async function withDiscoveryLock(operation) {
-  await mkdir(dataDir, { recursive: true })
+async function withDiscoveryLock(operation, directory = dataDir) {
+  await mkdir(directory, { recursive: true })
+  const lockFile = directory === dataDir ? discoveryLockFile : path.join(directory, 'discovery-index.lock')
   let handle
   for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
-      handle = await open(discoveryLockFile, 'wx')
+      handle = await open(lockFile, 'wx')
       break
     } catch (error) {
       if (error?.code !== 'EEXIST') throw error
       try {
-        const lockStats = await stat(discoveryLockFile)
-        if (Date.now() - lockStats.mtimeMs > 30_000) await rm(discoveryLockFile, { force: true })
+        const lockStats = await stat(lockFile)
+        if (Date.now() - lockStats.mtimeMs > 30_000) await rm(lockFile, { force: true })
       } catch (lockError) {
         if (lockError?.code !== 'ENOENT') throw lockError
       }
@@ -364,8 +412,82 @@ async function withDiscoveryLock(operation) {
     return await operation()
   } finally {
     await handle.close()
-    await rm(discoveryLockFile, { force: true })
+    await rm(lockFile, { force: true })
   }
+}
+
+function withEventMutationLock(operation, directory = dataDir) {
+  return withDiscoveryLock(() => withEventLock(operation, directory), directory)
+}
+
+function mergeEventRecovery(preimage, current, postimage) {
+  const before = preimage.split('\n').filter((line) => line.length)
+  const committed = (postimage ?? preimage).split('\n').filter((line) => line.length)
+  const remaining = new Map()
+  for (const line of committed) remaining.set(line, (remaining.get(line) || 0) + 1)
+  const appended = current.split('\n').filter((line) => line.length).filter((line) => {
+    const count = remaining.get(line) || 0
+    if (!count) return true
+    remaining.set(line, count - 1)
+    return false
+  })
+  const restored = [...before, ...appended]
+  return restored.length ? `${restored.join('\n')}\n` : ''
+}
+
+export async function restoreEventsFromBackup(backupFile, postimage, { directory = dataDir } = {}) {
+  if (!backupFile) return
+  if (postimage !== undefined && typeof postimage !== 'string') throw new Error('Event recovery postimage is invalid.')
+  const recoveryDirectory = path.resolve(directory)
+  const file = path.join(recoveryDirectory, 'events.jsonl')
+  const indexFile = path.join(recoveryDirectory, 'discovery-index.json')
+  const target = path.resolve(file)
+  const backup = path.resolve(backupFile)
+  if (path.dirname(target) !== path.dirname(backup) || !path.basename(backup).startsWith(`${path.basename(target)}.backup-`)) {
+    throw new Error('Event recovery backup is invalid.')
+  }
+  return withEventMutationLock(async () => {
+    const [preimage, current] = await Promise.all([
+      readFile(backup, 'utf8'),
+      readFile(file, 'utf8').catch((error) => error?.code === 'ENOENT' ? '' : Promise.reject(error)),
+    ])
+    const restored = mergeEventRecovery(preimage, current, postimage)
+    const snapshot = parseEventLines(restored)
+    if (snapshot.sourceStatus === 'partial') throw new Error('Event recovery source is partial.')
+    const events = normalizeEvents(snapshot.events)
+    const keys = new Set(events.filter((event) => event.event === 'skill.discovered').map(discoveryKey))
+    const nonce = randomBytes(6).toString('hex')
+    const temporary = `${file}.${process.pid}.${nonce}.recovery.tmp`
+    const temporaryIndex = `${indexFile}.${process.pid}.${nonce}.recovery.tmp`
+    let replaced = false
+    try {
+      await writeFile(temporary, restored, 'utf8')
+      await rename(temporary, file)
+      replaced = true
+      if (recoveryDirectory === dataDir) invalidateEventCache()
+      await writeFile(temporaryIndex, `${JSON.stringify([...keys].sort())}\n`, 'utf8')
+      await rename(temporaryIndex, indexFile)
+    } catch (error) {
+      if (!replaced) throw error
+      const rollback = `${file}.${process.pid}.${nonce}.rollback.tmp`
+      try {
+        await writeFile(rollback, current, 'utf8')
+        await rename(rollback, file)
+        if (recoveryDirectory === dataDir) invalidateEventCache()
+        await rm(indexFile, { recursive: true, force: true })
+      } catch (recoveryError) {
+        const failure = new AggregateError([error, recoveryError], `Event recovery failed and automatic rollback was incomplete. Recovery backup: ${path.basename(backup)}.`)
+        failure.backupFile = backup
+        throw failure
+      } finally {
+        await rm(rollback, { force: true }).catch(() => undefined)
+      }
+      throw error
+    } finally {
+      await rm(temporary, { force: true }).catch(() => undefined)
+      await rm(temporaryIndex, { force: true }).catch(() => undefined)
+    }
+  }, recoveryDirectory)
 }
 
 export function appendUniqueDiscoveries(skills, context = {}) {
@@ -378,7 +500,15 @@ export function appendUniqueDiscoveries(skills, context = {}) {
       created.push(await appendEvent({ event: 'skill.discovered', ...skill, ...context }))
       existing.add(key)
     }
-    if (created.length) await writeDiscoveryIndex(existing)
+    if (created.length) {
+      try {
+        await writeDiscoveryIndex(existing)
+      } catch (error) {
+        await rm(discoveryIndexFile, { recursive: true, force: true })
+        await rm(`${discoveryIndexFile}.${process.pid}.tmp`, { force: true })
+        throw error
+      }
+    }
     return created
   }))
   discoveryQueue = operation.catch(() => undefined)
@@ -386,8 +516,11 @@ export function appendUniqueDiscoveries(skills, context = {}) {
 }
 
 export function compactDiscoveryEvents({ backup = true } = {}) {
-  return withEventLock(async () => {
-    await readEventsUnlocked()
+  return withEventMutationLock(async () => {
+    const snapshot = await readEventStoreUnlocked()
+    if (snapshot.sourceStatus === 'partial') {
+      throw new Error('Event store has a partial trailing record; no data was changed.')
+    }
     let contents
     try {
       contents = await readFile(eventFile, 'utf8')
@@ -419,67 +552,96 @@ export function compactDiscoveryEvents({ backup = true } = {}) {
     const suffix = new Date().toISOString().replace(/[:.]/g, '-')
     const backupFile = backup ? `${eventFile}.backup-${suffix}` : undefined
     if (backupFile) await copyFile(eventFile, backupFile)
-    await replaceEventFile(kept.length ? `${kept.join('\n')}\n` : '')
-    await writeDiscoveryIndex(seen)
+    await mutateEventFileAndIndex(contents, kept.length ? `${kept.join('\n')}\n` : '', seen, backupFile, 'Discovery compaction')
     return { removed, backupFile }
   })
 }
 
-export function pruneEventsBefore(cutoff, { backup = true, directory = dataDir } = {}) {
+export function pruneEventsBefore(cutoff, { backup = true, directory = dataDir, deferBackupCleanup = false } = {}) {
   const cutoffMs = cutoff instanceof Date ? cutoff.getTime() : Date.parse(cutoff)
   if (!Number.isFinite(cutoffMs)) throw new Error('Event retention cutoff is invalid.')
-  return withEventLock(async () => {
+  return withEventMutationLock(async () => {
     const file = path.join(directory, 'events.jsonl')
     const contents = await readFile(file, 'utf8').catch((error) => error?.code === 'ENOENT' ? null : Promise.reject(error))
     const kept = []
     let removed = 0
     if (contents !== null) {
+      const snapshot = parseEventLines(contents)
+      if (snapshot.sourceStatus === 'partial') {
+        throw new Error('Event store has a partial trailing record; no data was changed.')
+      }
+      normalizeEvents(snapshot.events)
       for (const line of contents.split('\n')) {
         if (!line.trim()) continue
-        try {
-          const event = JSON.parse(line)
-          const timestamp = Date.parse(event?.timestamp)
-          if (Number.isFinite(timestamp) && timestamp < cutoffMs) {
-            removed += 1
-            continue
-          }
-        } catch {
-          // Retention cannot establish the age of malformed rows; events:migrate owns their removal.
+        const event = JSON.parse(line)
+        const timestamp = Date.parse(event?.timestamp)
+        if (Number.isFinite(timestamp) && timestamp < cutoffMs) {
+          removed += 1
+          continue
         }
         kept.push(line)
       }
     }
+    const expiredBackupFiles = []
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.startsWith('events.jsonl.backup-')) continue
+      const candidate = path.join(directory, entry.name)
+      if ((await stat(candidate)).mtimeMs < cutoffMs) expiredBackupFiles.push(candidate)
+    }
+    let removedBackups = 0
+    if (!deferBackupCleanup) {
+      for (const candidate of expiredBackupFiles) {
+        await rm(candidate)
+        removedBackups += 1
+      }
+    }
     let backupFile
+    const postimage = kept.length ? `${kept.join('\n')}\n` : ''
     if (removed) {
       const suffix = new Date().toISOString().replace(/[:.]/g, '-')
       backupFile = backup ? `${file}.backup-${suffix}` : undefined
       if (backupFile) await copyFile(file, backupFile)
       const temporary = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
       try {
-        await writeFile(temporary, kept.length ? `${kept.join('\n')}\n` : '', 'utf8')
+        await writeFile(temporary, postimage, 'utf8')
         await rename(temporary, file)
         if (path.resolve(directory) === dataDir) invalidateEventCache()
+        const keys = new Set(parseEventLines(kept.join('\n')).events
+          .filter((event) => event.event === 'skill.discovered')
+          .map(discoveryKey))
+        const indexFile = path.join(directory, 'discovery-index.json')
+        const temporaryIndex = `${indexFile}.${process.pid}.tmp`
+        try {
+          await writeFile(temporaryIndex, `${JSON.stringify([...keys].sort())}\n`, 'utf8')
+          await rename(temporaryIndex, indexFile)
+        } finally {
+          await rm(temporaryIndex, { force: true }).catch(() => undefined)
+        }
+      } catch (error) {
+        const recovery = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.recovery.tmp`
+        try {
+          await writeFile(recovery, contents ?? '', 'utf8')
+          await rename(recovery, file)
+          if (path.resolve(directory) === dataDir) invalidateEventCache()
+        } catch (recoveryError) {
+          const failure = new AggregateError([error, recoveryError], 'Event retention failed and automatic recovery was incomplete.')
+          failure.retentionRecovery = { store: 'events', backupFile, recoveryPostimage: postimage }
+          throw failure
+        } finally {
+          await rm(recovery, { force: true }).catch(() => undefined)
+        }
+        throw error
       } finally {
-        await rm(temporary, { force: true })
+        await rm(temporary, { force: true }).catch(() => undefined)
       }
-      const keys = new Set(parseEventLines(kept.join('\n'))
-        .filter((event) => event.event === 'skill.discovered')
-        .map(discoveryKey))
-      const indexFile = path.join(directory, 'discovery-index.json')
-      const temporaryIndex = `${indexFile}.${process.pid}.tmp`
-      await writeFile(temporaryIndex, `${JSON.stringify([...keys].sort())}\n`, 'utf8')
-      await rename(temporaryIndex, indexFile)
     }
-    let removedBackups = 0
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.startsWith('events.jsonl.backup-')) continue
-      const candidate = path.join(directory, entry.name)
-      if (candidate === backupFile) continue
-      if ((await stat(candidate)).mtimeMs >= cutoffMs) continue
-      await rm(candidate)
-      removedBackups += 1
+    return {
+      removed,
+      retained: kept.length,
+      removedBackups,
+      backupFile,
+      ...(deferBackupCleanup ? { expiredBackupFiles, recoveryPostimage: postimage } : {}),
     }
-    return { removed, retained: kept.length, removedBackups, backupFile }
   }, directory)
 }
 

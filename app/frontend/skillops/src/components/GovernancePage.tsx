@@ -1,5 +1,5 @@
-import { AlertTriangle, CheckCircle2, GitCompareArrows, GitPullRequest, History, RefreshCw, ShieldCheck } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, GitCompareArrows, GitPullRequest, History, RefreshCw, ShieldCheck } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import type { MessageKey } from '../i18n/messages'
 import type { Capability, CapabilityStage, EvaluationRunSummary, SkeletonChangePreview } from '../types'
@@ -34,6 +34,14 @@ type GovernanceAuditEntry = {
   toStage: CapabilityStage
   at: string
 }
+type PageState = {
+  page: number
+  totalItems: number
+  totalPages: number
+  hasPrevious: boolean
+  hasNext: boolean
+}
+type PageResponse<T> = Partial<PageState> & { items: T[]; sourceStatus?: 'ok' | 'partial' }
 
 const auditActionKeys: Record<string, MessageKey> = {
   'candidate.nominated': 'governance.audit.candidateNominated',
@@ -97,9 +105,13 @@ function shortHash(value?: string | null) {
 }
 
 export function GovernancePage() {
-  const { formatDateTime, t } = useI18n()
+  const { formatDateTime, formatNumber, t } = useI18n()
   const [items, setItems] = useState<Capability[]>([])
+  const [capabilityPage, setCapabilityPage] = useState(1)
+  const [capabilityPageState, setCapabilityPageState] = useState<PageState>({ page: 1, totalItems: 0, totalPages: 0, hasPrevious: false, hasNext: false })
   const [selectedId, setSelectedId] = useState<string | null>(() => new URLSearchParams(window.location.search).get('capability'))
+  const [linkedCapability, setLinkedCapability] = useState<Capability | null>(null)
+  const [previousStable, setPreviousStable] = useState<Capability | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sourceRef, setSourceRef] = useState('')
@@ -110,56 +122,92 @@ export function GovernancePage() {
   const [runId, setRunId] = useState('')
   const [redteamRunId, setRedteamRunId] = useState('')
   const [reviewerToken, setReviewerToken] = useState('')
+  const [auditToken, setAuditToken] = useState('')
+  const [auditStatus, setAuditStatus] = useState<'locked' | 'loading' | 'loaded' | 'error'>('locked')
+  const [auditSourceStatus, setAuditSourceStatus] = useState<'ok' | 'partial'>('ok')
   const [preview, setPreview] = useState<{ kind: ReleaseKind; capabilityId: string; value: SkeletonChangePreview } | null>(null)
   const [confirmed, setConfirmed] = useState(false)
   const [evidenceRun, setEvidenceRun] = useState<ReleaseEvidenceRun | null>(null)
   const [audit, setAudit] = useState<GovernanceAuditEntry[]>([])
+  const [auditPageState, setAuditPageState] = useState<PageState>({ page: 1, totalItems: 0, totalPages: 0, hasPrevious: false, hasNext: false })
+  const auditRequest = useRef(0)
+  const auditCredential = useRef('')
 
   const load = useCallback(async () => {
     try {
-      const result = await api<{ items: Capability[] }>('/api/capabilities')
+      const result = await api<PageResponse<Capability>>(capabilityPage === 1 ? '/api/capabilities' : `/api/capabilities?page=${capabilityPage}&pageSize=50`)
       setItems(result.items)
-      setSelectedId((current) => current && result.items.some((item) => item.id === current) ? current : result.items[0]?.id ?? null)
+      setCapabilityPageState({
+        page: result.page ?? capabilityPage,
+        totalItems: result.totalItems ?? result.items.length,
+        totalPages: result.totalPages ?? (result.items.length ? 1 : 0),
+        hasPrevious: result.hasPrevious ?? capabilityPage > 1,
+        hasNext: result.hasNext ?? false,
+      })
+      setSelectedId((current) => current ?? result.items[0]?.id ?? null)
       setError(null)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t('governance.requestFailed'))
     }
-  }, [t])
+  }, [capabilityPage, t])
 
   useEffect(() => { void load() }, [load])
-  const selected = useMemo(() => items.find((item) => item.id === selectedId) ?? null, [items, selectedId])
+  useEffect(() => {
+    if (!selectedId || items.some((item) => item.id === selectedId)) {
+      setLinkedCapability(null)
+      return
+    }
+    let live = true
+    api<Capability>(`/api/capabilities/${encodeURIComponent(selectedId)}`)
+      .then((item) => { if (live && item.id === selectedId) setLinkedCapability(item) })
+      .catch((caught) => { if (live) setError(caught instanceof Error ? caught.message : t('governance.requestFailed')) })
+    return () => { live = false }
+  }, [items, selectedId, t])
+  const selected = useMemo(() => items.find((item) => item.id === selectedId)
+    ?? (linkedCapability?.id === selectedId ? linkedCapability : null), [items, linkedCapability, selectedId])
   useEffect(() => {
     let live = true
+    auditRequest.current += 1
     setEvidenceRun(null)
     setAudit([])
+    setAuditToken('')
+    auditCredential.current = ''
+    setAuditStatus('locked')
+    setAuditSourceStatus('ok')
+    setAuditPageState({ page: 1, totalItems: 0, totalPages: 0, hasPrevious: false, hasNext: false })
     if (!selected) return () => { live = false }
     const run = selected.latestEvidenceRunId
       ? api<ReleaseEvidenceRun>(`/api/evaluation-runs/${encodeURIComponent(selected.latestEvidenceRunId)}`)
       : Promise.resolve(null)
-    Promise.allSettled([
-      run,
-      api<{ items: GovernanceAuditEntry[] }>(`/api/capabilities/${encodeURIComponent(selected.id)}/audit`),
-    ]).then(([runResult, auditResult]) => {
+    Promise.allSettled([run]).then(([runResult]) => {
       if (!live) return
       if (runResult.status === 'fulfilled' && runResult.value?.id === selected.latestEvidenceRunId) setEvidenceRun(runResult.value)
-      if (auditResult.status === 'fulfilled' && Array.isArray(auditResult.value.items)) {
-        setAudit(auditResult.value.items.filter((entry) => entry
-          && typeof entry.id === 'string'
-          && typeof entry.action === 'string'
-          && typeof entry.actor === 'string'
-          && typeof entry.at === 'string'
-          && entry.capabilityId === selected.id))
-      }
     })
     return () => { live = false }
   }, [selected])
-  const currentStable = selected ? items.find((item) => item.id !== selected.id && item.stage === 'stable' && item.targetSkeleton === selected.targetSkeleton) : null
-  const previousStable = selected?.stage === 'stable'
-    ? items.find((item) => item.stage === 'superseded' && item.targetSkeleton === selected.targetSkeleton) ?? null
-    : currentStable ?? null
+  const previousStableId = selected?.stage === 'stable'
+    ? selected.releaseTarget?.previousStableCapabilityId
+    : selected?.releaseTarget?.stableCapabilityId
+  useEffect(() => {
+    if (!previousStableId) {
+      setPreviousStable(null)
+      return
+    }
+    const currentPage = items.find((item) => item.id === previousStableId)
+    if (currentPage) {
+      setPreviousStable(currentPage)
+      return
+    }
+    let live = true
+    setPreviousStable(null)
+    api<Capability>(`/api/capabilities/${encodeURIComponent(previousStableId)}`)
+      .then((item) => { if (live && item.id === previousStableId) setPreviousStable(item) })
+      .catch(() => {})
+    return () => { live = false }
+  }, [items, previousStableId])
   const latestApproval = selected?.approvals[selected.approvals.length - 1] ?? null
   const rollbackStableId = selected?.stage === 'approved' && selected.requalifiesStage === 'superseded'
-    ? items.find((item) => item.stage === 'stable' && item.targetSkeleton === selected.targetSkeleton)?.id
+    ? selected.releaseTarget?.stableCapabilityId ?? undefined
     : undefined
 
   const mutate = async (operation: () => Promise<unknown>) => {
@@ -181,6 +229,44 @@ export function GovernancePage() {
       headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(body),
     })
+  }
+
+  const loadAudit = async (page = 1) => {
+    if (!selected) return
+    const token = page === 1 ? auditToken.trim() : auditCredential.current
+    if (!token) return
+    if (page === 1) auditCredential.current = token
+    const request = ++auditRequest.current
+    setAuditToken('')
+    setAuditStatus('loading')
+    try {
+      const result = await api<PageResponse<GovernanceAuditEntry>>(page === 1
+        ? `/api/capabilities/${encodeURIComponent(selected.id)}/audit`
+        : `/api/capabilities/${encodeURIComponent(selected.id)}/audit?page=${page}&pageSize=50`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (request !== auditRequest.current) return
+      setAudit(Array.isArray(result.items) ? result.items.filter((entry) => entry
+        && typeof entry.id === 'string'
+        && typeof entry.action === 'string'
+        && typeof entry.actor === 'string'
+        && typeof entry.at === 'string'
+        && entry.capabilityId === selected.id) : [])
+      setAuditPageState({
+        page: result.page ?? page,
+        totalItems: result.totalItems ?? result.items.length,
+        totalPages: result.totalPages ?? (result.items.length ? 1 : 0),
+        hasPrevious: result.hasPrevious ?? page > 1,
+        hasNext: result.hasNext ?? false,
+      })
+      setAuditSourceStatus(result.sourceStatus || 'ok')
+      setAuditStatus('loaded')
+    } catch {
+      if (request === auditRequest.current) {
+        auditCredential.current = ''
+        setAuditStatus('error')
+      }
+    }
   }
 
   const nominate = () => mutate(() => post('/api/capabilities', {
@@ -252,12 +338,19 @@ export function GovernancePage() {
 
       <div className="governance-grid">
         <section className="panel capability-list" aria-label={t('governance.capabilities')}>
-          <header><h3>{t('governance.capabilities')}</h3><span>{items.length}</span></header>
-          {items.map((item) => <button className={item.id === selectedId ? 'is-selected' : ''} type="button" key={item.id} onClick={() => { setSelectedId(item.id); setPreview(null) }}>
+          <header><h3>{t('governance.capabilities')}</h3><span>{capabilityPageState.totalItems}</span></header>
+          {items.map((item) => <button className={item.id === selectedId ? 'is-selected' : ''} type="button" key={item.id} onClick={() => { setLinkedCapability(null); setSelectedId(item.id); setPreview(null) }}>
             <span><strong>{item.artifact.artifactId}</strong><small>{item.artifact.version}</small></span>
             <b className={`capability-stage stage-${item.stage}`}>{t(stageKeys[item.stage])}</b>
           </button>)}
           {!items.length && <p className="governance-empty" role="status">{t('governance.empty')}</p>}
+          {capabilityPageState.totalPages > 1 && <nav className="runs-pagination-bar registry-pagination" aria-label={t('common.pageOf', { page: formatNumber(capabilityPageState.page), count: formatNumber(capabilityPageState.totalPages) })}>
+            <div className="pagination-controls">
+              <button type="button" aria-label={t('common.previousPage')} disabled={!capabilityPageState.hasPrevious} onClick={() => { setSelectedId(null); setLinkedCapability(null); setCapabilityPage((value) => Math.max(1, value - 1)) }}><ChevronLeft size={15} /></button>
+              <span role="status" aria-live="polite">{t('common.pageOf', { page: formatNumber(capabilityPageState.page), count: formatNumber(capabilityPageState.totalPages) })}</span>
+              <button type="button" aria-label={t('common.nextPage')} disabled={!capabilityPageState.hasNext} onClick={() => { setSelectedId(null); setLinkedCapability(null); setCapabilityPage((value) => Math.min(capabilityPageState.totalPages, value + 1)) }}><ChevronRight size={15} /></button>
+            </div>
+          </nav>}
         </section>
 
         <section className="panel capability-detail">
@@ -323,11 +416,23 @@ export function GovernancePage() {
 
             <section className="release-audit" role="region" aria-label={t('governance.auditTimeline')}>
               <header><History size={16} /><h4>{t('governance.auditTimeline')}</h4></header>
-              {audit.length ? <ol>{audit.map((entry) => <li key={entry.id}>
+              {auditStatus === 'loaded' && auditSourceStatus === 'partial' && <div className="data-warning" role="alert">{t('cc.partial')}</div>}
+              {auditStatus === 'loaded' ? audit.length ? <ol>{audit.map((entry) => <li key={entry.id}>
                 <strong>{auditActionKeys[entry.action] ? t(auditActionKeys[entry.action]) : entry.action}</strong>
                 <span>{entry.fromStage ? `${t(stageKeys[entry.fromStage])} → ${t(stageKeys[entry.toStage])}` : t(stageKeys[entry.toStage])}</span>
                 <small>{entry.actor} · {formatDateTime(entry.at)} · {t(entry.outcome === 'committed' ? 'governance.auditCommitted' : entry.outcome === 'failed' ? 'governance.auditFailed' : 'governance.auditPending')}</small>
-              </li>)}</ol> : <p>{t('governance.noAudit')}</p>}
+              </li>)}</ol> : <p>{t('governance.noAudit')}</p> : <div className="governance-audit-access">
+                <p role={auditStatus === 'error' ? 'alert' : 'status'}>{t(auditStatus === 'error' ? 'governance.auditUnavailable' : 'governance.auditLocked')}</p>
+                <label><span>{t('governance.auditToken')}</span><input type="password" autoComplete="off" spellCheck={false} value={auditToken} onChange={(event) => setAuditToken(event.target.value)} /></label>
+                <button className="button secondary" type="button" disabled={auditStatus === 'loading' || !auditToken.trim()} onClick={() => void loadAudit()}>{t(auditStatus === 'loading' ? 'common.checking' : 'governance.loadAudit')}</button>
+              </div>}
+              {auditStatus === 'loaded' && auditPageState.totalPages > 1 && <nav className="runs-pagination-bar registry-pagination" aria-label={t('common.pageOf', { page: formatNumber(auditPageState.page), count: formatNumber(auditPageState.totalPages) })}>
+                <div className="pagination-controls">
+                  <button type="button" aria-label={t('common.previousPage')} disabled={!auditPageState.hasPrevious} onClick={() => void loadAudit(Math.max(1, auditPageState.page - 1))}><ChevronLeft size={15} /></button>
+                  <span role="status" aria-live="polite">{t('common.pageOf', { page: formatNumber(auditPageState.page), count: formatNumber(auditPageState.totalPages) })}</span>
+                  <button type="button" aria-label={t('common.nextPage')} disabled={!auditPageState.hasNext} onClick={() => void loadAudit(Math.min(auditPageState.totalPages, auditPageState.page + 1))}><ChevronRight size={15} /></button>
+                </div>
+              </nav>}
             </section>
             {preview && <div className="governance-preview" role="region" aria-label={t('governance.changePreview')}>
               <h4>{t('governance.changePreview')}</h4>

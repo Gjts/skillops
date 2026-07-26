@@ -55,9 +55,8 @@ export function createPromptRegistry(options = {}) {
     try {
       const result = await execFileAsync('git', ['-C', workspace, ...args], { encoding: 'utf8', windowsHide: true, maxBuffer })
       return result.stdout.trim()
-    } catch (error) {
-      const message = typeof error?.stderr === 'string' ? error.stderr.trim() : ''
-      throw new EvaluationError(message ? `Prompt Registry Git operation failed: ${message.slice(0, 300)}` : 'Prompt Registry Git operation failed.', 409)
+    } catch {
+      throw new EvaluationError('Prompt Registry Git operation failed.', 409)
     }
   })
 

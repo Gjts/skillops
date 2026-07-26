@@ -9,23 +9,50 @@ import { performance } from 'node:perf_hooks'
 import { normalizeEvent } from '../app/shared/event-schema.mjs'
 
 const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)))
+const SCRIPT_FILE = fileURLToPath(import.meta.url)
 const SEED = 'skillops-personal-v1'
 const EVENT_COUNT = 100_000
 const DEFINITION_COUNT = 5_000
 const FIXED_NOW = Date.parse('2026-07-25T12:00:00.000Z')
+const FIXED_NOW_ISO = new Date(FIXED_NOW).toISOString()
+const FIXED_TIMEZONE = 'UTC'
 const SENTINEL = 'SKILLOPS_PRIVATE_SENTINEL_7f0d9a'
 const COMMAND_CENTER = '/api/command-center?runtime=all&window=30d'
 const RUNS = '/api/runs?page=1&pageSize=50'
 const WARMUP_COUNT = 10
 const SAMPLE_COUNT = 100
+const SOAK_PROTOCOL = Object.freeze({
+  requiredDurationMinutes: 30,
+  refreshIntervalMs: 3_000,
+  baselineMinute: 5,
+  trendIntervalMinutes: 5,
+  tailWindowMinutes: 15,
+  maxFinalGrowthPct: 20,
+  maxFinalGrowthBytes: 100 * 1024 * 1024,
+  maxTailGrowthPct: 5,
+  maxTailGrowthBytes: 5 * 1024 * 1024,
+})
+const FIXTURE_DISTRIBUTION = Object.freeze({
+  definitionRows: DEFINITION_COUNT,
+  lifecycleRows: EVENT_COUNT - DEFINITION_COUNT,
+  runtimeCycle: ['codex', 'claude-code'],
+  versionMinorModulo: 10,
+  definitionTimeRangeDays: 20,
+  lifecycleTimeRangeDays: 30,
+  failureAbsoluteRowModulo: { divisor: 11, remainder: 0 },
+  definitionSourceCycle: ['project', 'global', 'global'],
+  durationMs: { minimum: 40, maximumExclusive: 4_040 },
+  tokens: { minimum: 100, maximumExclusive: 8_100 },
+  costUsd: { absoluteRowModulo: { divisor: 3, remainder: 0 }, maximumExclusive: 0.1, decimalPlaces: 6 },
+})
 
 function argument(name, fallback) {
   const value = process.argv.slice(2).find((item) => item.startsWith(`--${name}=`))
   return value ? value.slice(name.length + 3) : fallback
 }
 
-function seededRandom() {
-  let state = 0x51a11e7
+export function seededRandom(seed = SEED) {
+  let state = createHash('sha256').update(seed, 'utf8').digest().readUInt32LE(0) || 0x51a11e7
   return () => {
     state ^= state << 13
     state ^= state >>> 17
@@ -45,20 +72,21 @@ async function generateFixture(directory) {
   const eventFile = path.join(dataDirectory, 'events.jsonl')
   const file = await open(eventFile, 'w')
   const hash = createHash('sha256')
-  const random = seededRandom()
+  const random = seededRandom(SEED)
   let chunk = ''
   try {
     for (let index = 0; index < EVENT_COUNT; index += 1) {
       const definition = index < DEFINITION_COUNT
-      const failed = !definition && index % 11 === 0
+      const failed = !definition
+        && index % FIXTURE_DISTRIBUTION.failureAbsoluteRowModulo.divisor === FIXTURE_DISTRIBUTION.failureAbsoluteRowModulo.remainder
       const raw = definition ? {
         id: `definition-${String(index).padStart(5, '0')}`,
         event: 'skill.discovered',
         skillId: `agent-${String(index).padStart(4, '0')}`,
-        skillVersion: `1.${index % 10}.0`,
-        runtime: index % 2 ? 'claude-code' : 'codex',
-        timestamp: new Date(FIXED_NOW - (index % 20) * 86_400_000).toISOString(),
-        source: index % 3 ? 'global' : 'project',
+        skillVersion: `1.${index % FIXTURE_DISTRIBUTION.versionMinorModulo}.0`,
+        runtime: FIXTURE_DISTRIBUTION.runtimeCycle[index % FIXTURE_DISTRIBUTION.runtimeCycle.length],
+        timestamp: new Date(FIXED_NOW - (index % FIXTURE_DISTRIBUTION.definitionTimeRangeDays) * 86_400_000).toISOString(),
+        source: FIXTURE_DISTRIBUTION.definitionSourceCycle[index % FIXTURE_DISTRIBUTION.definitionSourceCycle.length],
         sourcePath: `/synthetic/runtime/agents/agent-${String(index).padStart(4, '0')}/AGENT.md`,
         provider: 'Synthetic fixture',
         kind: 'agent',
@@ -67,12 +95,16 @@ async function generateFixture(directory) {
         id: `event-${String(index).padStart(6, '0')}`,
         event: failed ? 'skill.failed' : 'skill.completed',
         skillId: `agent-${String(index % DEFINITION_COUNT).padStart(4, '0')}`,
-        skillVersion: `1.${index % 10}.0`,
-        runtime: index % 2 ? 'claude-code' : 'codex',
-        timestamp: new Date(FIXED_NOW - Math.floor(random() * 30 * 86_400_000)).toISOString(),
-        durationMs: 40 + Math.floor(random() * 4_000),
-        tokens: 100 + Math.floor(random() * 8_000),
-        ...(index % 3 === 0 ? { costUsd: Number((random() * 0.1).toFixed(6)) } : {}),
+        skillVersion: `1.${index % FIXTURE_DISTRIBUTION.versionMinorModulo}.0`,
+        runtime: FIXTURE_DISTRIBUTION.runtimeCycle[index % FIXTURE_DISTRIBUTION.runtimeCycle.length],
+        timestamp: new Date(FIXED_NOW - Math.floor(random() * FIXTURE_DISTRIBUTION.lifecycleTimeRangeDays * 86_400_000)).toISOString(),
+        durationMs: FIXTURE_DISTRIBUTION.durationMs.minimum
+          + Math.floor(random() * (FIXTURE_DISTRIBUTION.durationMs.maximumExclusive - FIXTURE_DISTRIBUTION.durationMs.minimum)),
+        tokens: FIXTURE_DISTRIBUTION.tokens.minimum
+          + Math.floor(random() * (FIXTURE_DISTRIBUTION.tokens.maximumExclusive - FIXTURE_DISTRIBUTION.tokens.minimum)),
+        ...(index % FIXTURE_DISTRIBUTION.costUsd.absoluteRowModulo.divisor === FIXTURE_DISTRIBUTION.costUsd.absoluteRowModulo.remainder
+          ? { costUsd: Number((random() * FIXTURE_DISTRIBUTION.costUsd.maximumExclusive).toFixed(FIXTURE_DISTRIBUTION.costUsd.decimalPlaces)) }
+          : {}),
         outcome: failed ? 'failed' : 'success',
         kind: 'agent',
         ...(index === DEFINITION_COUNT ? {
@@ -102,10 +134,12 @@ async function generateFixture(directory) {
     hash: hash.digest('hex'),
     parameters: {
       seed: SEED,
-      fixedNow: new Date(FIXED_NOW).toISOString(),
-      timezone: 'UTC',
+      randomAlgorithm: 'sha256-seeded-xorshift32',
+      fixedNow: FIXED_NOW_ISO,
+      timezone: FIXED_TIMEZONE,
       events: EVENT_COUNT,
       definitions: DEFINITION_COUNT,
+      distribution: FIXTURE_DISTRIBUTION,
     },
   }
 }
@@ -125,6 +159,7 @@ async function freePort() {
 function serverEnvironment(fixture, port) {
   return {
     ...process.env,
+    TZ: FIXED_TIMEZONE,
     PORT: String(port),
     SKILLOPS_HOST: '127.0.0.1',
     SKILLOPS_DATA_DIR: fixture.dataDirectory,
@@ -135,12 +170,49 @@ function serverEnvironment(fixture, port) {
   }
 }
 
-async function startServer(fixture) {
+function fixedClockPreloadUrl() {
+  const source = `
+const RealDate = globalThis.Date
+const fixedNow = ${FIXED_NOW}
+class SkillOpsPerformanceDate extends RealDate {
+  constructor(...args) {
+    super(...(args.length ? args : [fixedNow]))
+  }
+  static now() {
+    return fixedNow
+  }
+}
+Object.defineProperties(SkillOpsPerformanceDate, {
+  parse: { value: RealDate.parse },
+  UTC: { value: RealDate.UTC },
+})
+globalThis.Date = SkillOpsPerformanceDate
+process.on('message', (message) => {
+  if (!message || message.type !== 'skillops:heap-sample') return
+  if (typeof globalThis.gc === 'function') globalThis.gc()
+  if (typeof process.send === 'function') {
+    process.send({
+      type: 'skillops:heap-sample',
+      requestId: message.requestId,
+      heapUsed: process.memoryUsage().heapUsed,
+    })
+  }
+})
+`
+  return `data:text/javascript;base64,${Buffer.from(source, 'utf8').toString('base64')}`
+}
+
+async function startServer(fixture, { memoryTelemetry = false } = {}) {
   const port = await freePort()
-  const child = spawn(process.execPath, ['app/backend/server.mjs'], {
+  const child = spawn(process.execPath, [
+    ...(memoryTelemetry ? ['--expose-gc'] : []),
+    '--import',
+    fixedClockPreloadUrl(),
+    'app/backend/server.mjs',
+  ], {
     cwd: ROOT,
     env: serverEnvironment(fixture, port),
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: memoryTelemetry ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   })
   let output = ''
@@ -161,7 +233,7 @@ async function startServer(fixture) {
       reject(new Error(`Server exited before readiness (${code}). ${output}`))
     })
   })
-  return { child, output: () => output, origin: `http://127.0.0.1:${port}` }
+  return { child, memoryTelemetry, output: () => output, origin: `http://127.0.0.1:${port}` }
 }
 
 async function stopServer(server) {
@@ -172,6 +244,42 @@ async function stopServer(server) {
     new Promise((resolve) => setTimeout(resolve, 5_000)),
   ])
   if (server.child.exitCode === null) server.child.kill('SIGKILL')
+}
+
+let heapSampleSequence = 0
+async function sampleServerHeap(server) {
+  if (!server.memoryTelemetry || typeof server.child.send !== 'function') {
+    throw new Error('Server heap telemetry is unavailable.')
+  }
+  heapSampleSequence += 1
+  const requestId = `heap-${heapSampleSequence}`
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timeout)
+      server.child.off('message', onMessage)
+      server.child.off('exit', onExit)
+    }
+    const onMessage = (message) => {
+      if (message?.type !== 'skillops:heap-sample' || message.requestId !== requestId) return
+      cleanup()
+      resolve(message.heapUsed)
+    }
+    const onExit = (code) => {
+      cleanup()
+      reject(new Error(`Memory-soak server exited before heap sampling (${code}).`))
+    }
+    const timeout = setTimeout(() => {
+      cleanup()
+      reject(new Error('Memory-soak server did not return a heap sample.'))
+    }, 10_000)
+    server.child.on('message', onMessage)
+    server.child.once('exit', onExit)
+    server.child.send({ type: 'skillops:heap-sample', requestId }, (error) => {
+      if (!error) return
+      cleanup()
+      reject(error)
+    })
+  })
 }
 
 async function request(origin, endpoint) {
@@ -219,18 +327,32 @@ async function validateBoundaries(server, fixture) {
   if (summary.count !== EVENT_COUNT || summaryResponse.body.includes(SENTINEL)) throw new Error('Event summary boundary failed.')
 
   const command = await request(server.origin, COMMAND_CENTER)
+  const today = await request(server.origin, '/api/command-center?runtime=all&window=1d')
   const runs = await request(server.origin, RUNS)
   const agents = await request(server.origin, '/api/agents?tab=definitions&page=1&pageSize=50&window=30d')
   const connections = await request(server.origin, '/api/connections')
+  const commandProjection = JSON.parse(command.body)
+  const todayProjection = JSON.parse(today.body)
   const runPage = JSON.parse(runs.body)
   const agentPage = JSON.parse(agents.body)
+  if (commandProjection.generatedAt !== FIXED_NOW_ISO) {
+    throw new Error(`Service clock boundary failed: expected ${FIXED_NOW_ISO}, received ${commandProjection.generatedAt || '<missing>'}.`)
+  }
+  const expectedTodayStart = `${FIXED_NOW_ISO.slice(0, 10)}T00:00:00.000Z`
+  if (todayProjection.window?.from !== expectedTodayStart) {
+    throw new Error(`Service timezone boundary failed: expected Today to start at ${expectedTodayStart}, received ${todayProjection.window?.from || '<missing>'}.`)
+  }
   if (runPage.items?.length !== 50 || agentPage.items?.length !== 50 || agentPage.totalItems !== DEFINITION_COUNT) throw new Error('Bounded pagination validation failed.')
-  if ([command.body, runs.body, agents.body, connections.body].some((body) => body.includes(SENTINEL))) throw new Error('Privacy sentinel entered an unrelated API.')
+  if ([command.body, today.body, runs.body, agents.body, connections.body].some((body) => body.includes(SENTINEL))) throw new Error('Privacy sentinel entered an unrelated API.')
 
   const exported = await request(server.origin, '/api/events?download=1')
   if (!/^attachment; filename="skillops-events-\d{4}-\d{2}-\d{2}\.jsonl"$/.test(exported.headers.get('content-disposition') || '')) throw new Error('Event export did not provide a download filename.')
   if (exported.body.includes(SENTINEL)) throw new Error('Privacy sentinel entered event export.')
   if ((await readFile(fixture.eventFile, 'utf8')).includes(SENTINEL)) throw new Error('Privacy sentinel entered persistent event data.')
+  return {
+    serviceClockObservedAt: commandProjection.generatedAt,
+    serviceTodayWindowStartedAt: todayProjection.window.from,
+  }
 }
 
 async function benchmarkEndpoints(fixture) {
@@ -240,7 +362,7 @@ async function benchmarkEndpoints(fixture) {
   }
   const server = await startServer(fixture)
   try {
-    await validateBoundaries(server, fixture)
+    const validated = await validateBoundaries(server, fixture)
     const commandCenter = await warmSamples(server.origin, COMMAND_CENTER)
     const runs = await warmSamples(server.origin, RUNS)
     const commandCenterP95 = rounded(nearestRankP95(commandCenter))
@@ -253,7 +375,13 @@ async function benchmarkEndpoints(fixture) {
         runs: { samplesMs: runs, p95Ms: runsP95, budgetMs: 500, passed: runsP95 <= 500 },
       },
       boundaries: {
-        browserReceivesFullEventArray: false,
+        browserNetwork: {
+          measured: false,
+          result: null,
+          reason: 'This Node endpoint harness does not observe production-browser network traffic.',
+        },
+        serviceClockObservedAt: validated.serviceClockObservedAt,
+        serviceTodayWindowStartedAt: validated.serviceTodayWindowStartedAt,
         eventSummaryCount: EVENT_COUNT,
         runPageSize: 50,
         agentDefinitionPageSize: 50,
@@ -267,105 +395,241 @@ async function benchmarkEndpoints(fixture) {
   }
 }
 
-async function waitForServer(origin) {
-  const deadline = Date.now() + 30_000
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`${origin}/api/events?summary=1`)
-      if (response.ok) return
-    } catch {}
-    await new Promise((resolve) => setTimeout(resolve, 100))
+export function assessTailGrowth(trend, baselineHeapUsed, durationMinutes) {
+  const tailStartMinute = Math.max(SOAK_PROTOCOL.baselineMinute, durationMinutes - SOAK_PROTOCOL.tailWindowMinutes)
+  const samples = trend.filter((sample) => sample.minute >= tailStartMinute)
+  const toleranceBytes = Math.min(
+    SOAK_PROTOCOL.maxTailGrowthBytes,
+    baselineHeapUsed * SOAK_PROTOCOL.maxTailGrowthPct / 100,
+  )
+  if (samples.length < 3) {
+    return {
+      windowMinutes: SOAK_PROTOCOL.tailWindowMinutes,
+      sampleCount: samples.length,
+      toleranceBytes: Math.round(toleranceBytes),
+      netGrowthBytes: null,
+      slopeBytesPerMinute: null,
+      projectedGrowthBytes: null,
+      plateau: false,
+      reason: 'At least three tail samples are required.',
+    }
   }
-  throw new Error('In-process soak server did not become ready.')
+
+  const meanMinute = samples.reduce((sum, sample) => sum + sample.minute, 0) / samples.length
+  const meanHeap = samples.reduce((sum, sample) => sum + sample.heapUsed, 0) / samples.length
+  const denominator = samples.reduce((sum, sample) => sum + (sample.minute - meanMinute) ** 2, 0)
+  const slopeBytesPerMinute = denominator
+    ? samples.reduce((sum, sample) => sum + (sample.minute - meanMinute) * (sample.heapUsed - meanHeap), 0) / denominator
+    : 0
+  const netGrowthBytes = samples.at(-1).heapUsed - samples[0].heapUsed
+  const projectedGrowthBytes = Math.max(0, slopeBytesPerMinute * SOAK_PROTOCOL.tailWindowMinutes)
+  const plateau = netGrowthBytes <= toleranceBytes && projectedGrowthBytes <= toleranceBytes
+  return {
+    windowMinutes: SOAK_PROTOCOL.tailWindowMinutes,
+    sampleCount: samples.length,
+    toleranceBytes: Math.round(toleranceBytes),
+    netGrowthBytes,
+    slopeBytesPerMinute: Math.round(slopeBytesPerMinute),
+    projectedGrowthBytes: Math.round(projectedGrowthBytes),
+    plateau,
+    reason: plateau
+      ? 'Tail drift and fitted growth remain within both the 5% and 5 MiB plateau tolerance.'
+      : 'Tail drift or fitted growth exceeds the plateau tolerance.',
+  }
 }
 
 async function memorySoak(fixture, minutes) {
   if (!minutes) return null
-  if (typeof global.gc !== 'function') throw new Error('Memory soak requires node --expose-gc.')
-  const port = await freePort()
-  Object.assign(process.env, serverEnvironment(fixture, port))
-  await import(`../app/backend/server.mjs?performance-soak=${Date.now()}`)
-  const origin = `http://127.0.0.1:${port}`
-  await waitForServer(origin)
-
-  const durationMs = minutes * 60_000
-  const startedAt = performance.now()
-  const trend = []
-  let baseline = null
-  let nextTrendAt = 5 * 60_000
-  let nextRequestAt = startedAt
-  while (performance.now() - startedAt < durationMs) {
-    await request(origin, COMMAND_CENTER)
-    const elapsed = performance.now() - startedAt
-    if (elapsed >= nextTrendAt || elapsed >= durationMs - 1_500) {
-      global.gc()
-      const heapUsed = process.memoryUsage().heapUsed
-      trend.push({ minute: rounded(elapsed / 60_000), heapUsed })
-      if (!baseline && elapsed >= 5 * 60_000) baseline = heapUsed
-      nextTrendAt += 5 * 60_000
+  const server = await startServer(fixture, { memoryTelemetry: true })
+  try {
+    const durationMs = minutes * 60_000
+    const startedAt = performance.now()
+    const trend = []
+    let baseline = null
+    let baselineAtMinute = null
+    let nextTrendAt = SOAK_PROTOCOL.baselineMinute * 60_000
+    let nextRequestAt = startedAt
+    while (performance.now() - startedAt < durationMs) {
+      await request(server.origin, COMMAND_CENTER)
+      const elapsed = performance.now() - startedAt
+      if (elapsed >= nextTrendAt) {
+        const heapUsed = await sampleServerHeap(server)
+        const minute = rounded(elapsed / 60_000)
+        trend.push({ minute, heapUsed })
+        if (baseline === null && elapsed >= SOAK_PROTOCOL.baselineMinute * 60_000) {
+          baseline = heapUsed
+          baselineAtMinute = minute
+        }
+        nextTrendAt += SOAK_PROTOCOL.trendIntervalMinutes * 60_000
+      }
+      nextRequestAt += SOAK_PROTOCOL.refreshIntervalMs
+      await new Promise((resolve) => setTimeout(resolve, Math.max(0, nextRequestAt - performance.now())))
     }
-    nextRequestAt += 3_000
-    await new Promise((resolve) => setTimeout(resolve, Math.max(0, nextRequestAt - performance.now())))
-  }
-  global.gc()
-  const finalHeapUsed = process.memoryUsage().heapUsed
-  baseline ??= finalHeapUsed
-  const growthBytes = finalHeapUsed - baseline
-  const growthPct = baseline ? growthBytes / baseline * 100 : 0
-  return {
-    durationMinutes: minutes,
-    refreshIntervalMs: 3_000,
-    baselineHeapUsed: baseline,
-    finalHeapUsed,
-    growthBytes,
-    growthPct: rounded(growthPct),
-    trend,
-    passed: growthPct < 20 && growthBytes < 100 * 1024 * 1024,
+    const finalHeapUsed = await sampleServerHeap(server)
+    const finalMinute = rounded((performance.now() - startedAt) / 60_000)
+    const finalSample = { minute: finalMinute, heapUsed: finalHeapUsed }
+    if (trend.at(-1)?.minute >= finalMinute - 0.1) trend[trend.length - 1] = finalSample
+    else trend.push(finalSample)
+    baseline ??= finalHeapUsed
+    const growthBytes = finalHeapUsed - baseline
+    const growthPct = baseline ? growthBytes / baseline * 100 : 0
+    const finalThresholdsPassed = growthPct < SOAK_PROTOCOL.maxFinalGrowthPct
+      && growthBytes < SOAK_PROTOCOL.maxFinalGrowthBytes
+    const tail = assessTailGrowth(trend, baseline, finalMinute)
+    const protocolComplete = minutes >= SOAK_PROTOCOL.requiredDurationMinutes
+      && baselineAtMinute !== null
+      && finalMinute >= SOAK_PROTOCOL.requiredDurationMinutes
+    return {
+      requestedDurationMinutes: minutes,
+      observedDurationMinutes: finalMinute,
+      refreshIntervalMs: SOAK_PROTOCOL.refreshIntervalMs,
+      baselineAtMinute,
+      baselineHeapUsed: baseline,
+      finalHeapUsed,
+      growthBytes,
+      growthPct: rounded(growthPct),
+      trend,
+      tail,
+      protocol: {
+        requiredDurationMinutes: SOAK_PROTOCOL.requiredDurationMinutes,
+        baselineMinute: SOAK_PROTOCOL.baselineMinute,
+        trendIntervalMinutes: SOAK_PROTOCOL.trendIntervalMinutes,
+        finalGrowthLimits: {
+          percentExclusive: SOAK_PROTOCOL.maxFinalGrowthPct,
+          bytesExclusive: SOAK_PROTOCOL.maxFinalGrowthBytes,
+        },
+        tailPlateauLimits: {
+          windowMinutes: SOAK_PROTOCOL.tailWindowMinutes,
+          percentInclusive: SOAK_PROTOCOL.maxTailGrowthPct,
+          bytesInclusive: SOAK_PROTOCOL.maxTailGrowthBytes,
+        },
+      },
+      protocolComplete,
+      finalThresholdsPassed,
+      passed: protocolComplete && finalThresholdsPassed && tail.plateau,
+    }
+  } finally {
+    await stopServer(server)
   }
 }
 
-function commit() {
-  try { return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim() } catch { return null }
+function gitState() {
+  try {
+    const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim()
+    const dirty = Boolean(execFileSync('git', ['status', '--porcelain', '--untracked-files=normal'], { cwd: ROOT, encoding: 'utf8' }).trim())
+    return { commit, dirty }
+  } catch {
+    return { commit: null, dirty: null }
+  }
 }
 
-const soakMinutes = Number(argument('soak-minutes', '0'))
-if (!Number.isFinite(soakMinutes) || soakMinutes < 0) throw new Error('--soak-minutes must be a non-negative number.')
-const reportPath = path.resolve(ROOT, argument('report', 'data/performance-report.json'))
-const retainedFixtureDirectory = argument('fixture-directory', '')
-const fixtureDirectory = retainedFixtureDirectory
-  ? path.resolve(ROOT, retainedFixtureDirectory)
-  : await mkdtemp(path.join(tmpdir(), 'skillops-performance-'))
-if (retainedFixtureDirectory) await mkdir(fixtureDirectory, { recursive: true })
-let report
-try {
-  const fixture = await generateFixture(fixtureDirectory)
-  const endpoints = await benchmarkEndpoints(fixture)
-  const memory = await memorySoak(fixture, soakMinutes)
-  report = {
-    schemaVersion: 1,
-    generatedAt: new Date().toISOString(),
-    fixture: { ...fixture.parameters, hash: fixture.hash },
-    fixtureRetained: Boolean(retainedFixtureDirectory),
-    environment: {
-      platform: platform(),
-      release: release(),
-      architecture: process.arch,
-      cpuCount: cpus().length,
-      memoryBytes: totalmem(),
-      node: process.version,
-      homeRedacted: homedir() ? '<local-home>' : null,
-      commit: commit(),
+export function buildAcceptance({ endpoints, memory, dirty }) {
+  const endpointPassed = endpoints.warm.commandCenter.passed && endpoints.warm.runs.passed
+  const blockers = []
+  if (!endpointPassed) blockers.push('endpoint-performance-failed')
+  if (!memory) blockers.push('memory-soak-not-run')
+  else if (!memory.protocolComplete) blockers.push('memory-soak-protocol-incomplete')
+  else if (!memory.passed) blockers.push('memory-soak-failed')
+  blockers.push('browser-ui-timing-not-measured')
+  blockers.push('browser-network-boundary-not-measured')
+  if (dirty === true) blockers.push('working-tree-dirty')
+  else if (dirty === null) blockers.push('git-state-unavailable')
+
+  const checks = {
+    endpointPerformance: {
+      passed: endpointPassed,
+      status: endpointPassed ? 'passed' : 'failed',
     },
-    endpoints,
-    ui: null,
-    memory,
-    passed: endpoints.warm.commandCenter.passed && endpoints.warm.runs.passed && (!memory || memory.passed),
+    memorySoak: {
+      passed: memory?.passed ?? null,
+      status: !memory ? 'not-run' : memory.protocolComplete ? (memory.passed ? 'passed' : 'failed') : 'protocol-incomplete',
+    },
+    browserUiTiming: {
+      passed: null,
+      status: 'not-measured-by-script',
+    },
+    browserNetworkBoundary: {
+      passed: null,
+      status: 'not-measured-by-script',
+    },
+    immutableCandidate: {
+      passed: dirty === false ? true : dirty === true ? false : null,
+      status: dirty === false ? 'clean' : dirty === true ? 'dirty' : 'unavailable',
+    },
   }
-  await mkdir(path.dirname(reportPath), { recursive: true })
-  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`)
-  console.log(JSON.stringify(report, null, 2))
-  if (!report.passed) process.exitCode = 1
-} finally {
-  if (!retainedFixtureDirectory) await rm(fixtureDirectory, { recursive: true, force: true })
+  return {
+    commandScope: memory ? 'endpoint-and-memory-component' : 'endpoint-only',
+    endpoint: {
+      complete: true,
+      passed: endpointPassed,
+    },
+    releaseCandidate: {
+      complete: false,
+      passed: false,
+      checks,
+      blockers,
+      note: 'Release acceptance also requires immutable-candidate browser UI timing and browser-network evidence, which this Node harness does not collect.',
+    },
+  }
 }
-if (soakMinutes) process.exit(process.exitCode || 0)
+
+async function main() {
+  const soakMinutes = Number(argument('soak-minutes', '0'))
+  if (!Number.isFinite(soakMinutes) || soakMinutes < 0) throw new Error('--soak-minutes must be a non-negative number.')
+  const reportPath = path.resolve(ROOT, argument('report', 'data/performance-report.json'))
+  const retainedFixtureDirectory = argument('fixture-directory', '')
+  const fixtureDirectory = retainedFixtureDirectory
+    ? path.resolve(ROOT, retainedFixtureDirectory)
+    : await mkdtemp(path.join(tmpdir(), 'skillops-performance-'))
+  if (retainedFixtureDirectory) await mkdir(fixtureDirectory, { recursive: true })
+  try {
+    const fixture = await generateFixture(fixtureDirectory)
+    const endpoints = await benchmarkEndpoints(fixture)
+    const memory = await memorySoak(fixture, soakMinutes)
+    const git = gitState()
+    const acceptance = buildAcceptance({ endpoints, memory, dirty: git.dirty })
+    const cpuInfo = cpus()
+    const report = {
+      schemaVersion: 2,
+      reportKind: 'performance-components',
+      generatedAt: new Date().toISOString(),
+      fixture: { ...fixture.parameters, hash: fixture.hash },
+      fixtureRetained: Boolean(retainedFixtureDirectory),
+      serviceProtocol: {
+        clock: { mode: 'fixed', value: FIXED_NOW_ISO },
+        timezone: FIXED_TIMEZONE,
+        clockObservedAt: endpoints.boundaries.serviceClockObservedAt,
+        todayWindowStartedAt: endpoints.boundaries.serviceTodayWindowStartedAt,
+      },
+      environment: {
+        platform: platform(),
+        release: release(),
+        architecture: process.arch,
+        cpuCount: cpuInfo.length,
+        cpuModel: cpuInfo[0]?.model || null,
+        memoryBytes: totalmem(),
+        node: process.version,
+        hostTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        homeRedacted: homedir() ? '<local-home>' : null,
+        commit: git.commit,
+        dirty: git.dirty,
+      },
+      endpoints,
+      ui: {
+        status: 'not-measured-by-script',
+        samplesMs: null,
+        p95Ms: null,
+      },
+      memory,
+      acceptance,
+    }
+    await mkdir(path.dirname(reportPath), { recursive: true })
+    await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`)
+    console.log(JSON.stringify(report, null, 2))
+    if (!acceptance.endpoint.passed || (memory && !memory.passed)) process.exitCode = 1
+  } finally {
+    if (!retainedFixtureDirectory) await rm(fixtureDirectory, { recursive: true, force: true })
+  }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(SCRIPT_FILE)) await main()

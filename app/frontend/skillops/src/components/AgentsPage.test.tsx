@@ -9,7 +9,7 @@ const codex: AgentProjection = {
   name: 'reviewer',
   runtime: 'codex',
   definition: { sourcePath: 'project/.codex/agents/reviewer.md', skillVersion: '1.0.0' },
-  configurationState: 'active',
+  configurationState: 'conflicted',
   evidenceState: 'observed-recently',
   lastVerifiedAt: '2026-07-25T11:56:01.000Z',
   terminalRuns: [{ id: 'codex-terminal', event: 'skill.failed', kind: 'agent', skillId: 'reviewer', runtime: 'codex', timestamp: '2026-07-25T11:56:01.000Z', outcome: 'failed' }],
@@ -65,7 +65,7 @@ describe('Agent projections', () => {
       const runtime = url.searchParams.get('runtime')
       const source = definitions ? [planner, codex, claude] : [codex, claude]
       const items = runtime ? source.filter((item) => item.runtime === runtime) : source
-      return Promise.resolve({ ok: true, json: async () => page(items, source.length) })
+      return Promise.resolve({ ok: true, json: async () => ({ ...page(items, source.length), sourceStatus: 'partial' }) })
     })
     vi.stubGlobal('fetch', fetchMock)
     const onOpen = vi.fn()
@@ -73,6 +73,7 @@ describe('Agent projections', () => {
 
     const observedTab = screen.getByRole('tab', { name: 'Observed Activity' })
     expect(await screen.findByRole('table', { name: 'Agents' })).toBeTruthy()
+    expect(screen.getByRole('alert').textContent).toContain('Some local sources are unavailable or partial.')
     observedTab.focus()
     fireEvent.keyDown(observedTab, { key: 'ArrowRight' })
     expect(document.activeElement).toBe(screen.getByRole('tab', { name: 'Definitions' }))
@@ -82,6 +83,7 @@ describe('Agent projections', () => {
     await screen.findByText('Observed recently')
 
     expect(screen.getByText('Telemetry gap')).toBeTruthy()
+    expect(screen.getByText('Conflicted')).toBeTruthy()
     const codexRow = screen.getAllByText('Codex').find((element) => element.tagName === 'TD')!.closest('tr') as HTMLElement
     const inspect = within(codexRow).getByRole('button', { name: 'Inspect reviewer' })
     inspect.focus()

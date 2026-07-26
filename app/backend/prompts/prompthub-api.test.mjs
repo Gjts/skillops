@@ -77,7 +77,7 @@ function services() {
 
 async function call(method, pathname, body, injected = services(), headers, remoteAddress) {
   const res = response()
-  const handled = await handlePromptHubApi(request(method, pathname, body, headers, remoteAddress), res, pathname, {
+  const handled = await handlePromptHubApi(request(method, pathname, body, headers, remoteAddress), res, new URL(pathname, 'http://127.0.0.1').pathname, {
     promptHubServices: injected,
     environment: {},
     resolveGovernancePrincipal: async () => ({ id: 'Operator', assurance: 'test' }),
@@ -102,7 +102,9 @@ describe('PromptHub connector API', () => {
   })
 
   it('lists, previews, imports as a governance Candidate, and reports drift', async () => {
-    expect((await call('GET', '/api/connectors/prompthub/projects')).json.items).toEqual([{ remoteId: '4948', name: 'Review prompt' }])
+    const projects = await call('GET', '/api/connectors/prompthub/projects?page=1&pageSize=20')
+    expect(projects.json).toMatchObject({ items: [{ remoteId: '4948', name: 'Review prompt' }], page: 1, pageSize: 20, totalItems: 1, totalPages: 1, hasNext: false })
+    expect(projects.json.generatedAt).toMatch(/Z$/)
     const fetchedVersion = await call('POST', '/api/connectors/prompthub/version', { projectId: '4948' })
     expect(fetchedVersion.json.remoteHash).toBe('ed651609')
     expect(fetchedVersion.response.body).not.toContain('private')
@@ -122,7 +124,9 @@ describe('PromptHub connector API', () => {
       artifact: expect.objectContaining({ source: 'git', sourceRef }), owner: 'Operator', ownerIdentityAssurance: 'test', targetSkeleton: 'prompt:review', projectId: 'project-a',
     }))
     expect(injected.teamControlPlane.authorize).toHaveBeenCalledWith(expect.objectContaining({ id: 'Operator' }), 'Developer')
-    expect((await call('GET', '/api/connectors/prompthub/drift')).json.items).toEqual([{ remoteId: '4948', type: 'synchronized' }])
+    expect((await call('GET', '/api/connectors/prompthub/drift?page=1&pageSize=20')).json).toMatchObject({
+      items: [{ remoteId: '4948', type: 'synchronized' }], page: 1, pageSize: 20, totalItems: 1,
+    })
   })
 
   it('retracts only a newly nominated Candidate when PromptHub import finalization fails', async () => {
@@ -155,6 +159,7 @@ describe('PromptHub connector API', () => {
   it('rejects unsafe requests and reports unsupported PromptHub publishing honestly', async () => {
     expect((await call('POST', '/api/connectors/prompthub/import-preview', { projectId: '4948' }, services(), {}, '10.0.0.8')).response.statusCode).toBe(403)
     expect((await call('POST', '/api/connectors/prompthub/import-preview', { projectId: '4948', apiKey: 'leak' })).response.statusCode).toBe(422)
+    expect((await call('GET', '/api/connectors/prompthub/projects?pageSize=25')).response.statusCode).toBe(400)
     expect((await call('POST', '/api/connectors/prompthub/import', { previewToken: 'preview-1' })).response.statusCode).toBe(422)
     const mismatched = services()
     mismatched.artifactResolver.resolve.mockResolvedValue({

@@ -48,7 +48,7 @@ function completed(input) {
       baseline: input.baseline.artifact, candidate: input.candidate.artifact,
       engine: { name: 'promptfoo', version: '0.121.19' }, provider: { id: input.provider.provider, model: input.provider.model },
       metrics: {
-        baselineScore: 80, candidateScore: 90, scoreDeltaPp: 10, casesPassed: 1, casesTotal: 1,
+        baselineScore: 80, candidateScore: 90, scoreDeltaPp: 10, casesPassed: 1, casesTotal: 1, eligibleCases: 1, suiteCaseCoveragePct: 100,
         passRatePct: 100, regressionRatePct: 0, baselineTokens: null, candidateTokens: null,
         baselineCostUsd: null, candidateCostUsd: null, costDeltaPct: null,
         baselineP95LatencyMs: 10, candidateP95LatencyMs: 11, latencyDeltaPct: 10,

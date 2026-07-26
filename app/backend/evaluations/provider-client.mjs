@@ -128,12 +128,7 @@ function anthropicMessages(messages) {
   return result
 }
 
-function providerErrorMessage(text, status) {
-  try {
-    const parsed = JSON.parse(text)
-    const message = parsed?.error?.message || parsed?.message || parsed?.detail
-    if (typeof message === 'string') return `AI provider returned ${status}: ${message.slice(0, 500)}`
-  } catch {}
+function providerErrorMessage(status) {
   return `AI provider returned ${status}.`
 }
 
@@ -187,7 +182,7 @@ export async function callLlmProvider(settings, messages, options = {}) {
   try {
     const response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(payload), signal: requestSignal })
     const text = await boundedResponseText(response, MAX_PROVIDER_RESPONSE_BYTES, 'AI provider response exceeded the safe size limit.')
-    if (!response.ok) throw new EvaluationError(providerErrorMessage(text, response.status), 502)
+    if (!response.ok) throw new EvaluationError(providerErrorMessage(response.status), 502)
     let data
     try { data = JSON.parse(text) } catch { throw new EvaluationError('AI provider returned invalid JSON.', 502) }
     const content = config.transport === 'anthropic'
@@ -217,7 +212,7 @@ export async function callLlmProvider(settings, messages, options = {}) {
     if (error instanceof EvaluationError) throw error
     if (options.signal?.aborted) throw new EvaluationError('AI provider request was cancelled.', 409)
     if (controller.signal.aborted) throw new EvaluationError('AI provider request timed out.', 504)
-    throw new EvaluationError(error instanceof Error ? `AI provider request failed: ${error.message}` : 'AI provider request failed.', 502)
+    throw new EvaluationError('AI provider request failed.', 502)
   } finally {
     clearTimeout(timer)
   }

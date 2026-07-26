@@ -1,5 +1,6 @@
 import { normalizeManagedEvaluationRunRequest } from '../../shared/evaluation-schema.mjs'
 import { sendApiError, sendJson, setJsonApiHeaders } from '../api-response.mjs'
+import { createPageEnvelope } from '../page-envelope.mjs'
 import { createArtifactResolver } from './artifact-resolver.mjs'
 import { createEvaluationManager } from './evaluation-manager.mjs'
 import { createEvaluationStore } from './evaluation-store.mjs'
@@ -27,8 +28,18 @@ function routeId(pathname, suffix = '') {
   try { return decodeURIComponent(match[1]) } catch { throw new EvaluationError('Evaluation run ID is invalid.', 422) }
 }
 
+function decisionRouteId(pathname) {
+  const match = pathname.match(/^\/api\/evaluations\/([^/]+)\/decision$/)
+  if (!match) return routeId(pathname, '/decision')
+  try { return decodeURIComponent(match[1]) } catch { throw new EvaluationError('Evaluation run ID is invalid.', 422) }
+}
+
 function query(request) {
   return new URL(request.url || '/', 'http://127.0.0.1').searchParams
+}
+
+function compareSuites(left, right) {
+  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0
 }
 
 function pageCases(cases, search) {
@@ -77,6 +88,18 @@ function publicRun(run, policyHash) {
   }
 }
 
+function publicDecision(decision) {
+  if (!decision) return null
+  return {
+    decisionId: decision.decisionId,
+    evaluationRunId: decision.evaluationRunId,
+    artifactId: decision.artifactId,
+    candidateRefHash: decision.candidateRefHash,
+    decision: decision.decision,
+    recordedAt: decision.recordedAt,
+  }
+}
+
 export async function createManagedEvaluationServices(options = {}) {
   const store = options.store || createEvaluationStore(options)
   const suites = options.suites || createSuiteRegistry(options)
@@ -100,7 +123,7 @@ export async function handleManagedEvaluationApi(request, response, pathname, op
   const cancelId = routeId(pathname, '/cancel')
   const casesId = routeId(pathname, '/cases')
   const reportId = routeId(pathname, '/report')
-  const decisionId = routeId(pathname, '/decision')
+  const decisionId = decisionRouteId(pathname)
   const runId = !cancelId && !casesId && !reportId && !decisionId ? routeId(pathname) : null
   if (!isSuiteList && !suiteMatch && !isRunList && !cancelId && !casesId && !reportId && !decisionId && !runId) return false
   setJsonApiHeaders(response)
@@ -110,7 +133,17 @@ export async function handleManagedEvaluationApi(request, response, pathname, op
     const services = options.managedEvaluationServices || await initializeManagedEvaluationServices(options)
     if (isSuiteList) {
       method(request, 'GET')
-      sendJson(response, 200, { items: (await services.suites.list()).map((suite) => ({ ...suite, policyHash: services.policyHash })) })
+      const search = query(request)
+      const result = createPageEnvelope(await services.suites.list(), {
+        page: search.get('page'),
+        pageSize: search.get('pageSize'),
+        compare: compareSuites,
+      })
+      sendJson(response, 200, {
+        ...result,
+        items: result.items.map((suite) => ({ ...suite, policyHash: services.policyHash })),
+        generatedAt: new Date().toISOString(),
+      })
     } else if (suiteMatch) {
       method(request, 'GET')
       let suiteId
@@ -139,7 +172,11 @@ export async function handleManagedEvaluationApi(request, response, pathname, op
         limit: search.get('limit') || undefined,
         cursor: search.get('cursor') || undefined,
       })
-      sendJson(response, 200, { ...result, items: result.items.map((run) => publicRun(run, services.policyHash)) })
+      sendJson(response, 200, {
+        ...result,
+        items: result.items.map((run) => publicRun(run, services.policyHash)),
+        generatedAt: new Date().toISOString(),
+      })
     } else if (cancelId) {
       method(request, 'POST')
       await readEvaluationJsonBody(request)
@@ -150,11 +187,32 @@ export async function handleManagedEvaluationApi(request, response, pathname, op
       if (!run) throw new EvaluationError('Evaluation run was not found.', 404)
       if (request.method === 'POST') {
         const body = onlyKeys(await readEvaluationJsonBody(request), new Set(['decision']), 'Managed evaluation decision')
+        if (body.decision === 'create-candidate') {
+          const coverageGate = run.gates?.find((gate) => gate.id === 'suite-case-coverage')
+          if (run.status !== 'completed'
+            || run.gateResult !== 'passed'
+            || run.policyHash !== services.policyHash
+            || run.metrics?.suiteCaseCoveragePct !== 100
+            || coverageGate?.status !== 'passed') {
+            throw new EvaluationError('Create Candidate requires current evidence with complete Suite case coverage.', 409)
+          }
+        }
         const result = await services.store.appendDecision(decisionId, body.decision)
-        sendJson(response, result.reused ? 200 : 201, result)
+        const decision = publicDecision(result.decision)
+        sendJson(response, result.reused ? 200 : 201, {
+          decision,
+          reused: result.reused,
+          generatedAt: new Date().toISOString(),
+          revision: decision.decisionId,
+        })
       } else {
         method(request, 'GET')
-        sendJson(response, 200, { decision: await services.store.getDecision(decisionId) })
+        const decision = publicDecision(await services.store.getDecision(decisionId))
+        sendJson(response, 200, {
+          decision,
+          generatedAt: new Date().toISOString(),
+          revision: decision?.decisionId || null,
+        })
       }
     } else if (reportId) {
       method(request, 'GET')
@@ -163,7 +221,9 @@ export async function handleManagedEvaluationApi(request, response, pathname, op
       const cases = await services.store.getCases(reportId)
       const format = query(request).get('format') || 'json'
       if (format === 'json') {
-        sendJson(response, 200, createEvaluationReport(run, cases))
+        const report = createEvaluationReport(run, cases)
+        const decision = publicDecision(await services.store.getDecision(reportId))
+        sendJson(response, 200, decision ? { ...report, decision } : report)
       } else if (format === 'html') {
         response.setHeader('Content-Type', 'text/html; charset=utf-8')
         response.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
@@ -175,7 +235,10 @@ export async function handleManagedEvaluationApi(request, response, pathname, op
     } else if (casesId) {
       method(request, 'GET')
       if (!await services.store.getRun(casesId)) throw new EvaluationError('Evaluation run was not found.', 404)
-      sendJson(response, 200, pageCases(await services.store.getCases(casesId), query(request)))
+      sendJson(response, 200, {
+        ...pageCases(await services.store.getCases(casesId), query(request)),
+        generatedAt: new Date().toISOString(),
+      })
     } else {
       method(request, 'GET')
       const run = await services.store.getRun(runId)

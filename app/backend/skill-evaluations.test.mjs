@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { artifactPackageHash } from './evaluations/artifact-package.mjs'
 import { createArtifactResolver } from './evaluations/artifact-resolver.mjs'
+import { AiSettingsError } from './ai-settings-store.mjs'
 import {
   analyzeCandidateSkill,
   callLlmProvider,
@@ -312,6 +313,15 @@ Run the repository-level workflow.
       await expect(discoverGithubSkill(sourceUrl, undefined, { fetchImpl })).rejects.toThrow('SKILL.md file')
       expect(fetchImpl).not.toHaveBeenCalled()
     }
+  })
+
+  it('does not expose transport error details from candidate discovery', async () => {
+    const secret = 'REMOTE_ERROR_SECRET_SENTINEL'
+    await expect(discoverGithubSkill(
+      'https://raw.githubusercontent.com/example/repo/main/SKILL.md',
+      undefined,
+      { fetchImpl: vi.fn(async () => { throw new Error(secret) }) },
+    )).rejects.toMatchObject({ message: 'Remote request failed.', status: 502 })
   })
 
   it('ignores repository tree entries whose final file is not exactly SKILL.md', async () => {
@@ -877,6 +887,19 @@ describe('Evaluation HTTP boundary', () => {
 })
 
 describe('AI settings HTTP API', () => {
+  it('does not expose unknown runtime errors in API responses', async () => {
+    const sentinel = 'GP10_UNKNOWN_ERROR_LEAK'
+    const response = fakeResponse()
+
+    await handleEvaluationApi(fakeRequest({ method: 'GET' }), response, '/api/ai-settings', {
+      readAiSettings: async () => { throw Object.assign(new Error(sentinel), { status: 503 }) },
+    })
+
+    expect(response.statusCode).toBe(503)
+    expect(JSON.parse(response.body)).toEqual({ error: 'Evaluation request failed.' })
+    expect(response.body).not.toContain(sentinel)
+  })
+
   it('loads default AI settings over GET without a JSON body', async () => {
     const response = fakeResponse()
     const readAiSettings = vi.fn().mockResolvedValue({
@@ -933,7 +956,7 @@ describe('AI settings HTTP API', () => {
   it('requires the Team Owner role before reading saved provider credentials', async () => {
     const response = fakeResponse()
     const readAiSettings = vi.fn()
-    const teamControlPlane = { authorize: vi.fn().mockRejectedValue(Object.assign(new Error('Team role Owner is required.'), { status: 403 })) }
+    const teamControlPlane = { authorize: vi.fn().mockRejectedValue(new EvaluationError('Team role Owner is required.', 403)) }
     const resolveGovernancePrincipal = vi.fn().mockResolvedValue({ id: 'user:viewer', displayName: 'Viewer', assurance: 'test' })
 
     await handleEvaluationApi(fakeRequest({ method: 'GET' }), response, '/api/ai-settings', {
@@ -950,7 +973,7 @@ describe('AI settings HTTP API', () => {
 
   it('requires the Team Owner role for the actual PromptHub credential route', async () => {
     const response = fakeResponse()
-    const teamControlPlane = { authorize: vi.fn().mockRejectedValue(Object.assign(new Error('Team role Owner is required.'), { status: 403 })) }
+    const teamControlPlane = { authorize: vi.fn().mockRejectedValue(new EvaluationError('Team role Owner is required.', 403)) }
     const resolveGovernancePrincipal = vi.fn().mockResolvedValue({ id: 'user:developer', displayName: 'Developer', assurance: 'test' })
 
     await handleEvaluationApi(fakeRequest({ method: 'GET' }), response, '/api/connectors/prompthub/credential', {
@@ -1019,10 +1042,7 @@ describe('AI settings HTTP API', () => {
     const response = fakeResponse()
     const secret = 'super-secret-key-value'
     const writeAiSettings = vi.fn(async () => {
-      const error = new Error('openai reasoning effort is invalid.')
-      error.status = 400
-      error.name = 'AiSettingsError'
-      throw error
+      throw new AiSettingsError('openai reasoning effort is invalid.')
     })
 
     await handleEvaluationApi(fakeRequest({

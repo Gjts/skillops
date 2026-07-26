@@ -24,6 +24,24 @@ function assurance(value) {
   return value === undefined ? 'unverified-legacy' : text(value, 'Identity assurance', 100)
 }
 
+function validateCapabilities(capabilities) {
+  const ids = new Set()
+  const reservations = new Map()
+  for (const capability of capabilities) {
+    if (ids.has(capability.id)) throw new EvaluationError('Capability registry contains a duplicate Capability ID.', 500)
+    ids.add(capability.id)
+    if (capability.evidence && capability.latestEvidenceRunId !== capability.evidence.qualityRunId) {
+      throw new EvaluationError('Capability latest evidence run does not match its quality evidence binding.', 500)
+    }
+    for (const runId of new Set([capability.originEvaluationRunId, capability.latestEvidenceRunId].filter(Boolean))) {
+      const owner = reservations.get(runId)
+      if (owner && owner !== capability.id) throw new EvaluationError('Capability registry contains a duplicate evaluation run reservation.', 500)
+      reservations.set(runId, capability.id)
+    }
+  }
+  return capabilities
+}
+
 
 function approval(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new EvaluationError('Capability approval is invalid.', 500)
@@ -61,6 +79,7 @@ export function sanitizeCapability(value) {
   if (value.requalifiesStage != null && !['deprecated', 'superseded'].includes(value.requalifiesStage)) {
     throw new EvaluationError('Capability requalification stage is invalid.', 500)
   }
+  const latestEvidenceRunId = text(value.latestEvidenceRunId, 'Latest evidence run ID', 200, true)
   return {
     id: text(value.id, 'Capability ID', 200),
     artifact: normalizeArtifactDefinition(value.artifact),
@@ -74,7 +93,8 @@ export function sanitizeCapability(value) {
     stage: value.stage,
     requalifiesStage: value.requalifiesStage || null,
     policyId: text(value.policyId, 'Policy ID', 100),
-    latestEvidenceRunId: text(value.latestEvidenceRunId, 'Latest evidence run ID', 200, true),
+    originEvaluationRunId: text(value.originEvaluationRunId, 'Origin evaluation run ID', 200, true),
+    latestEvidenceRunId,
     evidence: evidence(value.evidence),
     approvals: Array.isArray(value.approvals) ? value.approvals.map(approval) : [],
     createdAt: timestamp(value.createdAt, 'Capability created time'),
@@ -91,8 +111,9 @@ export function createCapabilityRegistry(options = {}) {
   async function read() {
     try {
       const parsed = JSON.parse(await readFile(file, 'utf8'))
-      if (parsed?.schemaVersion !== 1 || !Array.isArray(parsed.capabilities)) throw new Error('schema')
-      return parsed.capabilities.map(sanitizeCapability)
+      if (![1, 2].includes(parsed?.schemaVersion) || !Array.isArray(parsed.capabilities)) throw new Error('schema')
+      const capabilities = parsed.capabilities.map(sanitizeCapability)
+      return validateCapabilities(capabilities)
     } catch (error) {
       if (error?.code === 'ENOENT') return []
       if (error instanceof EvaluationError) throw error
@@ -111,9 +132,9 @@ export function createCapabilityRegistry(options = {}) {
   }
 
   async function write(capabilities) {
-    const sanitized = capabilities.map(sanitizeCapability)
+    const sanitized = validateCapabilities(capabilities.map(sanitizeCapability))
     const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
-    await writeFile(temporary, `${JSON.stringify({ schemaVersion: 1, updatedAt: new Date().toISOString(), capabilities: sanitized }, null, 2)}\n`, 'utf8')
+    await writeFile(temporary, `${JSON.stringify({ schemaVersion: 2, updatedAt: new Date().toISOString(), capabilities: sanitized }, null, 2)}\n`, 'utf8')
     await rename(temporary, file)
     return sanitized
   }
@@ -132,6 +153,7 @@ export function createCapabilityRegistry(options = {}) {
       const projectRoot = text(input?.projectRoot, 'Project root', 4_000, true)
       const targetKey = text(input?.targetKey, 'Target key', 8_000, true)
       const policyId = text(input?.policyId || 'default-v1', 'Policy ID', 100)
+      const originEvaluationRunId = text(input?.originEvaluationRunId, 'Origin evaluation run ID', 200, true)
       return serialized(async () => {
         const capabilities = await read()
         const existingIndex = capabilities.findIndex((item) => item.artifact.kind === artifact.kind
@@ -147,13 +169,37 @@ export function createCapabilityRegistry(options = {}) {
           && item.targetKey === targetKey
           && item.policyId === policyId)
         const existing = capabilities[existingIndex]
+        if (originEvaluationRunId && existing?.originEvaluationRunId
+          && existing.originEvaluationRunId !== originEvaluationRunId) {
+          throw new EvaluationError('This Release Candidate already belongs to another Managed Suite run.', 409)
+        }
+        const reservationIndexes = originEvaluationRunId
+          ? capabilities.flatMap((item, index) => item.originEvaluationRunId === originEvaluationRunId
+            || item.latestEvidenceRunId === originEvaluationRunId ? [index] : [])
+          : []
+        if (reservationIndexes.length > 1) {
+          throw new EvaluationError('This Managed Suite run has conflicting legacy Release Candidate reservations.', 409)
+        }
+        const originIndex = reservationIndexes[0] ?? -1
+        if (originIndex >= 0 && originIndex !== existingIndex) {
+          throw new EvaluationError('This Managed Suite run already created another Release Candidate.', 409)
+        }
+        if (originIndex >= 0 && capabilities[originIndex].originEvaluationRunId) {
+          return { capability: capabilities[originIndex], reused: true }
+        }
         if (existing && (existing.ownerIdentityAssurance !== 'unverified-legacy'
           || ['stable', 'deprecated', 'superseded', 'rolled-back'].includes(existing.stage))) {
-          return { capability: existing, reused: true }
+          if (!originEvaluationRunId) return { capability: existing, reused: true }
+          const claimed = sanitizeCapability({ ...existing, originEvaluationRunId, updatedAt: new Date().toISOString() })
+          if (beforeCommit) await beforeCommit(claimed, existing, capabilities)
+          capabilities[existingIndex] = claimed
+          await write(capabilities)
+          return { capability: claimed, reused: true }
         }
         if (existing) {
           const reclaimed = sanitizeCapability({
             ...existing,
+            originEvaluationRunId: existing.originEvaluationRunId || originEvaluationRunId,
             baseline: input.baseline || null,
             owner,
             ownerIdentityAssurance,
@@ -186,6 +232,7 @@ export function createCapabilityRegistry(options = {}) {
           targetKey,
           stage: 'candidate',
           policyId,
+          originEvaluationRunId,
           latestEvidenceRunId: null,
           evidence: null,
           approvals: [],
@@ -198,28 +245,48 @@ export function createCapabilityRegistry(options = {}) {
         return { capability, reused: false }
       })
     },
-    async update(id, updater, beforeCommit) {
+    async update(id, updater, beforeCommit, options = {}) {
       return serialized(async () => {
         const capabilities = await read()
         const index = capabilities.findIndex((item) => item.id === id)
         if (index < 0) throw new EvaluationError('Capability was not found.', 404)
         const next = sanitizeCapability({ ...await updater(capabilities[index], capabilities), id, updatedAt: new Date().toISOString() })
+        const originChanged = next.originEvaluationRunId !== capabilities[index].originEvaluationRunId
+        const allowedOriginClaim = options.allowOriginClaim
+          && capabilities[index].originEvaluationRunId === null
+          && Boolean(next.originEvaluationRunId)
+        if (originChanged && !allowedOriginClaim) {
+          throw new EvaluationError('Capability origin evaluation run is immutable.', 409)
+        }
         if (beforeCommit) await beforeCommit(next, capabilities[index], capabilities)
         capabilities[index] = next
         await write(capabilities)
         return next
       })
     },
-    async mutateAll(updater, beforeCommit) {
+    async mutateAll(updater, beforeCommit, options = {}) {
       return serialized(async () => {
         const current = await read()
         const next = (await updater(current.map((item) => ({ ...item })))).map((item) => sanitizeCapability({ ...item, updatedAt: item.updatedAt || new Date().toISOString() }))
+        if (!options.allowOriginChange) {
+          const previousById = new Map(current.map((item) => [item.id, item.originEvaluationRunId]))
+          if (next.some((item) => previousById.has(item.id) && previousById.get(item.id) !== item.originEvaluationRunId)) {
+            throw new EvaluationError('Capability origin evaluation run is immutable.', 409)
+          }
+        }
         if (beforeCommit) await beforeCommit(next, current)
         return write(next)
       })
     },
     async replaceAll(capabilities) {
-      return serialized(() => write(capabilities))
+      return serialized(async () => {
+        const current = await read()
+        const previousById = new Map(current.map((item) => [item.id, item.originEvaluationRunId]))
+        if (capabilities.some((item) => previousById.has(item.id) && previousById.get(item.id) !== item.originEvaluationRunId)) {
+          throw new EvaluationError('Capability origin evaluation run is immutable.', 409)
+        }
+        return write(capabilities)
+      })
     },
   }
 }

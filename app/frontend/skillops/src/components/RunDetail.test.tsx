@@ -44,6 +44,7 @@ describe('run detail', () => {
 
     expect(screen.getByRole('heading', { name: 'frontend-builder' })).toBeTruthy()
     expect(screen.getByText('3 events')).toBeTruthy()
+    expect(screen.getByText('Same-runtime session or turn context only; proximity does not prove causality.')).toBeTruthy()
     expect(screen.getByText('$0.04')).toBeTruthy()
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close run detail' }))
     const tab = createEvent.keyDown(document.activeElement as HTMLElement, { key: 'Tab' })

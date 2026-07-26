@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
-import { appendFile, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { scanInstalledSkills } from '../../app/backend/skill-scanner.mjs'
+import { recordAdapterFailure, sanitizeAdapterDiagnostics } from '../safe-diagnostics.mjs'
 
 const adapterDir = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(adapterDir, '../..')
@@ -11,6 +12,7 @@ process.env.SKILLOPS_DATA_DIR ||= path.join(projectRoot, 'data')
 
 const { anonymizeSessionId, appendEvent, appendUniqueDiscoveries, dataDir } = await import('../../app/backend/event-store.mjs')
 const stateDir = path.join(dataDir, 'claude-state')
+const diagnosticFile = path.join(dataDir, 'claude-adapter-errors.log')
 
 function safePathId(value) {
   return String(value || 'unknown').replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 180)
@@ -326,17 +328,13 @@ async function handle(input) {
   }
 }
 
-async function reportAdapterError(error) {
-  try {
-    await mkdir(dataDir, { recursive: true })
-    await appendFile(path.join(dataDir, 'claude-adapter-errors.log'), `${new Date().toISOString()} ${error?.stack || error}\n`, 'utf8')
-  } catch {
-    // Observability must never interrupt Claude Code.
-  }
+async function reportAdapterError() {
+  await recordAdapterFailure(diagnosticFile, `${new Date().toISOString()} CLAUDE_ADAPTER_FAILURE Hook processing failed.`)
 }
 
+await sanitizeAdapterDiagnostics(diagnosticFile, 'CLAUDE_ADAPTER_DIAGNOSTICS_REDACTED')
 try {
   await handle(await readStdin())
-} catch (error) {
-  await reportAdapterError(error)
+} catch {
+  await reportAdapterError()
 }

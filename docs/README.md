@@ -13,6 +13,7 @@ local-first runtime observability product.
 
 | Reader | Recommended document |
 | --- | --- |
+| Domain contributor | [Domain context and ubiquitous language](../CONTEXT.md) |
 | First-time user | [User guide](product/user-guide.md) |
 | Contributor preparing a commit | [Commit convention](commit-convention.md) |
 | Product or UX contributor | [Product requirements](product/prd.md) |
@@ -26,7 +27,7 @@ local-first runtime observability product.
 | Local Prompt contributor | [Prompt Registry contract](develop/integrations/prompt-registry.md) |
 | Local operator | [Getting started](develop/operations/getting_started.md) |
 | Tester | [Testing and QA](develop/operations/testing.md) |
-| Release reviewer | [Release Candidate evidence](develop/operations/rc-evidence/v0.3.2-rc.1.md) |
+| Release reviewer | [Product RC verification record](develop/operations/rc-evidence/v0.3.2-rc.1.md) |
 | Someone diagnosing a failure | [Troubleshooting](develop/operations/troubleshooting.md) |
 | Team governing duplicate/conflicting Skills | [Registry health and collision handling](develop/operations/registry-health.md) |
 | Security or privacy reviewer | [Privacy and security](develop/security/privacy-security.md) |
@@ -35,6 +36,7 @@ local-first runtime observability product.
 ## Documentation map
 
 ```text
+CONTEXT.md                  Root domain context and ubiquitous language
 docs/
 ├─ README.md
 ├─ commit-convention.md

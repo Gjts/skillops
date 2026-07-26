@@ -14,15 +14,26 @@ if (!skillIds.length) {
   process.exit(2)
 }
 
-const response = await fetch(endpoint)
-if (!response.ok) throw new Error(`Event API returned ${response.status}.`)
-const events = await response.json()
-const matches = events.filter((event) =>
-  skillIds.includes(event.skillId) &&
-  event.runtime === runtime &&
-  (!sessionId || event.sessionId === sessionId) &&
-  event.event !== 'skill.discovered' &&
-  Date.parse(event.timestamp) >= since)
+const matches = []
+let page = 1
+while (true) {
+  const url = new URL(endpoint)
+  url.searchParams.set('page', String(page))
+  url.searchParams.set('pageSize', '100')
+  const response = await fetch(url)
+  if (!response.ok) throw new Error(`Event API returned ${response.status}.`)
+  const result = await response.json()
+  const events = Array.isArray(result) ? result : result?.items
+  if (!Array.isArray(events)) throw new Error('Event API returned an invalid page.')
+  matches.push(...events.filter((event) =>
+    skillIds.includes(event.skillId) &&
+    event.runtime === runtime &&
+    (!sessionId || event.sessionId === sessionId) &&
+    event.event !== 'skill.discovered' &&
+    Date.parse(event.timestamp) >= since))
+  if (Array.isArray(result) || !result.hasNext || (since > 0 && events.length && Date.parse(events.at(-1).timestamp) < since)) break
+  page += 1
+}
 
 if (!matches.length) {
   const sessionLabel = sessionId ? ` in session ${sessionId}` : ''

@@ -37,7 +37,7 @@ function event(index, overrides = {}) {
 async function call(url, events, method = 'GET') {
   const res = response()
   const pathname = new URL(url, 'http://127.0.0.1').pathname
-  const readEvents = vi.fn().mockResolvedValue(events)
+  const readEvents = events instanceof Error ? vi.fn().mockRejectedValue(events) : vi.fn().mockResolvedValue(events)
   const syncEvents = vi.fn().mockResolvedValue(undefined)
   const handled = await handleRunsApi(request(method, url), res, pathname, { readEvents, syncEvents })
   return { handled, response: res, json: res.body ? JSON.parse(res.body) : null, readEvents, syncEvents }
@@ -70,6 +70,7 @@ describe('GET /api/runs', () => {
       })
       expect(result.json.items).toHaveLength(item.expected)
       expect(result.json.items.length).toBeLessThanOrEqual(20)
+      expect(result.json.generatedAt).toMatch(/Z$/)
     }
   })
 
@@ -91,6 +92,27 @@ describe('GET /api/runs', () => {
     const filtered = await call('/api/runs?page=1&pageSize=20&query=needle&runtime=codex&project=alpha&outcome=success&dateFrom=2026-07-23T00%3A00%3A00.000Z&dateTo=2026-07-24T00%3A00%3A00.000Z&sort=timestamp_asc&cost=reported', events)
     expect(filtered.json.items.map((item) => item.id)).toEqual(['a', 'b', 'c'])
     expect(filtered.json.totalItems).toBe(3)
+  })
+
+  it('keeps terminal Skill events in the same turn as distinct runs', async () => {
+    const shared = { sessionId: 'session-1', turnId: 'turn-1', timestamp: '2026-07-23T12:00:00.000Z' }
+    const result = await call('/api/runs?page=1&pageSize=20', [
+      event(1, { ...shared, id: 'skill-one', skillId: 'one' }),
+      event(2, { ...shared, id: 'skill-two', skillId: 'two' }),
+    ])
+
+    expect(result.json.items.map((item) => item.id)).toEqual(['skill-two', 'skill-one'])
+    expect(result.json.totalItems).toBe(2)
+  })
+
+  it('returns recovered runs with an explicit partial source status', async () => {
+    const run = event(1)
+    const result = await call('/api/runs?page=1&pageSize=20', { events: [run], sourceStatus: 'partial' })
+
+    expect(result.json).toEqual(expect.objectContaining({
+      sourceStatus: 'partial',
+      items: [expect.objectContaining({ id: run.id })],
+    }))
   })
 
   it('returns scoped lifecycle counts without returning lifecycle rows', async () => {
@@ -191,7 +213,16 @@ describe('GET /api/runs', () => {
 
     const missing = await call('/api/runs/missing', events)
     expect(missing.response.statusCode).toBe(404)
-    expect(missing.json.error).toBe('Run not found.')
+    expect(missing.json.error).toEqual(expect.objectContaining({ code: 'NOT_FOUND', message: 'Run not found.' }))
+  })
+
+  it('does not expose raw event-store failures', async () => {
+    const sentinel = 'GP10_RUN_STORE_LEAK'
+    const result = await call('/api/runs?page=1&pageSize=20', new Error(sentinel))
+
+    expect(result.response.statusCode).toBe(500)
+    expect(result.json.error).toEqual({ code: 'INTERNAL_ERROR', message: 'Run query failed.' })
+    expect(result.response.body).not.toContain(sentinel)
   })
 
   it('rejects invalid or unbounded query parameters', async () => {

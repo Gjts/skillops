@@ -29,7 +29,7 @@ const advancedPages: Array<{ page: PageId; label: 'nav.team' | 'nav.policies' | 
 
 export function SettingsPage({ connections, onConnect, onRefresh, onClear, onNavigate }: SettingsPageProps) {
   const { t, formatDateTime, formatNumber } = useI18n()
-  const [summary, setSummary] = useState<{ generatedAt: string; count: number; lastRuntimeEventAt: string | null } | null>(null)
+  const [summary, setSummary] = useState<{ generatedAt: string; count: number; lastRuntimeEventAt: string | null; sourceStatus: 'ok' | 'partial' } | null>(null)
   const [summaryError, setSummaryError] = useState<string | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(true)
   const [confirmClear, setConfirmClear] = useState(false)
@@ -41,14 +41,17 @@ export function SettingsPage({ connections, onConnect, onRefresh, onClear, onNav
   const confirmRef = useRef<HTMLDivElement>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
   const previousFocus = useRef<HTMLElement | null>(null)
+  const connectionsRef = useRef<HTMLElement>(null)
+  const providerRef = useRef<HTMLElement>(null)
+  const dataRef = useRef<HTMLElement>(null)
 
   const loadSummary = useCallback(async () => {
     setSummaryLoading(true)
     try {
       const response = await fetch('/api/events?summary=1')
       if (!response.ok) throw new Error(t('errors.eventStatus', { status: response.status }))
-      const result = await response.json() as { generatedAt?: string; count?: number; lastRuntimeEventAt?: string | null }
-      setSummary({ generatedAt: result.generatedAt ?? new Date().toISOString(), count: result.count ?? 0, lastRuntimeEventAt: result.lastRuntimeEventAt ?? null })
+      const result = await response.json() as { generatedAt?: string; count?: number; lastRuntimeEventAt?: string | null; sourceStatus?: 'ok' | 'partial' }
+      setSummary({ generatedAt: result.generatedAt ?? new Date().toISOString(), count: result.count ?? 0, lastRuntimeEventAt: result.lastRuntimeEventAt ?? null, sourceStatus: result.sourceStatus === 'partial' ? 'partial' : 'ok' })
       setSummaryError(null)
     } catch (error) {
       setSummaryError(error instanceof Error ? error.message : t('common.unknown'))
@@ -74,6 +77,14 @@ export function SettingsPage({ connections, onConnect, onRefresh, onClear, onNav
     void loadSummary()
     void loadAiSettings()
   }, [loadAiSettings, loadSummary])
+
+  useEffect(() => {
+    const section = new URLSearchParams(window.location.search).get('section')
+    const target = section === 'connections' ? connectionsRef.current : section === 'provider' ? providerRef.current : section === 'data' ? dataRef.current : null
+    if (!target) return
+    target.scrollIntoView?.({ block: 'start' })
+    target.focus()
+  }, [])
 
   useEffect(() => {
     if (!confirmClear) return
@@ -174,13 +185,13 @@ export function SettingsPage({ connections, onConnect, onRefresh, onClear, onNav
 
   return (
     <div className="settings-page">
-      <section className="panel settings-section"><header><div><h2>{t('settings.runtimeConnections')}</h2><p>{t('settings.description')}</p></div><button className="button secondary" type="button" onClick={onRefresh}>{t('settings.refresh')}</button></header><div className="connection-list">{rows.map((row) => { const Icon = row.icon; const connection = connections.find((item) => item.runtime === row.runtime); return <article className="connection-row" key={row.runtime}><div className="connection-icon"><Icon size={19} /></div><div><strong>{row.name}</strong><span>{row.detail}</span><><small>{activityFor(row.runtime)}</small><small>{stageFor(row.runtime)}</small></>{connection?.verifiedEvidenceAt && <small>{t('agents.lastVerified')}: {formatDateTime(connection.verifiedEvidenceAt)}</small>}</div><span className={`connection-status ${connection?.status === 'broken' ? 'broken' : ''}`}>{statusFor(row.runtime)}</span><button className="button secondary" type="button" onClick={() => onConnect(row.runtime)}>{t(row.runtime === 'cursor' ? 'settings.view' : 'settings.configureRuntime', { runtime: row.name })}</button></article> })}</div></section>
+      <section ref={connectionsRef} tabIndex={-1} data-settings-section="connections" className="panel settings-section"><header><div><h2>{t('settings.runtimeConnections')}</h2><p>{t('settings.description')}</p></div><button className="button secondary" type="button" onClick={onRefresh}>{t('settings.refresh')}</button></header><div className="connection-list">{rows.map((row) => { const Icon = row.icon; const connection = connections.find((item) => item.runtime === row.runtime); return <article className="connection-row" key={row.runtime}><div className="connection-icon"><Icon size={19} /></div><div><strong>{row.name}</strong><span>{row.detail}</span><><small>{activityFor(row.runtime)}</small><small>{stageFor(row.runtime)}</small></>{connection?.verifiedEvidenceAt && <small>{t('agents.lastVerified')}: {formatDateTime(connection.verifiedEvidenceAt)}</small>}</div><span className={`connection-status ${connection?.status === 'broken' ? 'broken' : ''}`}>{statusFor(row.runtime)}</span><button className="button secondary" type="button" onClick={() => onConnect(row.runtime)}>{t(row.runtime === 'cursor' ? 'settings.view' : 'settings.configureRuntime', { runtime: row.name })}</button></article> })}</div></section>
 
-      <section className="panel settings-section settings-provider"><header><div><h2>{t('settings.aiProviders')}</h2><p>{t('settings.aiProviderDescription')}</p></div><button className="button secondary" type="button" onClick={() => setAiSettingsOpen(true)}><BrainCircuit size={15} />{t('evaluations.configureAi')}</button></header><dl><div><dt>{t('common.provider')}</dt><dd>{provider.label}</dd></div><div><dt>{t('common.model')}</dt><dd className="mono">{providerConfig.model || t('common.unavailable')}</dd></div><div><dt>{t('ai.baseUrl')}</dt><dd className="mono">{providerConfig.baseUrl || t('common.unavailable')}</dd></div><div><dt>{t('settings.credentialStatus')}</dt><dd>{provider.requiresKey ? (providerIsConfigured(aiSettings) ? t('settings.configured') : t('settings.notConfigured')) : t('settings.notRequired')}</dd></div></dl>{aiSettingsError && <p className="data-control-note" role="alert">{aiSettingsError}</p>}</section>
+      <section ref={providerRef} tabIndex={-1} data-settings-section="provider" className="panel settings-section settings-provider"><header><div><h2>{t('settings.aiProviders')}</h2><p>{t('settings.aiProviderDescription')}</p></div><button className="button secondary" type="button" onClick={() => setAiSettingsOpen(true)}><BrainCircuit size={15} />{t('evaluations.configureAi')}</button></header><dl><div><dt>{t('common.provider')}</dt><dd>{provider.label}</dd></div><div><dt>{t('common.model')}</dt><dd className="mono">{providerConfig.model || t('common.unavailable')}</dd></div><div><dt>{t('ai.baseUrl')}</dt><dd className="mono">{providerConfig.baseUrl || t('common.unavailable')}</dd></div><div><dt>{t('settings.credentialStatus')}</dt><dd>{provider.requiresKey ? (providerIsConfigured(aiSettings) ? t('settings.configured') : t('settings.notConfigured')) : t('settings.notRequired')}</dd></div></dl>{aiSettingsError && <p className="data-control-note" role="alert">{aiSettingsError}</p>}</section>
 
       <section className="panel settings-section settings-appearance"><header><div><h2>{t('common.appearance')}</h2><p>{t('settings.appearanceDescription')}</p></div></header><ThemeChooser /></section>
 
-      <section className="panel settings-section data-controls"><header><div><h2>{t('settings.localData')}</h2><p>{t('settings.localDataDescription')}</p></div><strong>{t('settings.eventCount', { count: formatNumber(summary?.count ?? 0) })}</strong></header><dl><div><dt>{t('settings.storage')}</dt><dd className="mono">data/events.jsonl</dd></div><div><dt>{t('settings.lastRuntimeEvent')}</dt><dd>{summary?.lastRuntimeEventAt ? formatDateTime(summary.lastRuntimeEventAt) : t('connect.noActivity')}</dd></div><div><dt>{t('settings.contentBoundary')}</dt><dd>{t('settings.noRawContent')}</dd></div><div><dt>{t('settings.retention')}</dt><dd>{t('settings.noAutomaticRetention')}</dd></div><div><dt>{t('settings.encryption')}</dt><dd>{t('settings.filesystemEncryption')}</dd></div></dl><footer><button className="button secondary" type="button" disabled={!summary?.count} onClick={exportEvents}><Download size={15} />{t('settings.export')}</button><button className="button danger" type="button" disabled={!summary?.count || clearing} onClick={() => setConfirmClear(true)}><Trash2 size={15} />{t('settings.clear')}</button></footer>{summaryLoading && !summary && <p className="data-control-note" role="status">{t('mode.loadingEvents')}</p>}{summaryError && <p className="data-control-note" role="alert">{summaryError} <button className="text-button" type="button" onClick={() => void loadSummary()}>{t('cc.retry')}</button></p>}{dataStatus && <p className="data-control-note" role="status">{dataStatus}</p>}</section>
+      <section ref={dataRef} tabIndex={-1} data-settings-section="data" className="panel settings-section data-controls"><header><div><h2>{t('settings.localData')}</h2><p>{t('settings.localDataDescription')}</p></div><strong>{t('settings.eventCount', { count: formatNumber(summary?.count ?? 0) })}</strong></header><dl><div><dt>{t('settings.storage')}</dt><dd className="mono">data/events.jsonl</dd></div><div><dt>{t('settings.lastRuntimeEvent')}</dt><dd>{summary?.lastRuntimeEventAt ? formatDateTime(summary.lastRuntimeEventAt) : t('connect.noActivity')}</dd></div><div><dt>{t('settings.contentBoundary')}</dt><dd>{t('settings.noRawContent')}</dd></div><div><dt>{t('settings.retention')}</dt><dd>{t('settings.noAutomaticRetention')}</dd></div><div><dt>{t('settings.encryption')}</dt><dd>{t('settings.filesystemEncryption')}</dd></div></dl><footer><button className="button secondary" type="button" disabled={!summary?.count} onClick={exportEvents}><Download size={15} />{t('settings.export')}</button><button className="button danger" type="button" disabled={!summary?.count || clearing} onClick={() => setConfirmClear(true)}><Trash2 size={15} />{t('settings.clear')}</button></footer>{summaryLoading && !summary && <p className="data-control-note" role="status">{t('mode.loadingEvents')}</p>}{summary?.sourceStatus === 'partial' && <p className="data-control-note" role="alert">{t('cc.partial')}</p>}{summaryError && <p className="data-control-note" role="alert">{summaryError} <button className="text-button" type="button" onClick={() => void loadSummary()}>{t('cc.retry')}</button></p>}{dataStatus && <p className="data-control-note" role="status">{dataStatus}</p>}</section>
 
       <section className="panel settings-section settings-advanced"><header><div><h2>{t('settings.advanced')}</h2><p>{t('settings.advancedDescription')}</p></div></header><div className="settings-link-list">{advancedPages.map((item) => <button className="button secondary" type="button" key={item.label} onClick={() => onNavigate(item.page)}>{t(item.label)}</button>)}</div></section>
 

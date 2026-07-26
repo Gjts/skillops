@@ -7,10 +7,28 @@ function response(body: unknown, status = 200) {
   return Promise.resolve({ ok: status >= 200 && status < 300, status, json: async () => body })
 }
 
+function page(items: unknown[], overrides: Record<string, unknown> = {}) {
+  const current = Number(overrides.page || 1)
+  const totalItems = Number(overrides.totalItems ?? items.length)
+  const totalPages = Number(overrides.totalPages ?? (totalItems ? 1 : 0))
+  return {
+    items,
+    page: current,
+    pageSize: 20,
+    totalItems,
+    totalPages,
+    hasPrevious: current > 1 && totalItems > 0,
+    hasNext: current < totalPages,
+    revision: 8,
+    ...overrides,
+  }
+}
+
 const empty = {
   revision: 0,
   team: null,
-  workspaces: [], projects: [], environments: [], members: [], devices: [], policyPacks: [], exceptions: [],
+  counts: { workspaces: 0, projects: 0, environments: 0, activeMembers: 0, activeDevices: 0, policyPacks: 0, exceptions: 0 },
+  lastCollectorAt: null,
   capabilities: { deployment: 'local-git', networkApi: false, sso: false, scim: false },
   templateAdoption: { totalProjects: 0, adoptedProjects: 0, currentProjects: 0, driftedProjects: 0, pendingUpgradeProjects: 0, adoptionRatePct: 0 },
 }
@@ -19,13 +37,8 @@ const configured = {
   ...empty,
   revision: 8,
   team: { id: 'acme', name: 'Acme Team' },
-  workspaces: [{ id: 'engineering', name: 'Engineering' }],
-  projects: [{ id: 'project-a', name: 'Project A', artifactIds: ['skill:review'], template: { id: 'team-default', version: '1.0.0', status: 'upgrade-available', candidateVersion: '2.0.0' } }],
-  environments: [{ id: 'production', name: 'Production', channel: 'stable' }],
-  members: [{ id: 'user:owner', displayName: 'Owner', role: 'Owner', status: 'active' }],
-  devices: [{ id: 'laptop', name: 'Laptop', status: 'active', lastSeenAt: '2026-07-22T00:00:00.000Z' }],
-  policyPacks: [{ id: 'secure', version: '1.0.0' }],
-  exceptions: [{ id: 'exception-1', projectId: 'project-a', policyId: 'secure', status: 'approved' }],
+  counts: { workspaces: 1, projects: 1, environments: 1, activeMembers: 1, activeDevices: 1, policyPacks: 1, exceptions: 1 },
+  lastCollectorAt: '2026-07-22T00:00:00.000Z',
   templateAdoption: { totalProjects: 1, adoptedProjects: 1, currentProjects: 0, driftedProjects: 0, pendingUpgradeProjects: 1, adoptionRatePct: 100 },
 }
 
@@ -36,8 +49,6 @@ describe('Team control plane UI', () => {
     const fetchMock = vi.fn((input: string, init?: RequestInit) => {
       if (input === '/api/team' && !init) return response(empty)
       if (input === '/api/team' && init?.method === 'POST') return response({ ...empty, team: { id: 'local-team', name: 'Local Team' } }, 201)
-      if (input === '/api/team/catalog') return response({ items: [] })
-      if (input === '/api/team/queues') return response({ approvalInbox: [], releaseQueue: [] })
       return response({ error: { message: 'Not found' } }, 404)
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -52,8 +63,9 @@ describe('Team control plane UI', () => {
   it('shows the unified asset directory plus approval and release queues from backend facts', async () => {
     vi.stubGlobal('fetch', vi.fn((input: string) => {
       if (input === '/api/team') return response(configured)
-      if (input === '/api/team/catalog') return response({ items: [{ artifactVersionId: 'skill:review:a', artifactId: 'skill:review', version: '2.0.0', contentHash: 'a'.repeat(64), source: 'github', lifecycleStatus: 'ready', owner: 'user:owner', usedByProjectIds: ['project-a'], evidenceHash: 'e'.repeat(64) }] })
-      if (input === '/api/team/queues') return response({ approvalInbox: [{ capabilityId: 'cap-review', artifactId: 'review', owner: 'user:owner', evidenceHash: 'e'.repeat(64) }], releaseQueue: [{ capabilityId: 'cap-release', artifactId: 'release', stage: 'approved', targetSkeleton: 'project-a' }] })
+      if (input === '/api/team/catalog?page=1&pageSize=20') return response(page([{ artifactVersionId: 'skill:review:a', artifactId: 'skill:review', version: '2.0.0', contentHash: 'a'.repeat(64), source: 'github', lifecycleStatus: 'ready', owner: 'user:owner', usedByProjectIds: ['project-a'], evidenceHash: 'e'.repeat(64) }]))
+      if (input === '/api/team/queues?kind=approval&page=1&pageSize=20') return response(page([{ capabilityId: 'cap-review', artifactId: 'review', owner: 'user:owner', evidenceHash: 'e'.repeat(64) }]))
+      if (input === '/api/team/queues?kind=release&page=1&pageSize=20') return response(page([{ capabilityId: 'cap-release', artifactId: 'release', stage: 'approved', targetSkeleton: 'project-a' }]))
       return response({ error: { message: 'Not found' } }, 404)
     }))
     render(<TeamPage />)
@@ -69,11 +81,30 @@ describe('Team control plane UI', () => {
     expect(screen.getByText('Pending template upgrades')).toBeTruthy()
   })
 
+  it('moves through bounded server pages without loading the full Team catalog', async () => {
+    const fetchMock = vi.fn((input: string) => {
+      if (input === '/api/team') return response(configured)
+      if (input === '/api/team/catalog?page=1&pageSize=20') return response(page([{ artifactVersionId: 'skill:item-01:a', artifactId: 'skill:item-01', version: '1.0.0', contentHash: 'a'.repeat(64), source: 'github', lifecycleStatus: 'ready', owner: 'user:owner', usedByProjectIds: [], evidenceHash: null }], { totalItems: 21, totalPages: 2 }))
+      if (input === '/api/team/catalog?page=2&pageSize=20') return response(page([{ artifactVersionId: 'skill:item-21:b', artifactId: 'skill:item-21', version: '1.0.0', contentHash: 'b'.repeat(64), source: 'github', lifecycleStatus: 'ready', owner: 'user:owner', usedByProjectIds: [], evidenceHash: null }], { page: 2, totalItems: 21, totalPages: 2 }))
+      if (input === '/api/team/queues?kind=approval&page=1&pageSize=20') return response(page([]))
+      if (input === '/api/team/queues?kind=release&page=1&pageSize=20') return response(page([]))
+      return response({ error: { message: 'Not found' } }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<TeamPage />)
+
+    expect(await screen.findByText('skill:item-01')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+    expect(await screen.findByText('skill:item-21')).toBeTruthy()
+    expect(fetchMock).toHaveBeenCalledWith('/api/team/catalog?page=2&pageSize=20', undefined)
+  })
+
   it('creates a sanitized backend backup from the Team page', async () => {
     const fetchMock = vi.fn((input: string, init?: RequestInit) => {
       if (input === '/api/team' && !init) return response(configured)
-      if (input === '/api/team/catalog') return response({ items: [] })
-      if (input === '/api/team/queues') return response({ approvalInbox: [], releaseQueue: [] })
+      if (input === '/api/team/catalog?page=1&pageSize=20') return response(page([]))
+      if (input === '/api/team/queues?kind=approval&page=1&pageSize=20') return response(page([]))
+      if (input === '/api/team/queues?kind=release&page=1&pageSize=20') return response(page([]))
       if (input === '/api/team/backup' && init?.method === 'POST') return response({ file: 'team-backup.json' }, 201)
       return response({ error: { message: 'Not found' } }, 404)
     })

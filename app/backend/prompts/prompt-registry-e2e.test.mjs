@@ -64,14 +64,20 @@ describe('local Prompt Registry governance end-to-end', () => {
     }
 
     async function promote(candidate, reviewer) {
-      const nominated = await governance.nominate({ artifact: candidate.artifact, owner: 'prompt-owner', targetSkeleton: 'prompt:release-summary' })
       const queued = await manager.enqueue({
         suite, baseline: evaluationBaseline, candidate,
         provider: { provider: 'ollama', model: 'deterministic-fixture', baseUrl: 'http://127.0.0.1:11434/v1' },
-        requestedBy: 'prompt-registry-e2e', capabilityId: nominated.capability.id,
+        requestedBy: 'prompt-registry-e2e',
       }, { fakeOutputs, runtimeRoot: path.join(dataDir, 'promptfoo-runtime') })
       const run = await waitForCompleted(store, queued.summary.id)
       expect(run).toEqual(expect.objectContaining({ gateResult: 'passed', candidate: expect.objectContaining({ source: 'prompt-registry', sourceRef: candidate.artifact.sourceRef }) }))
+      await store.appendDecision(run.id, 'create-candidate')
+      const nominated = await governance.nominate({
+        artifact: candidate.artifact,
+        owner: 'prompt-owner',
+        targetSkeleton: 'prompt:release-summary',
+        originEvaluationRunId: run.id,
+      })
       await governance.bindEvidence(nominated.capability.id, { runId: run.id, actor: 'operator' })
       await governance.approve(nominated.capability.id, { reviewer })
       const canaryPreview = await governance.previewCanary(nominated.capability.id, { targetSkeleton: 'prompt-canary:release-summary', projectRoot: canaryRoot })

@@ -78,6 +78,76 @@ describe('Agent projection API', () => {
     })
   })
 
+  it('uses the fixed 15 minute evidence window independently of the list date range', () => {
+    const projected = projectAgents([
+      event('definition'),
+      event('old-terminal', {
+        event: 'skill.completed',
+        timestamp: '2026-07-25T11:30:00.000Z',
+        sourcePath: undefined,
+        outcome: 'success',
+      }),
+    ], { now: now.getTime(), days: 30 })
+
+    expect(projected.observed[0]).toMatchObject({
+      evidenceState: 'idle',
+      latestOutcome: 'success',
+    })
+  })
+
+  it('applies the requested activity window without changing the fixed evidence recency rule', async () => {
+    const events = [
+      event('recent-definition', { skillId: 'recent', sourcePath: 'project/.codex/agents/recent.md' }),
+      event('recent-terminal', { skillId: 'recent', event: 'skill.completed', timestamp: '2026-07-24T12:00:00.000Z', sourcePath: undefined, outcome: 'success' }),
+      event('old-definition', { skillId: 'old', sourcePath: 'project/.codex/agents/old.md' }),
+      event('old-terminal', { skillId: 'old', event: 'skill.completed', timestamp: '2026-07-10T12:00:00.000Z', sourcePath: undefined, outcome: 'success' }),
+    ]
+
+    const sevenDays = await call('/api/agents?tab=observed&window=7d', events)
+    expect(sevenDays.json.items.map((item) => item.name)).toEqual(['recent'])
+    expect(sevenDays.json.items[0]).toMatchObject({
+      evidenceState: 'idle',
+      outcomeCoverage: { numerator: 1, denominator: 1, value: 100 },
+    })
+
+    const thirtyDays = await call('/api/agents?tab=observed&window=30d', events)
+    expect(thirtyDays.json.items.map((item) => item.name).sort()).toEqual(['old', 'recent'])
+    expect(thirtyDays.json.items.find((item) => item.name === 'old')).toMatchObject({ evidenceState: 'idle' })
+  })
+
+  it('returns recovered Agent projections with an explicit partial source status', async () => {
+    const result = await call('/api/agents?tab=observed&window=7d', {
+      events: lifecycleEvents,
+      sourceStatus: 'partial',
+    })
+
+    expect(result.json).toEqual(expect.objectContaining({
+      sourceStatus: 'partial',
+      items: expect.arrayContaining([expect.objectContaining({ name: 'reviewer' })]),
+    }))
+  })
+
+  it('keeps definition condition separate from observed lifecycle evidence', () => {
+    const projected = projectAgents([
+      event('definition-a', { sourcePath: 'project/.codex/agents/reviewer-a.md' }),
+      event('definition-b', { sourcePath: 'project/.codex/agents/reviewer-b.md' }),
+      event('terminal', {
+        event: 'skill.completed',
+        timestamp: '2026-07-25T11:59:00.000Z',
+        sourcePath: undefined,
+        outcome: 'success',
+      }),
+    ], { now: now.getTime() })
+
+    expect(projected.observed[0]).toMatchObject({
+      configurationState: 'conflicted',
+      evidenceState: 'observed-recently',
+    })
+    expect(projected.definitions).toHaveLength(2)
+    expect(projected.definitions.every((item) => item.configurationState === 'conflicted')).toBe(true)
+    expect(projected.definitions.every((item) => item.evidenceState === 'observed-recently')).toBe(true)
+  })
+
   it('paginates and filters bounded metadata-only list responses', async () => {
     const definitions = Array.from({ length: 25 }, (_, index) => event(`definition-${index}`, {
       skillId: `agent-${String(index).padStart(2, '0')}`,

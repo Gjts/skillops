@@ -37,12 +37,26 @@ function service() {
     rollback: vi.fn().mockResolvedValue({ capability: { ...capability, stage: 'rolled-back' } }),
     lockState: vi.fn().mockResolvedValue({ schemaVersion: 1, targets: {} }),
     listAudit: vi.fn().mockResolvedValue([{ id: 'audit-1', action: 'candidate.nominated' }]),
+    audit: {
+      health: vi.fn().mockResolvedValue({ sourceStatus: 'ok' }),
+      page: vi.fn().mockResolvedValue({
+        items: [{ id: 'audit-1', action: 'candidate.nominated' }],
+        page: 1,
+        pageSize: 50,
+        totalItems: 1,
+        totalPages: 1,
+        hasPrevious: false,
+        hasNext: false,
+        sourceStatus: 'ok',
+      }),
+    },
   }
 }
 
-async function call(method, pathname, body, governance = service(), headers, remoteAddress) {
+async function call(method, url, body, governance = service(), headers, remoteAddress) {
   const res = response()
-  const handled = await handleGovernanceApi(request(method, pathname, body, headers, remoteAddress), res, pathname, {
+  const pathname = new URL(url, 'http://127.0.0.1').pathname
+  const handled = await handleGovernanceApi(request(method, url, body, headers, remoteAddress), res, pathname, {
     governanceServices: { governance },
     resolveGovernancePrincipal: async () => ({ id: 'Operator', assurance: 'test' }),
   })
@@ -51,23 +65,31 @@ async function call(method, pathname, body, governance = service(), headers, rem
 
 describe('governance API', () => {
   it('implements the capability collection, detail, evidence, approval, and canary routes', async () => {
-    expect((await call('GET', '/api/capabilities')).json.items).toHaveLength(1)
+    expect((await call('GET', '/api/capabilities')).json).toMatchObject({
+      items: [expect.objectContaining({ id: 'cap-1' })],
+      page: 1,
+      pageSize: 50,
+      totalItems: 1,
+      totalPages: 1,
+      hasPrevious: false,
+      hasNext: false,
+      generatedAt: expect.any(String),
+    })
     expect((await call('GET', '/api/capabilities/cap-1')).json.id).toBe('cap-1')
-    const audit = await call('GET', '/api/capabilities/cap-1/audit')
-    expect(audit.json.items).toEqual([{ id: 'audit-1', action: 'candidate.nominated' }])
-    expect(audit.governance.listAudit).toHaveBeenCalledWith({ capabilityId: 'cap-1' })
     const governance = service()
     const nomination = await call('POST', '/api/capabilities', {
       artifact: {},
       targetSkeleton: 'target',
       projectId: 'project-a',
       policyId: 'strict-v1',
+      evaluationRunId: 'run-1',
     }, governance)
     expect(nomination.response.statusCode).toBe(201)
     expect(governance.nominate).toHaveBeenCalledWith({
       artifact: {},
       projectId: 'project-a',
       policyId: 'strict-v1',
+      originEvaluationRunId: 'run-1',
       owner: 'Operator',
       ownerIdentityAssurance: 'test',
       targetSkeleton: 'target',
@@ -93,6 +115,93 @@ describe('governance API', () => {
     })
   })
 
+  it('stably paginates Capabilities before joining release targets', async () => {
+    const governance = service()
+    governance.list.mockResolvedValue(Array.from({ length: 45 }, (_, index) => ({
+      id: `cap-${String(45 - index).padStart(2, '0')}`,
+      createdAt: '2026-07-25T00:00:00.000Z',
+      targetKey: `target-${45 - index}`,
+    })))
+    governance.lockState.mockResolvedValue({
+      schemaVersion: 1,
+      targets: Object.fromEntries(Array.from({ length: 45 }, (_, index) => [
+        `target-${index + 1}`,
+        { stable: { capabilityId: `stable-${index + 1}` }, previous: [] },
+      ])),
+    })
+
+    const result = await call('GET', '/api/capabilities?page=2&pageSize=20', undefined, governance)
+
+    expect(result.response.statusCode).toBe(200)
+    expect(result.json.items.map((item) => item.id)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `cap-${String(index + 21).padStart(2, '0')}`),
+    )
+    expect(result.json.items[0].releaseTarget.stableCapabilityId).toBe('stable-21')
+    expect(result.json).toMatchObject({
+      page: 2,
+      pageSize: 20,
+      totalItems: 45,
+      totalPages: 3,
+      hasPrevious: true,
+      hasNext: true,
+      generatedAt: expect.any(String),
+    })
+
+    const invalid = await call('GET', '/api/capabilities?page=0', undefined, governance)
+    expect(invalid.response.statusCode).toBe(400)
+    expect(invalid.json.error.code).toBe('INVALID_REQUEST')
+  })
+
+  it('filters Capability lookup by authoritative Evaluation run references before paging', async () => {
+    const governance = service()
+    governance.list.mockResolvedValue([
+      { id: 'other', createdAt: '2026-07-26T00:00:00.000Z', originEvaluationRunId: 'run-other' },
+      { id: 'origin', createdAt: '2026-07-25T00:00:00.000Z', originEvaluationRunId: 'run-1' },
+      { id: 'evidence', createdAt: '2026-07-24T00:00:00.000Z', latestEvidenceRunId: 'run-1' },
+    ])
+
+    const result = await call('GET', '/api/capabilities?evaluationRunId=run-1&pageSize=20', undefined, governance)
+
+    expect(result.response.statusCode).toBe(200)
+    expect(result.json.items.map((item) => item.id)).toEqual(['origin', 'evidence'])
+    expect(result.json.totalItems).toBe(2)
+    expect((await call('GET', `/api/capabilities?evaluationRunId=${'x'.repeat(201)}`, undefined, governance)).response.statusCode).toBe(400)
+  })
+
+  it('projects exact Stable relationships from the target lock', async () => {
+    const governance = service()
+    governance.list.mockResolvedValue([
+      { id: 'candidate-a', targetSkeleton: 'skills/review/SKILL.md', targetKey: 'C:/project-a/skills/review/SKILL.md' },
+      { id: 'candidate-b', targetSkeleton: 'skills/review/SKILL.md', targetKey: 'C:/project-b/skills/review/SKILL.md' },
+    ])
+    governance.lockState.mockResolvedValue({
+      schemaVersion: 1,
+      targets: {
+        'C:/project-a/skills/review/SKILL.md': {
+          stable: { capabilityId: 'stable-a' },
+          previous: [{ capabilityId: 'previous-a' }, { capabilityId: 'oldest-a' }],
+        },
+        'C:/project-b/skills/review/SKILL.md': {
+          stable: { capabilityId: 'stable-b' },
+          previous: [{ capabilityId: 'previous-b' }],
+        },
+      },
+    })
+
+    const result = await call('GET', '/api/capabilities', undefined, governance)
+
+    expect(result.json.items.map((item) => item.releaseTarget)).toEqual([
+      { stableCapabilityId: 'stable-a', previousStableCapabilityId: 'previous-a' },
+      { stableCapabilityId: 'stable-b', previousStableCapabilityId: 'previous-b' },
+    ])
+
+    governance.get.mockResolvedValue({ id: 'candidate-a', targetSkeleton: 'skills/review/SKILL.md', targetKey: 'C:/project-a/skills/review/SKILL.md' })
+    expect((await call('GET', '/api/capabilities/candidate-a', undefined, governance)).json.releaseTarget).toEqual({
+      stableCapabilityId: 'stable-a',
+      previousStableCapabilityId: 'previous-a',
+    })
+  })
+
   it('maps configured bearer tokens to reviewer identities and rejects unknown credentials', async () => {
     const token = 'reviewer-token-'.padEnd(32, 'x')
     const governance = service()
@@ -100,6 +209,16 @@ describe('governance API', () => {
       governanceServices: { governance },
       environment: { SKILLOPS_GOVERNANCE_PRINCIPALS: JSON.stringify([{ id: 'reviewer-two', token }]) },
     }
+    const unauthenticated = response()
+    await handleGovernanceApi(
+      request('POST', '/api/capabilities/cap-1/approve', { decision: 'approved' }),
+      unauthenticated,
+      '/api/capabilities/cap-1/approve',
+      options,
+    )
+    expect(unauthenticated.statusCode).toBe(403)
+    expect(governance.approve).not.toHaveBeenCalled()
+
     const approved = response()
     await handleGovernanceApi(
       request('POST', '/api/capabilities/cap-1/approve', { decision: 'approved' }, { authorization: `Bearer ${token}` }),
@@ -125,6 +244,39 @@ describe('governance API', () => {
     expect(rejected.statusCode).toBe(403)
     expect(rejected.body).not.toContain('unknown')
     expect(governance.approve).toHaveBeenCalledTimes(1)
+
+    const unauthenticatedCapabilityAudit = response()
+    await handleGovernanceApi(
+      request('GET', '/api/capabilities/cap-1/audit'),
+      unauthenticatedCapabilityAudit,
+      '/api/capabilities/cap-1/audit',
+      options,
+    )
+    expect(unauthenticatedCapabilityAudit.statusCode).toBe(403)
+
+    const capabilityAudit = response()
+    governance.audit.page.mockResolvedValue({
+      items: [{ id: 'audit-1', action: 'candidate.nominated' }],
+      page: 1,
+      pageSize: 20,
+      totalItems: 1,
+      totalPages: 1,
+      hasPrevious: false,
+      hasNext: false,
+      sourceStatus: 'partial',
+    })
+    await handleGovernanceApi(
+      request('GET', '/api/capabilities/cap-1/audit?page=1&pageSize=20', undefined, { authorization: `Bearer ${token}` }),
+      capabilityAudit,
+      '/api/capabilities/cap-1/audit',
+      options,
+    )
+    expect(capabilityAudit.statusCode).toBe(200)
+    expect(JSON.parse(capabilityAudit.body).items).toHaveLength(1)
+    expect(JSON.parse(capabilityAudit.body).sourceStatus).toBe('partial')
+    expect(JSON.parse(capabilityAudit.body).generatedAt).toEqual(expect.any(String))
+    expect(governance.audit.page).toHaveBeenCalledWith({ capabilityId: 'cap-1', page: '1', pageSize: '20' })
+
     const audit = response()
     await handleGovernanceApi(
       request('GET', '/api/governance-audit', undefined, { authorization: `Bearer ${token}` }),
@@ -134,6 +286,8 @@ describe('governance API', () => {
     )
     expect(audit.statusCode).toBe(200)
     expect(JSON.parse(audit.body).items).toHaveLength(1)
+    expect(JSON.parse(audit.body).sourceStatus).toBe('partial')
+    expect(JSON.parse(audit.body).generatedAt).toEqual(expect.any(String))
   })
 
 
@@ -260,7 +414,7 @@ describe('governance API', () => {
         environment: {},
       })
       expect(res.statusCode).toBe(403)
-      expect(governance.listAudit).not.toHaveBeenCalled()
+      expect(governance.audit.page).not.toHaveBeenCalled()
       expect(governance.lockState).not.toHaveBeenCalled()
     }
   })

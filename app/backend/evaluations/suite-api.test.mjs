@@ -56,11 +56,12 @@ function services(overrides = {}) {
       getDecision: vi.fn().mockResolvedValue(null),
       appendDecision: vi.fn().mockImplementation(async (runId, decision) => ({
         decision: {
-          runId,
+          decisionId: `decision_${'c'.repeat(64)}`,
+          evaluationRunId: runId,
           artifactId: 'candidate',
-          candidateHash: 'b'.repeat(64),
+          candidateRefHash: 'b'.repeat(64),
           decision,
-          decidedAt: '2026-07-25T12:00:00.000Z',
+          recordedAt: '2026-07-25T12:00:00.000Z',
         },
         reused: false,
       })),
@@ -81,10 +82,50 @@ describe('managed evaluation API', () => {
     const list = await call('GET', '/api/evaluation-suites')
     expect(list.handled).toBe(true)
     expect(list.json.items[0].id).toBe('suite-1')
+    expect(list.json).toMatchObject({
+      page: 1,
+      pageSize: 50,
+      totalItems: 1,
+      totalPages: 1,
+      hasPrevious: false,
+      hasNext: false,
+      generatedAt: expect.any(String),
+    })
     const detail = await call('GET', '/api/evaluation-suites/suite-1')
     expect(detail.json.cases[0]).toEqual({ id: 'case-1', weight: 1, assertions: [{ label: 'required', type: 'contains', blocking: true }] })
     expect(detail.response.body).not.toContain('private test input')
     expect(detail.response.body).not.toContain('private value')
+  })
+
+  it('stably paginates Suite definitions and rejects invalid page bounds', async () => {
+    const service = services()
+    service.suites.list.mockResolvedValue(Array.from({ length: 45 }, (_, index) => ({
+      id: `suite-${String(45 - index).padStart(2, '0')}`,
+      name: `Suite ${45 - index}`,
+      suiteHash: String(index).padStart(64, '0'),
+    })))
+
+    const result = await call('GET', '/api/evaluation-suites?page=2&pageSize=20', undefined, service)
+    expect(result.response.statusCode).toBe(200)
+    expect(result.json.items.map((item) => item.id)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `suite-${String(index + 21).padStart(2, '0')}`),
+    )
+    expect(result.json).toMatchObject({
+      page: 2,
+      pageSize: 20,
+      totalItems: 45,
+      totalPages: 3,
+      hasPrevious: true,
+      hasNext: true,
+      generatedAt: expect.any(String),
+    })
+
+    const invalid = await call('GET', '/api/evaluation-suites?pageSize=25', undefined, service)
+    expect(invalid.response.statusCode).toBe(400)
+    expect(invalid.json.error).toEqual({
+      code: 'INVALID_REQUEST',
+      message: 'pageSize must be 20, 50, or 100.',
+    })
   })
 
   it('creates an asynchronous run after validating provider and resolving both artifacts', async () => {
@@ -126,9 +167,14 @@ describe('managed evaluation API', () => {
     const list = await call('GET', '/api/evaluation-runs?status=completed&suiteId=suite-1&capabilityId=cap-1&limit=10&cursor=old', undefined, service)
     expect(service.store.listRuns).toHaveBeenCalledWith({ status: 'completed', suiteId: 'suite-1', capabilityId: 'cap-1', limit: '10', cursor: 'old' })
     expect(list.json.items).toEqual([summary])
+    expect(list.json.generatedAt).toEqual(expect.any(String))
     expect((await call('GET', '/api/evaluation-runs/run-1', undefined, service)).json).toEqual(summary)
     const cases = await call('GET', '/api/evaluation-runs/run-1/cases?limit=1', undefined, service)
-    expect(cases.json).toEqual({ items: [expect.objectContaining({ id: 'case-1:1' })], nextCursor: 'case-1:1' })
+    expect(cases.json).toEqual({
+      items: [expect.objectContaining({ id: 'case-1:1' })],
+      nextCursor: 'case-1:1',
+      generatedAt: expect.any(String),
+    })
     const cancelled = await call('POST', '/api/evaluation-runs/run-1/cancel', {}, service)
     expect(cancelled.json.cancelled).toBe(true)
   })
@@ -145,20 +191,62 @@ describe('managed evaluation API', () => {
     const service = services({ policyHash: completed.policyHash })
     service.store.getRun.mockResolvedValue(completed)
     expect((await call('GET', '/api/evaluation-runs/run-1', undefined, service)).json.evidenceFresh).toBe(true)
-    const created = await call('POST', '/api/evaluation-runs/run-1/decision', { decision: 'keep-baseline' }, service)
+    const created = await call('POST', '/api/evaluations/run-1/decision', { decision: 'keep-baseline' }, service)
     expect(created.response.statusCode).toBe(201)
     expect(created.json).toEqual({
-      decision: expect.objectContaining({ runId: 'run-1', decision: 'keep-baseline' }),
+      decision: expect.objectContaining({
+        decisionId: expect.stringMatching(/^decision_[a-f0-9]{64}$/),
+        evaluationRunId: 'run-1',
+        decision: 'keep-baseline',
+      }),
       reused: false,
+      generatedAt: expect.any(String),
+      revision: expect.stringMatching(/^decision_[a-f0-9]{64}$/),
     })
     expect(service.store.appendDecision).toHaveBeenCalledWith('run-1', 'keep-baseline')
 
-    service.store.getDecision.mockResolvedValue(created.json.decision)
-    expect((await call('GET', '/api/evaluation-runs/run-1/decision', undefined, service)).json).toEqual({ decision: created.json.decision })
-    const rejected = await call('POST', '/api/evaluation-runs/run-1/decision', { decision: 'keep-baseline', rawOutput: 'secret' }, service)
+    service.store.getDecision.mockResolvedValue({ ...created.json.decision, rationale: 'private rationale', rawOutput: 'private output' })
+    const canonical = {
+      decision: created.json.decision,
+      generatedAt: expect.any(String),
+      revision: created.json.decision.decisionId,
+    }
+    expect((await call('GET', '/api/evaluations/run-1/decision', undefined, service)).json).toEqual(canonical)
+    expect((await call('GET', '/api/evaluation-runs/run-1/decision', undefined, service)).json).toEqual(canonical)
+    const rejected = await call('POST', '/api/evaluations/run-1/decision', { decision: 'keep-baseline', rawOutput: 'secret' }, service)
     expect(rejected.response.statusCode).toBe(422)
     expect(rejected.response.body).not.toContain('secret')
   })
+
+  it('fails closed when Create Candidate evidence lacks current complete Suite coverage', async () => {
+    const completed = {
+      ...summary,
+      mode: 'suite',
+      status: 'completed',
+      candidate: artifact('candidate', 'b').artifact,
+      metrics: { casesTotal: 1, eligibleCases: 2, suiteCaseCoveragePct: 50 },
+      policyHash: 'd'.repeat(64),
+      gates: [{ id: 'suite-case-coverage', status: 'failed', blocking: true }],
+      gateResult: 'failed',
+      evidenceHash: 'e'.repeat(64),
+    }
+    const service = services({ policyHash: completed.policyHash })
+    service.store.getRun.mockResolvedValue(completed)
+
+    const rejected = await call('POST', '/api/evaluations/run-1/decision', { decision: 'create-candidate' }, service)
+    expect(rejected.response.statusCode).toBe(409)
+    expect(rejected.json.error.message).toContain('complete Suite case coverage')
+    expect(service.store.appendDecision).not.toHaveBeenCalled()
+
+    service.store.getRun.mockResolvedValue({
+      ...completed,
+      metrics: { ...completed.metrics, casesTotal: 2, suiteCaseCoveragePct: 100 },
+      gates: [{ id: 'suite-case-coverage', status: 'passed', blocking: true }],
+      gateResult: 'passed',
+    })
+    expect((await call('POST', '/api/evaluations/run-1/decision', { decision: 'create-candidate' }, service)).response.statusCode).toBe(201)
+  })
+
   it('exports sanitized JSON and inert HTML reports', async () => {
     const service = services()
     const reportSummary = {
@@ -171,9 +259,33 @@ describe('managed evaluation API', () => {
       completedAt: '2026-07-22T00:00:02.000Z', errorCode: null,
     }
     service.store.getRun.mockResolvedValue(reportSummary)
+    service.store.getDecision.mockResolvedValue({
+      decisionId: `decision_${'c'.repeat(64)}`,
+      evaluationRunId: reportSummary.id,
+      artifactId: reportSummary.candidate.artifactId,
+      candidateRefHash: reportSummary.candidate.contentHash,
+      decision: 'keep-baseline',
+      recordedAt: '2026-07-25T12:00:00.000Z',
+      rationale: 'sentinel-private-rationale',
+      rawOutput: 'sentinel-private-output',
+    })
     const json = await call('GET', '/api/evaluation-runs/run-1/report?format=json', undefined, service)
-    expect(json.json).toEqual({ schemaVersion: 1, summary: expect.objectContaining({ id: 'run-1' }), cases: expect.any(Array) })
+    expect(json.json).toEqual({
+      schemaVersion: 1,
+      summary: expect.objectContaining({ id: 'run-1' }),
+      cases: expect.any(Array),
+      decision: {
+        decisionId: `decision_${'c'.repeat(64)}`,
+        evaluationRunId: 'run-1',
+        artifactId: reportSummary.candidate.artifactId,
+        candidateRefHash: reportSummary.candidate.contentHash,
+        decision: 'keep-baseline',
+        recordedAt: '2026-07-25T12:00:00.000Z',
+      },
+    })
     expect(json.response.body).not.toContain('private test input')
+    expect(json.response.body).not.toContain('sentinel-private-rationale')
+    expect(json.response.body).not.toContain('sentinel-private-output')
 
     const res = response()
     await handleManagedEvaluationApi(request('GET', '/api/evaluation-runs/run-1/report?format=html'), res, '/api/evaluation-runs/run-1/report', { managedEvaluationServices: service })

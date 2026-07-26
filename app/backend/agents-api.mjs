@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { evidenceState, ratioMetric } from '../shared/truth-semantics.mjs'
 import { setJsonApiHeaders, sendApiError, sendJson } from './api-response.mjs'
-import { readEvents as readStoredEvents } from './event-store.mjs'
+import { readEventsWithStatus as readStoredEvents } from './event-store.mjs'
 import { EvaluationError } from './evaluations/errors.mjs'
 import { assertLocalApiRequest } from './evaluations/request-guard.mjs'
 
@@ -61,15 +61,20 @@ function configurationState(definition) {
   return 'active'
 }
 
-function projection(identity, name, runtime, definition, lifecycle, definitionIssue, now, recentWindowMs) {
+function projection(identity, name, runtime, definition, lifecycle, resolvedConfigurationState, now, recentWindowMs, activityWindowMs) {
   const ordered = [...lifecycle].sort((left, right) => timestamp(right) - timestamp(left) || String(left.id).localeCompare(String(right.id)))
   const starts = ordered.filter((event) => event.event === 'skill.started' || event.event === 'subagent.started')
   const stateTerminals = ordered.filter((event) => event.event === 'skill.completed' || event.event === 'skill.failed' || event.event === 'subagent.completed')
   const latestStart = starts[0]
   const latestTerminal = stateTerminals[0]
   const openStart = latestStart && (!latestTerminal || timestamp(latestStart) > timestamp(latestTerminal)) ? latestStart : undefined
-  const skillTerminals = ordered.filter((event) => event.kind === 'agent' && TERMINAL_EVENTS.has(event.event))
-  const outcomeEvents = skillTerminals.length ? skillTerminals : stateTerminals
+  const activity = ordered.filter((event) => {
+    const age = now - timestamp(event)
+    return age >= 0 && age <= activityWindowMs
+  })
+  const skillTerminals = activity.filter((event) => event.kind === 'agent' && TERMINAL_EVENTS.has(event.event))
+  const activityTerminals = activity.filter((event) => event.event === 'skill.completed' || event.event === 'skill.failed' || event.event === 'subagent.completed')
+  const outcomeEvents = skillTerminals.length ? skillTerminals : activityTerminals
   const knownOutcomes = outcomeEvents.filter((event) => event.outcome === 'success' || event.outcome === 'failed').length
 
   return {
@@ -77,9 +82,8 @@ function projection(identity, name, runtime, definition, lifecycle, definitionIs
     name,
     runtime,
     ...(definition ? { definition: publicDefinition(definition) } : {}),
-    configurationState: configurationState(definition),
+    configurationState: resolvedConfigurationState,
     evidenceState: evidenceState({
-      definitionIssue,
       lastObservedAt: latestTerminal?.timestamp,
       openStartAt: openStart?.timestamp,
       now,
@@ -91,12 +95,11 @@ function projection(identity, name, runtime, definition, lifecycle, definitionIs
     knownOutcomes,
     outcomeCoverage: ratioMetric(knownOutcomes, outcomeEvents.length),
     ...(outcomeEvents[0]?.outcome === 'success' || outcomeEvents[0]?.outcome === 'failed' ? { latestOutcome: outcomeEvents[0].outcome } : {}),
-    timeline: ordered.slice(0, 12).map(publicLifecycle),
+    timeline: activity.slice(0, 12).map(publicLifecycle),
   }
 }
 
-export function projectAgents(events, { now = Date.now(), days = 7 } = {}) {
-  const recentWindowMs = days * 86_400_000
+export function projectAgents(events, { now = Date.now(), recentWindowMs = TELEMETRY_GAP_MS, activityWindowMs = Number.POSITIVE_INFINITY } = {}) {
   const definitionsByIdentity = new Map()
   const lifecycleByAgent = new Map()
 
@@ -127,16 +130,17 @@ export function projectAgents(events, { now = Date.now(), days = 7 } = {}) {
   const definitions = [...definitionsByIdentity.entries()].map(([identity, definition]) => {
     const key = `${definition.runtime}\u0000${definition.skillId}`
     const matches = definitionsByAgent.get(key) || []
-    const state = configurationState(definition)
-    return projection(`definition:${identity}`, definition.skillId, definition.runtime, definition, lifecycleByAgent.get(key) || [], state !== 'active' || matches.length > 1, now, recentWindowMs)
+    const state = matches.length > 1 ? 'conflicted' : configurationState(definition)
+    return projection(`definition:${identity}`, definition.skillId, definition.runtime, definition, lifecycleByAgent.get(key) || [], state, now, recentWindowMs, activityWindowMs)
   })
 
   const observed = [...lifecycleByAgent.entries()].map(([identity, lifecycle]) => {
     const [runtime, name] = identity.split('\u0000')
     const matches = definitionsByAgent.get(identity) || []
     const definition = matches.length === 1 ? matches[0] : undefined
-    return projection(`observed:${identity}`, name, runtime, definition, lifecycle, matches.length !== 1 || configurationState(definition) !== 'active', now, recentWindowMs)
-  })
+    const state = !matches.length ? 'missing' : matches.length > 1 ? 'conflicted' : configurationState(definition)
+    return projection(`observed:${identity}`, name, runtime, definition, lifecycle, state, now, recentWindowMs, activityWindowMs)
+  }).filter((item) => item.timeline.length)
 
   const byRecent = (left, right) => (Date.parse(right.lastVerifiedAt || '') || 0) - (Date.parse(left.lastVerifiedAt || '') || 0) || left.name.localeCompare(right.name) || left.runtime.localeCompare(right.runtime)
   return {
@@ -197,16 +201,19 @@ export async function handleAgentsApi(request, response, pathname, { readEvents 
     const days = WINDOWS.get(window)
     if (!days) throw badRequest('window must be 7d, 14d, or 30d.')
     const generatedAt = now().toISOString()
-    const projected = projectAgents(await readEvents(), { now: Date.parse(generatedAt), days })
+    const eventSnapshot = await readEvents()
+    const events = Array.isArray(eventSnapshot) ? eventSnapshot : eventSnapshot.events
+    const sourceStatus = Array.isArray(eventSnapshot) ? 'ok' : eventSnapshot.sourceStatus
+    const projected = projectAgents(events, { now: Date.parse(generatedAt), activityWindowMs: days * 86_400_000 })
     const encodedId = pathname === '/api/agents' ? '' : pathname.slice('/api/agents/'.length)
-    if (!encodedId) sendJson(response, 200, listResponse(projected, url.searchParams, generatedAt))
+    if (!encodedId) sendJson(response, 200, { ...listResponse(projected, url.searchParams, generatedAt), sourceStatus })
     else {
       let id
       try { id = decodeURIComponent(encodedId) } catch { throw badRequest('Agent id is invalid.') }
       if (!/^[a-f0-9]{32}$/.test(id)) throw badRequest('Agent id is invalid.')
       const item = [...projected.observed, ...projected.definitions].find((candidate) => candidate.key === id)
       if (!item) throw new EvaluationError('Agent was not found.', 404)
-      sendJson(response, 200, { generatedAt, item })
+      sendJson(response, 200, { generatedAt, item, sourceStatus })
     }
   } catch (error) {
     if (error?.status === 405) response.setHeader('Allow', 'GET')

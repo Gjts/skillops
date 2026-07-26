@@ -86,9 +86,9 @@ function evaluationHttpError(error) {
     return { status: error.status || 400, message: error.message }
   }
   if (typeof error?.status === 'number' && error.status >= 400 && error.status < 600) {
-    return { status: error.status, message: error instanceof Error ? error.message : 'Evaluation request failed' }
+    return { status: error.status, message: 'Evaluation request failed.' }
   }
-  return { status: 500, message: error instanceof Error ? error.message : 'Evaluation request failed' }
+  return { status: 500, message: 'Evaluation request failed.' }
 }
 
 async function handleAiSettingsApi(request, response, pathname, options) {

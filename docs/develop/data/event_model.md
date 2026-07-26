@@ -212,12 +212,19 @@ data/
 ```
 
 The full `data/` directory is ignored by Git.
+Adapter diagnostic files accept fixed status lines only. A hook invocation
+atomically replaces an existing diagnostic entry with a fixed redaction marker;
+a new failure atomically replaces it with the latest safe status. This never
+writes through a symlink or hardlink and intentionally does not preserve a
+potentially sensitive backup.
 
 ### Source of truth
 
 `events.jsonl` is authoritative. The discovery index is rebuildable from
-`skill.discovered` records. A malformed line is ignored on read but preserved by
-maintenance rewrites unless the operation explicitly removes its event.
+`skill.discovered` records. An unterminated malformed final record exposes the
+valid prefix as `partial` without rewriting the file. A malformed complete
+record, semantic schema violation, or malformed non-final record is an explicit
+corruption error and is never rewritten by a read.
 
 Every append path, including runtime adapters, desktop ingestion, CLI emission,
 and JSON/JSONL import, replaces a raw `sessionId` and any matching substring in
@@ -272,7 +279,10 @@ control.
 
 ### Read projections
 
-`summary=1` returns only total count and latest non-discovery activity time.
+The default compatibility read returns a 20/50/100-row page sorted by timestamp
+descending and ID descending, with page metadata, `generatedAt`, source status,
+and ETag/304 support. `summary=1` returns only total count and latest
+non-discovery activity time; `download=1` is the explicit full-store export.
 Command Center, Agents, and Activity derive bounded read models from the same
 normalized records; they do not add fields to this schema or create another
 fact store. Agent discovery can populate Definitions, but only Agent lifecycle

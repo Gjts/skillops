@@ -75,7 +75,7 @@ export function enrichRuntimeConnections(connections, events, checkedAt = new Da
       .sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp))
     const boundary = Date.parse(connection.verificationBoundaryAt || '')
     const qualifying = activity.filter((event) => isQualifyingLifecycle(event)
-      && (!Number.isFinite(boundary) || Date.parse(event.timestamp) >= boundary))
+      && (!Number.isFinite(boundary) || Date.parse(event.timestamp) > boundary))
     const terminal = qualifying.filter((event) => event.event === 'skill.completed' || event.event === 'skill.failed')
     const configurationStatus = connection.configurationStatus || connection.status
     const verifiedEvidenceAt = qualifying[0]?.timestamp

@@ -55,6 +55,8 @@ describe('Promptfoo result normalizer', () => {
       scoreDeltaPp: -50,
       casesPassed: 1,
       casesTotal: 2,
+      eligibleCases: 2,
+      suiteCaseCoveragePct: 100,
       passRatePct: 50,
       regressionRatePct: 50,
       baselineTokens: 6,

@@ -52,10 +52,24 @@ async function call(method, url, body, options) {
 describe('Prompt Registry local API', () => {
   it('returns Git metadata and a metadata-only filtered list', async () => {
     const { promptRegistry, options } = services()
-    expect((await call('GET', '/api/prompt-registry/status', undefined, options)).json).toEqual(expect.objectContaining({ persistence: 'git-source-only' }))
-    const listed = await call('POST', '/api/prompt-registry/prompts', { revision: 'main', provider: 'openai' }, options)
+    expect((await call('GET', '/api/prompt-registry/status?page=1&pageSize=20', undefined, options)).json).toEqual(expect.objectContaining({
+      persistence: 'git-source-only',
+      branches: ['main'],
+      branchesPage: expect.objectContaining({ page: 1, pageSize: 20, totalItems: 1 }),
+      generatedAt: expect.any(String),
+    }))
+    promptRegistry.list.mockResolvedValueOnce({
+      revision: 'main',
+      commit: 'a'.repeat(40),
+      items: [{ artifact, name: '<img src=x>', relativePath: 'prompts/release.prompt.json', model: 'gpt-test' }],
+      warnings: [{ relativePath: 'prompts/broken.prompt.json', message: 'private parse detail' }],
+    })
+    const listed = await call('POST', '/api/prompt-registry/prompts', { revision: 'main', provider: 'openai', page: 1, pageSize: 20 }, options)
     expect(listed.response.statusCode).toBe(200)
     expect(listed.response.body).not.toContain('private prompt body')
+    expect(listed.json).toMatchObject({ warningCount: 1, page: 1, pageSize: 20, totalItems: 1, totalPages: 1, hasPrevious: false, hasNext: false })
+    expect(listed.json).not.toHaveProperty('warnings')
+    expect(listed.response.body).not.toContain('private parse detail')
     expect(promptRegistry.list).toHaveBeenCalledWith(expect.objectContaining({ revision: 'main', provider: 'openai' }))
   })
 
@@ -82,6 +96,7 @@ describe('Prompt Registry local API', () => {
   it('rejects unsupported fields and non-local request methods before mutation', async () => {
     const { governance, options } = services()
     expect((await call('GET', '/api/prompt-registry/prompts?revision=main', undefined, options)).response.statusCode).toBe(405)
+    expect((await call('POST', '/api/prompt-registry/prompts', { pageSize: 25 }, options)).response.statusCode).toBe(400)
     expect((await call('POST', '/api/prompt-registry/nominate', { sourceRef: artifact.sourceRef, owner: 'spoofed' }, options)).response.statusCode).toBe(422)
     expect(governance.nominate).not.toHaveBeenCalled()
     expect((await call('POST', '/api/prompt-registry/nominate', { sourceRef: artifact.sourceRef }, options)).response.statusCode).toBe(422)

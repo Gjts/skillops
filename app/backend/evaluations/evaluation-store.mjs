@@ -11,6 +11,11 @@ const RUN_MODES = new Set(['quick', 'suite', 'redteam'])
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'interrupted'])
 const MANAGED_DECISIONS = new Set(['create-candidate', 'keep-baseline', 'reject-candidate', 'collect-more-evidence'])
 const DEFAULT_WARNING_BYTES = 50 * 1024 * 1024
+const RECORD_FIELDS = Object.freeze({
+  run: new Set(['schemaVersion', 'type', 'summary']),
+  cases: new Set(['schemaVersion', 'type', 'runId', 'cases']),
+  decision: new Set(['schemaVersion', 'type', 'decision']),
+})
 
 function text(value, label, maxLength = 4_000, { optional = false } = {}) {
   if ((value === undefined || value === null || value === '') && optional) return null
@@ -35,12 +40,17 @@ function iso(value, label, optional = false) {
 function sanitizeMetrics(value) {
   if (value === undefined || value === null) return null
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new EvaluationError('Evaluation metrics are invalid.', 500)
+  const casesTotal = nullableNumber(value.casesTotal, 'Cases total')
+  const eligibleCases = nullableNumber(value.eligibleCases, 'Eligible cases')
+  if (eligibleCases !== null && (!Number.isInteger(eligibleCases) || eligibleCases < 1)) throw new EvaluationError('Eligible cases is invalid.', 500)
   return {
     baselineScore: nullableNumber(value.baselineScore, 'Baseline score'),
     candidateScore: nullableNumber(value.candidateScore, 'Candidate score'),
     scoreDeltaPp: value.scoreDeltaPp === null || value.scoreDeltaPp === undefined ? null : value.scoreDeltaPp,
     casesPassed: nullableNumber(value.casesPassed, 'Cases passed'),
-    casesTotal: nullableNumber(value.casesTotal, 'Cases total'),
+    casesTotal,
+    eligibleCases,
+    suiteCaseCoveragePct: casesTotal !== null && eligibleCases !== null ? casesTotal / eligibleCases * 100 : null,
     passRatePct: nullableNumber(value.passRatePct, 'Pass rate'),
     regressionRatePct: nullableNumber(value.regressionRatePct, 'Regression rate'),
     baselineTokens: nullableNumber(value.baselineTokens, 'Baseline tokens'),
@@ -80,7 +90,7 @@ function migrateLegacyArtifact(value) {
 }
 
 function persistedSummary(record) {
-  if (record.schemaVersion === 2) return record.summary
+  if ([2, 3].includes(record.schemaVersion)) return record.summary
   if (record.schemaVersion !== undefined && record.schemaVersion !== 1) {
     throw new EvaluationError('Evaluation store record schema is unsupported.', 500)
   }
@@ -194,43 +204,78 @@ export function computeEvaluationEvidenceHash(summary) {
 
 function sanitizeEvaluationDecision(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new EvaluationError('Evaluation decision record is invalid.', 500)
-  const candidateHash = text(value.candidateHash, 'Decision candidate hash', 64)
-  if (!/^[a-f0-9]{64}$/.test(candidateHash) || !MANAGED_DECISIONS.has(value.decision)) {
+  const evaluationRunId = text(value.evaluationRunId ?? value.runId, 'Decision run ID', 200)
+  const artifactId = text(value.artifactId, 'Decision Artifact ID', 300)
+  const candidateRefHash = text(value.candidateRefHash ?? value.candidateHash, 'Decision candidate hash', 64)
+  if (!/^[a-f0-9]{64}$/.test(candidateRefHash) || !MANAGED_DECISIONS.has(value.decision)) {
+    throw new EvaluationError('Evaluation decision record is invalid.', 500)
+  }
+  const decisionId = `decision_${createHash('sha256').update(canonicalJson({
+    evaluationRunId,
+    artifactId,
+    candidateRefHash,
+    decision: value.decision,
+  }), 'utf8').digest('hex')}`
+  if (value.decisionId !== undefined && text(value.decisionId, 'Decision ID', 100) !== decisionId) {
     throw new EvaluationError('Evaluation decision record is invalid.', 500)
   }
   return {
-    runId: text(value.runId, 'Decision run ID', 200),
-    artifactId: text(value.artifactId, 'Decision Artifact ID', 300),
-    candidateHash,
+    decisionId,
+    evaluationRunId,
+    artifactId,
+    candidateRefHash,
     decision: value.decision,
-    decidedAt: iso(value.decidedAt, 'Decision time'),
+    recordedAt: iso(value.recordedAt ?? value.decidedAt, 'Decision time'),
   }
 }
 
 function parseRecords(contents) {
   const lines = contents.split('\n')
   const records = []
+  let sourceStatus = 'ok'
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]
     if (!line.trim()) continue
-    try { records.push(JSON.parse(line)) } catch {
+    let record
+    try { record = JSON.parse(line) } catch (error) {
+      const position = Number(error?.message?.match(/position (\d+)/)?.[1])
+      const incomplete = line.trimStart().startsWith('{')
+        && (error?.message === 'Unexpected end of JSON input'
+          || error?.message?.startsWith('Unterminated string')
+          || Number.isInteger(position) && position >= line.length)
+      if (!contents.endsWith('\n') && incomplete && lines.slice(index + 1).every((candidate) => !candidate.trim())) {
+        sourceStatus = 'partial'
+        break
+      }
       throw new EvaluationError('Evaluation store contains a malformed record.', 500)
     }
+    const allowed = record && typeof record === 'object' && !Array.isArray(record) ? RECORD_FIELDS[record.type] : null
+    const payloadIsValid = record?.type === 'run'
+      ? record.summary && typeof record.summary === 'object' && !Array.isArray(record.summary)
+      : record?.type === 'cases'
+        ? typeof record.runId === 'string' && Boolean(record.runId) && Array.isArray(record.cases)
+        : record?.type === 'decision'
+          ? record.decision && typeof record.decision === 'object' && !Array.isArray(record.decision)
+          : false
+    if (!allowed || record.schemaVersion !== undefined && ![1, 2, 3].includes(record.schemaVersion)
+      || Object.keys(record).some((key) => !allowed.has(key)) || !payloadIsValid) {
+      throw new EvaluationError('Evaluation store contains a malformed record.', 500)
+    }
+    records.push(record)
   }
-  return records
+  return { records, sourceStatus }
 }
 
 export function createEvaluationStore(options = {}) {
   const dataDir = path.resolve(options.dataDir || process.env.SKILLOPS_DATA_DIR || path.join(process.cwd(), 'data'))
   const storeFile = path.join(dataDir, 'evaluations.jsonl')
-  const indexFile = path.join(dataDir, 'evaluation-index.json')
   const lockFile = path.join(dataDir, 'evaluations.lock')
   const warningBytes = options.warningBytes || DEFAULT_WARNING_BYTES
   let queue = Promise.resolve()
 
   async function records() {
     try { return parseRecords(await readFile(storeFile, 'utf8')) } catch (error) {
-      if (error?.code === 'ENOENT') return []
+      if (error?.code === 'ENOENT') return { records: [], sourceStatus: 'ok' }
       throw error
     }
   }
@@ -239,17 +284,18 @@ export function createEvaluationStore(options = {}) {
     const runs = new Map()
     const cases = new Map()
     const decisions = new Map()
-    for (const record of await records()) {
-      if (record?.schemaVersion !== undefined && ![1, 2].includes(record.schemaVersion)) {
+    const snapshot = await records()
+    for (const record of snapshot.records) {
+      if (record?.schemaVersion !== undefined && ![1, 2, 3].includes(record.schemaVersion)) {
         throw new EvaluationError('Evaluation store record schema is unsupported.', 500)
       }
       if (record?.type === 'run') runs.set(record.summary?.id, sanitizeEvaluationRunSummary(persistedSummary(record)))
       else if (record?.type === 'cases') cases.set(record.runId, sanitizeEvaluationCases(record.cases))
       else if (record?.type === 'decision') {
         const decision = sanitizeEvaluationDecision(record.decision)
-        const history = decisions.get(decision.runId) || []
+        const history = decisions.get(decision.evaluationRunId) || []
         history.push(decision)
-        decisions.set(decision.runId, history)
+        decisions.set(decision.evaluationRunId, history)
       }
     }
     for (const run of runs.values()) {
@@ -261,11 +307,11 @@ export function createEvaluationStore(options = {}) {
     }
     for (const [runId, history] of decisions) {
       const run = runs.get(runId)
-      if (!run || history.some((decision) => decision.artifactId !== run.candidate.artifactId || decision.candidateHash !== run.candidate.contentHash)) {
+      if (!run || history.some((decision) => decision.artifactId !== run.candidate.artifactId || decision.candidateRefHash !== run.candidate.contentHash)) {
         throw new EvaluationError('Evaluation decision does not match its authoritative run.', 500)
       }
     }
-    return { runs, cases, decisions }
+    return { runs, cases, decisions, sourceStatus: snapshot.sourceStatus }
   }
 
   async function repairTrailingNewline() {
@@ -287,23 +333,13 @@ export function createEvaluationStore(options = {}) {
     return pending
   }
 
-  async function writeIndex() {
-    const { runs } = await latestState()
-    const index = {
-      schemaVersion: 1,
-      updatedAt: new Date().toISOString(),
-      runs: [...runs.values()].map((run) => ({ id: run.id, status: run.status, requestedAt: run.requestedAt })),
-    }
-    const temporary = `${indexFile}.${process.pid}.tmp`
-    await writeFile(temporary, `${JSON.stringify(index)}\n`, 'utf8')
-    await rename(temporary, indexFile)
-  }
-
   async function appendRecord(record) {
-    await latestState()
+    const state = await latestState()
+    if (state.sourceStatus === 'partial') {
+      throw new EvaluationError('Evaluation store has a partial trailing record; no data was changed.', 409)
+    }
     await repairTrailingNewline()
-    await appendFile(storeFile, `${JSON.stringify({ schemaVersion: 2, ...record })}\n`, 'utf8')
-    await writeIndex()
+    await appendFile(storeFile, `${JSON.stringify({ schemaVersion: 3, ...record })}\n`, 'utf8')
   }
 
   return {
@@ -342,12 +378,13 @@ export function createEvaluationStore(options = {}) {
         }
         const previous = state.decisions.get(id)?.at(-1)
         if (previous?.decision === decision) return { decision: previous, reused: true }
+        if (previous) throw new EvaluationError('This Managed Suite run already has a final decision. Start a new run to change it.', 409)
         const record = sanitizeEvaluationDecision({
-          runId: id,
+          evaluationRunId: id,
           artifactId: run.candidate.artifactId,
-          candidateHash: run.candidate.contentHash,
+          candidateRefHash: run.candidate.contentHash,
           decision,
-          decidedAt: new Date().toISOString(),
+          recordedAt: new Date().toISOString(),
         })
         await appendRecord({ type: 'decision', decision: record })
         return { decision: record, reused: false }
@@ -358,7 +395,8 @@ export function createEvaluationStore(options = {}) {
     },
     async listRuns(filters = {}) {
       const limit = Math.min(100, Math.max(1, Number(filters.limit) || 20))
-      let items = [...(await latestState()).runs.values()]
+      const state = await latestState()
+      let items = [...state.runs.values()]
         .filter((run) => !filters.status || run.status === filters.status)
         .filter((run) => !filters.suiteId || run.suiteId === filters.suiteId)
         .filter((run) => !filters.capabilityId || run.capabilityId === filters.capabilityId)
@@ -368,7 +406,7 @@ export function createEvaluationStore(options = {}) {
         items = index < 0 ? [] : items.slice(index + 1)
       }
       const page = items.slice(0, limit)
-      return { items: page, nextCursor: items.length > limit ? page.at(-1).id : null }
+      return { items: page, nextCursor: items.length > limit ? page.at(-1).id : null, sourceStatus: state.sourceStatus }
     },
     async interruptRunning() {
       const unfinished = [...(await latestState()).runs.values()].filter((run) => run.status === 'queued' || run.status === 'running')
@@ -384,7 +422,7 @@ export function createEvaluationStore(options = {}) {
       }
       return unfinished.length
     },
-    async pruneBefore(cutoff, { preserveRunIds = [], backup = true } = {}) {
+    async pruneBefore(cutoff, { preserveRunIds = [], backup = true, deferBackupCleanup = false } = {}) {
       const cutoffMs = cutoff instanceof Date ? cutoff.getTime() : Date.parse(cutoff)
       if (!Number.isFinite(cutoffMs)) throw new EvaluationError('Evaluation retention cutoff is invalid.', 422)
       if (!Array.isArray(preserveRunIds) || preserveRunIds.some((id) => typeof id !== 'string' || !id)) {
@@ -392,40 +430,67 @@ export function createEvaluationStore(options = {}) {
       }
       const preserved = new Set(preserveRunIds)
       return serialized(async () => {
-        const { runs } = await latestState()
+        const state = await latestState()
+        if (state.sourceStatus === 'partial') {
+          throw new EvaluationError('Evaluation store has a partial trailing record; no data was changed.', 409)
+        }
+        const { runs } = state
         const removedRunIds = new Set([...runs.values()]
           .filter((run) => TERMINAL_STATUSES.has(run.status) && Date.parse(run.requestedAt) < cutoffMs && !preserved.has(run.id))
           .map((run) => run.id))
         let removedRecords = 0
         let backupFile
+        const expiredBackupFiles = []
+        for (const entry of await readdir(dataDir, { withFileTypes: true })) {
+          if (!entry.isFile() || !entry.name.startsWith('evaluations.jsonl.backup-')) continue
+          const candidate = path.join(dataDir, entry.name)
+          if ((await stat(candidate)).mtimeMs < cutoffMs) expiredBackupFiles.push(candidate)
+        }
+        let removedBackups = 0
+        if (!deferBackupCleanup) {
+          for (const candidate of expiredBackupFiles) {
+            await rm(candidate)
+            removedBackups += 1
+          }
+        }
+        let postimage = ''
         if (removedRunIds.size) {
           const all = await records()
-          const kept = all.filter((record) => {
-            const runId = record?.type === 'run' ? record.summary?.id : ['cases', 'decision'].includes(record?.type) ? record.runId || record.decision?.runId : null
+          const kept = all.records.filter((record) => {
+            const runId = record?.type === 'run'
+              ? record.summary?.id
+              : ['cases', 'decision'].includes(record?.type)
+                ? record.runId || record.decision?.evaluationRunId || record.decision?.runId
+                : null
             if (!removedRunIds.has(runId)) return true
             removedRecords += 1
             return false
           })
+          const preimage = await readFile(storeFile, 'utf8')
+          postimage = kept.length ? `${kept.map(JSON.stringify).join('\n')}\n` : ''
           const suffix = new Date().toISOString().replace(/[:.]/g, '-')
           backupFile = backup ? `${storeFile}.backup-${suffix}` : undefined
           if (backupFile) await copyFile(storeFile, backupFile)
           const temporary = `${storeFile}.${process.pid}.retention.tmp`
           try {
-            await writeFile(temporary, kept.length ? `${kept.map(JSON.stringify).join('\n')}\n` : '', 'utf8')
+            await writeFile(temporary, postimage, 'utf8')
             await rename(temporary, storeFile)
+          } catch (error) {
+            const recovery = `${storeFile}.${process.pid}.recovery.tmp`
+            try {
+              await writeFile(recovery, preimage, 'utf8')
+              await rename(recovery, storeFile)
+            } catch (recoveryError) {
+              const failure = new AggregateError([error, recoveryError], 'Evaluation retention failed and automatic recovery was incomplete.')
+              failure.retentionRecovery = { store: 'evaluations', backupFile, recoveryPostimage: postimage }
+              throw failure
+            } finally {
+              await rm(recovery, { force: true }).catch(() => undefined)
+            }
+            throw error
           } finally {
-            await rm(temporary, { force: true })
+            await rm(temporary, { force: true }).catch(() => undefined)
           }
-          await writeIndex()
-        }
-        let removedBackups = 0
-        for (const entry of await readdir(dataDir, { withFileTypes: true })) {
-          if (!entry.isFile() || !entry.name.startsWith('evaluations.jsonl.backup-')) continue
-          const candidate = path.join(dataDir, entry.name)
-          if (candidate === backupFile) continue
-          if ((await stat(candidate)).mtimeMs >= cutoffMs) continue
-          await rm(candidate)
-          removedBackups += 1
         }
         return {
           removedRuns: removedRunIds.size,
@@ -433,13 +498,15 @@ export function createEvaluationStore(options = {}) {
           retainedRuns: runs.size - removedRunIds.size,
           removedBackups,
           backupFile,
+          ...(deferBackupCleanup ? { expiredBackupFiles, recoveryPostimage: postimage } : {}),
         }
       })
     },
     async health() {
       const info = await stat(storeFile).catch((error) => error?.code === 'ENOENT' ? null : Promise.reject(error))
       const sizeBytes = info?.size || 0
-      return { sizeBytes, warningBytes, warning: sizeBytes >= warningBytes, automaticDeletion: false }
+      const sourceStatus = (await records()).sourceStatus
+      return { sizeBytes, warningBytes, warning: sizeBytes >= warningBytes, automaticDeletion: false, sourceStatus }
     },
     isTerminal(status) { return TERMINAL_STATUSES.has(status) },
   }

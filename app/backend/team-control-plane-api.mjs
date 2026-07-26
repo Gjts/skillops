@@ -43,6 +43,54 @@ function route(pathname, expression) {
   try { return match.slice(1).map(decodeURIComponent) } catch { throw new EvaluationError('Team route is invalid.', 422) }
 }
 
+function listQuery(request, pathname) {
+  let params
+  try {
+    params = new URL(request.url || pathname, 'http://127.0.0.1').searchParams
+  } catch {
+    throw new EvaluationError('Team list query is invalid.', 400)
+  }
+  return {
+    params,
+    pagination: { page: params.get('page'), pageSize: params.get('pageSize') },
+  }
+}
+
+function teamSummary(snapshot) {
+  const lists = Object.fromEntries(['workspaces', 'projects', 'environments', 'members', 'devices', 'policyPacks', 'exceptions']
+    .map((name) => [name, Array.isArray(snapshot?.[name]) ? snapshot[name] : []]))
+  const lastCollectorAt = lists.devices
+    .map((item) => item.lastSeenAt)
+    .filter(Boolean)
+    .sort()
+    .at(-1) || null
+  return {
+    revision: snapshot?.revision ?? 0,
+    team: snapshot?.team ?? null,
+    retentionDays: snapshot?.retentionDays ?? null,
+    capabilities: snapshot?.capabilities ?? null,
+    templateAdoption: snapshot?.templateAdoption ?? {
+      totalProjects: lists.projects.length,
+      adoptedProjects: 0,
+      currentProjects: 0,
+      driftedProjects: 0,
+      pendingUpgradeProjects: 0,
+      adoptionRatePct: 0,
+    },
+    counts: {
+      workspaces: lists.workspaces.length,
+      projects: lists.projects.length,
+      environments: lists.environments.length,
+      activeMembers: lists.members.filter((item) => item.status === 'active').length,
+      activeDevices: lists.devices.filter((item) => item.status === 'active').length,
+      policyPacks: lists.policyPacks.length,
+      exceptions: lists.exceptions.length,
+    },
+    lastCollectorAt,
+    generatedAt: new Date().toISOString(),
+  }
+}
+
 let defaultTeamControlPlanePromise
 export function initializeTeamControlPlane(options = {}) {
   if (!defaultTeamControlPlanePromise) {
@@ -79,7 +127,7 @@ export async function handleTeamControlPlaneApi(request, response, pathname, opt
 
     const principal = await resolveGovernancePrincipal(request, options)
     if (pathname === '/api/team') {
-      if (request.method === 'GET') sendJson(response, 200, await controlPlane.snapshot(principal))
+      if (request.method === 'GET') sendJson(response, 200, teamSummary(await controlPlane.snapshot(principal)))
       else {
         method(request, 'POST')
         const body = onlyKeys(await readEvaluationJsonBody(request), new Set(['id', 'name']), 'Team creation request')
@@ -87,13 +135,16 @@ export async function handleTeamControlPlaneApi(request, response, pathname, opt
       }
     } else if (pathname === '/api/team/catalog') {
       method(request, 'GET')
-      sendJson(response, 200, { items: await controlPlane.catalog(principal) })
+      const query = listQuery(request, pathname)
+      sendJson(response, 200, { ...await controlPlane.catalog(principal, query.pagination), generatedAt: new Date().toISOString() })
     } else if (pathname === '/api/team/queues') {
       method(request, 'GET')
-      sendJson(response, 200, await controlPlane.queues(principal))
+      const query = listQuery(request, pathname)
+      sendJson(response, 200, { ...await controlPlane.queues(principal, query.params.get('kind'), query.pagination), generatedAt: new Date().toISOString() })
     } else if (pathname === '/api/team/audit') {
       method(request, 'GET')
-      sendJson(response, 200, { items: await controlPlane.audit(principal) })
+      const query = listQuery(request, pathname)
+      sendJson(response, 200, { ...await controlPlane.audit(principal, query.pagination), generatedAt: new Date().toISOString() })
     } else if (pathname === '/api/team/export') {
       method(request, 'GET')
       sendJson(response, 200, await controlPlane.exportTeam(principal))

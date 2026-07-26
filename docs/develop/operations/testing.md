@@ -20,6 +20,10 @@ Tests prioritize the failures most harmful to SkillOps users:
 - persisting Managed Suite inputs, Prompt bodies, provider responses, or keys;
 - promoting stale/unapproved evidence or silently following a moved remote head;
 - leaving a partial installation when verification fails.
+- rewriting a final Managed Decision or letting one run create two Release Candidates;
+- accepting an approval without an authenticated configured principal;
+- presenting failed setup prerequisites as a usable connection;
+- fabricating zero Command Center KPIs when no execution/asset evidence exists.
 
 ## 2. Automated test layers
 
@@ -39,7 +43,12 @@ agent tools, chat-context minimization, strict Suite parsing, Promptfoo isolatio
 and no-write behavior, default-deny child processes, nested-Node no-egress,
 session-ID pseudonymization, sanitized evidence recovery, run
 scheduling/cancellation, governance transitions, recoverable skeleton
-installation, and Git-backed Prompt Registry validation/version handling.
+installation, setup-preflight sanitization, one-final-Decision semantics,
+immutable/concurrent Release Candidate origin reservation, authenticated-only
+approval and audit reads, explicit protected-audit unlock/error states,
+file-as-directory rejection, unavailable-vs-read-only preflight truth, retention
+of every referenced Capability run across concurrent release and cross-process
+registry activity, and Git-backed Prompt Registry validation/version handling.
 
 ### Adapter tests
 
@@ -58,7 +67,15 @@ seeding, Escape dismissal, and focus restoration.
 Managed evaluation, Governance, and Prompt Registry tests cover
 polling/cancellation, metrics/cases, stale provenance, double confirmation,
 six-language copy, HTML escaping, metadata-only browsing, branch selection,
-component Diff, and explicit Candidate creation.
+component Diff, exact Decision fields, interrupted Candidate recovery,
+same-turn distinct-run behavior, and explicit Candidate creation. Command Center
+tests cover server-local calendar Today/7d scope, partial runtime sources, seven
+readiness facts, three-action bounds, ratio denominators, six-language
+reason/impact/definition rendering, true empty state, persistent and internally
+consistent Demo separation, unavailable event-source metric/recent-run states,
+Quick Actions, and full-row Recent Run routing.
+Connection tests require an eligible preflight plus explicit dry-run review
+confirmation before the Install command is exposed.
 
 ### Smoke test
 
@@ -98,26 +115,39 @@ Production smoke:
 npm run smoke
 ```
 
-Deterministic performance acceptance:
+Deterministic endpoint performance acceptance:
 
 ```powershell
 npm run performance
 ```
 
-The script generates 100,000 normalized events and 5,000 scanner definitions
-from a fixed seed and timestamp. For each endpoint it measures five cold
-processes, performs 10 warm-ups, then records 100 sequential samples at
-concurrency 1. The ignored `data/performance-report.json` contains raw samples,
-nearest-rank p95, environment versions, fixture hash, boundary assertions, and
-optional memory-soak evidence. Budgets are Command Center warm p95 <= 750 ms
-and Activity warm p95 <= 500 ms.
+The default command is an **endpoint-only** acceptance check. It generates
+100,000 normalized events and 5,000 scanner definitions from a seed that
+actually initializes the reported PRNG. The report records the complete row
+distribution, fixture hash, fixed UTC service clock, host/service time zones,
+machine versions, commit, and a dirty-working-tree boolean. For each endpoint
+it measures five cold processes, performs 10 warm-ups, then records 100
+sequential samples at concurrency 1. Budgets are Command Center warm p95 <=
+750 ms and Runs API/page warm p95 <= 500 ms.
+
+The ignored `data/performance-report.json` uses separate
+`acceptance.endpoint` and `acceptance.releaseCandidate` results. A successful
+default command means only `acceptance.endpoint.passed=true`. The release result
+remains incomplete and false while the 30-minute memory component, production
+browser UI timing, browser-network boundary, immutable candidate, or other RC
+evidence is absent. The Node harness explicitly reports browser networking as
+not measured; it never invents a browser result.
 
 Use `--soak-minutes=30` for the RC memory soak. UI timing is a separate
 production-browser check: retain the fixture with
-`--fixture-directory=<path>`, perform five warm page loads and 50 measured
-loads at 1366-by-768, and read `skillops:primary-content` from the Performance
-API. Its product p95 budget is <= 120 ms (stricter than the 500 ms release
-ceiling). Copy the raw endpoint, UI, and memory samples
+`--fixture-directory=<path>`, bring the measured browser tab to the foreground,
+perform five warm page loads and 50 measured loads at 1366-by-768, and read
+`skillops:primary-content` from the Performance API. Its product p95 budget is
+<= 120 ms (stricter than the 500 ms release
+ceiling). The soak records the five-minute baseline and five-minute trend,
+requires the final `<20%` and `<100 MiB` limits, and treats the final 15 minutes
+as a plateau only when both net drift and fitted growth stay within 5% and 5
+MiB. Copy the raw endpoint, UI, and memory samples
 into the sanitized [release evidence record](rc-evidence/v0.3.2-rc.1.md); the script
 does not write browser measurements itself.
 
@@ -127,6 +157,15 @@ Repository hygiene:
 git diff --check
 git status --short --branch
 ```
+
+The current four-job cross-platform CI baseline passed with Ubuntu/Node 22,
+macOS/Node 22, Windows/Node 22, and Ubuntu/Node 24:
+[GitHub Actions run 30145860716](https://github.com/Gjts/skillops/actions/runs/30145860716).
+This automated baseline does not close the five-person validation,
+independent-review/keyboard, audit-correction commit-binding,
+immutable-candidate real-runtime, Broken-to-Repair, performance, browser/axe,
+dependency-risk-decision, or complete-packet evidence gates. P1 SET/ACT/AST
+work remains gated until those P0 gates close.
 
 ### Pull-request Artifact gate
 
@@ -200,9 +239,10 @@ removal operation. Automated tests normally create their own temporary folders.
 ### Scenario A: Empty first run
 
 1. Start with a new isolated data directory.
-2. Open Overview.
+2. Open Command Center.
 3. Confirm zero state is labeled local, not demo.
-4. Confirm no run/success totals are fabricated.
+4. Confirm the privacy explanation and three-step quick start replace KPI cards.
+5. Confirm no run/success totals are fabricated.
 
 ### Scenario B: API unavailable
 
@@ -252,6 +292,8 @@ Repeat Scenario D using an explicit `/skill-name` or Skill tool invocation and
 
 Use isolated fixture settings that contain a SkillOps marker pointing to a
 missing `.mjs` file. Confirm status is Broken, not Installed or Not installed.
+Open the connection dialog and confirm `/api/setup/preflight` reports unhealthy
+adapter reference health without returning the missing absolute path.
 
 ### Scenario I: Skill Lab session flow
 
@@ -277,11 +319,24 @@ missing `.mjs` file. Confirm status is Broken, not Installed or Not installed.
 1. Run a deterministic local Suite and inspect sample/coverage metrics.
 2. Confirm persisted evidence contains hashes and sanitized status/score fields,
    not inputs, Prompt/Skill bodies, raw outputs/errors, or credentials.
-3. Nominate a Candidate, bind the exact completed run, and evaluate the Gate.
-4. Confirm the owner cannot self-approve as reviewer.
-5. Approve with a second local identity, preview Canary/Stable, confirm twice,
-   and inspect the lock/backup/verification result.
-6. Roll back and confirm unrelated files are unchanged.
+3. Record one final `create-candidate` Decision. Confirm the response contains
+   exactly the six public Decision fields, a same-value retry reuses it, and a
+   different Decision returns `409`.
+4. Nominate twice from that run and confirm the same Release Candidate is
+   reused; a concurrent different-target nomination must not create another.
+5. Bind later evidence and confirm `latestEvidenceRunId` changes while
+   `originEvaluationRunId` remains fixed.
+6. Apply Team retention past the origin run and confirm origin, latest, quality,
+   and Red Team evidence references all remain resolvable. Repeat while a
+   governance release transaction and a separate-process Capability registry
+   write contend with pruning.
+7. Confirm approval without a configured Bearer token fails even when the local
+   OS principal is available, and confirm the owner cannot self-approve.
+8. Confirm the audit timeline begins locked, loads only with an authenticated
+   transient token, clears that token, and does not map `403` to an empty audit.
+9. Approve with a distinct configured principal, preview Canary/Stable, confirm
+   twice, and inspect the lock/backup/verification result.
+10. Roll back and confirm unrelated files are unchanged.
 
 ### Scenario K: Local Prompt Registry contract
 
@@ -307,16 +362,20 @@ Every route must load directly and after refresh:
 
 ```text
 /
-/skills
-/runs
-/evaluations
-/registry
-/governance
+/agents
+/activity
+/assets
+/benchmarks
+/releases
 /settings
+/settings?section=advanced-team
 ```
 
-Verify at desktop and narrow viewport widths. Registry tables may scroll
-horizontally but must not obscure runtime selection or filters.
+Also verify legacy `/overview`, `/skills`, `/runs`, `/evaluations`, `/registry`,
+and `/governance` map to their canonical page, while `/team` is replaced with
+`/settings?section=advanced-team`. Verify at desktop and narrow viewport widths.
+Registry tables may scroll horizontally but must not obscure runtime selection
+or filters.
 
 ## 8. Privacy regression checklist
 

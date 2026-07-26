@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { spawn } from 'node:child_process'
-import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { access, link, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -36,6 +36,25 @@ function runHook(input, environment, hookMode = 'default') {
     child.on('error', reject)
     child.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`Hook exited ${code}: ${stderr}`)))
     child.stdin.end(JSON.stringify(input))
+  })
+}
+
+function runRawHook(input, cwd, environment) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [
+      path.resolve('adapters/claude/hook.mjs'),
+      '--adapter=skillops-claude-hook',
+      '--hook-mode=default',
+    ], {
+      cwd,
+      env: { ...process.env, ...environment },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    let stderr = ''
+    child.stderr.on('data', (chunk) => { stderr += chunk })
+    child.on('error', reject)
+    child.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`Hook exited ${code}: ${stderr}`)))
+    child.stdin.end(input)
   })
 }
 
@@ -143,6 +162,60 @@ describe('Claude Code hook installer', () => {
 })
 
 describe('Claude Code lifecycle adapter', () => {
+  it('redacts legacy raw diagnostics before normal hook processing', async () => {
+    const root = await temporaryDirectory('skillops-claude-legacy-diagnostic-')
+    const dataDir = path.join(root, 'data')
+    const project = path.join(root, 'project')
+    const diagnosticFile = path.join(dataDir, 'claude-adapter-errors.log')
+    await mkdir(dataDir, { recursive: true })
+    await mkdir(project, { recursive: true })
+    await writeFile(diagnosticFile, 'SyntaxError: GP10_LEGACY_CLAUDE_STACK\n    at private-source.js:1:1\n')
+
+    const input = {
+      session_id: 'legacy-diagnostic-session',
+      cwd: project,
+      hook_event_name: 'SessionStart',
+    }
+    await runHook(input, { SKILLOPS_DATA_DIR: dataDir })
+    await runHook(input, { SKILLOPS_DATA_DIR: dataDir })
+
+    expect(await readFile(diagnosticFile, 'utf8')).toBe('CLAUDE_ADAPTER_DIAGNOSTICS_REDACTED\n')
+  })
+
+  it('replaces a linked diagnostic entry without changing its target', async () => {
+    const root = await temporaryDirectory('skillops-claude-linked-diagnostic-')
+    const dataDir = path.join(root, 'data')
+    const project = path.join(root, 'project')
+    const diagnosticFile = path.join(dataDir, 'claude-adapter-errors.log')
+    const linkedTarget = path.join(root, 'unrelated-user-file.txt')
+    const outside = 'GP10_LINKED_CLAUDE_TARGET_MUST_SURVIVE\n'
+    await mkdir(dataDir, { recursive: true })
+    await mkdir(project, { recursive: true })
+    await writeFile(linkedTarget, outside)
+    await link(linkedTarget, diagnosticFile)
+
+    await runRawHook('{"rawError":GP10_LINKED_INPUT}', project, { SKILLOPS_DATA_DIR: dataDir })
+
+    expect(await readFile(linkedTarget, 'utf8')).toBe(outside)
+    const diagnostic = await readFile(diagnosticFile, 'utf8')
+    expect(diagnostic).toContain('CLAUDE_ADAPTER_FAILURE Hook processing failed.')
+    expect(diagnostic).not.toContain('GP10_LINKED')
+  })
+
+  it('writes only a fixed safe diagnostic when hook input is malformed', async () => {
+    const root = await temporaryDirectory('skillops-claude-private-diagnostic-')
+    const dataDir = path.join(root, 'data')
+    const project = path.join(root, 'project')
+    await mkdir(project, { recursive: true })
+
+    await runRawHook('{"rawError":GP10LEAK}', project, { SKILLOPS_DATA_DIR: dataDir })
+
+    const diagnostic = await readFile(path.join(dataDir, 'claude-adapter-errors.log'), 'utf8')
+    expect(diagnostic).toContain('CLAUDE_ADAPTER_FAILURE Hook processing failed.')
+    expect(diagnostic).not.toContain('GP10LEAK')
+    expect(diagnostic).not.toContain('SyntaxError')
+  })
+
   it('resolves namespaced plugin invocations to the installed canonical Skill', async () => {
     const root = await temporaryDirectory('skillops-claude-plugin-alias-')
     const claudeHome = path.join(root, 'claude-home')

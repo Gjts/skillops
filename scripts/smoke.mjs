@@ -159,22 +159,23 @@ try {
   if (!ready) throw new Error('Production server did not become ready.')
   if (!serverOutput.includes(`http://127.0.0.1:${port}`)) throw new Error('Production server did not bind to the loopback host by default.')
 
-  const eventsResponse = await fetch(`http://127.0.0.1:${port}/api/events?source=smoke`)
-  const events = await eventsResponse.json()
-  if (!eventsResponse.ok || !Array.isArray(events)) throw new Error('Event API did not return an array.')
+  const eventsResponse = await fetch(`http://127.0.0.1:${port}/api/events?source=smoke&page=1&pageSize=20`)
+  const eventsPage = await eventsResponse.json()
+  const events = eventsPage.items
+  if (!eventsResponse.ok || !Array.isArray(events) || events.length > 20 || eventsPage.totalItems < events.length) throw new Error('Event API did not return a bounded page.')
   const eventEtag = eventsResponse.headers.get('etag')
   const unchangedEvents = await fetch(`http://127.0.0.1:${port}/api/events`, { headers: { 'If-None-Match': eventEtag } })
   if (!eventEtag || unchangedEvents.status !== 304) throw new Error('Unchanged event polling did not use a lightweight 304 response.')
   const summaryResponse = await fetch(`http://127.0.0.1:${port}/api/events?summary=1`)
   const summary = await summaryResponse.json()
-  if (!summaryResponse.ok || summary.count !== events.length || 'items' in summary) throw new Error('Event summary API did not keep the browser response bounded.')
+  if (!summaryResponse.ok || summary.count !== eventsPage.totalItems || 'items' in summary) throw new Error('Event summary API did not keep the browser response bounded.')
   const exportResponse = await fetch(`http://127.0.0.1:${port}/api/events?download=1`)
   const exportedEvents = (await exportResponse.text()).trim().split('\n').filter(Boolean)
-  if (!exportResponse.ok || exportedEvents.length !== events.length || !exportResponse.headers.get('content-disposition')?.includes('skillops-events-')) {
+  if (!exportResponse.ok || exportedEvents.length !== eventsPage.totalItems || !exportResponse.headers.get('content-disposition')?.includes('skillops-events-')) {
     throw new Error('Normalized event export did not return a complete JSONL download.')
   }
 
-  const scanResponse = await fetch(`http://127.0.0.1:${port}/api/scan?source=smoke`, { method: 'POST' })
+  const scanResponse = await fetch(`http://127.0.0.1:${port}/api/scan?refresh=1`, { method: 'POST' })
   const inventory = await scanResponse.json()
   if (!scanResponse.ok || !Array.isArray(inventory.definitions) || !inventory.scan?.id) throw new Error('Installed Skill scan API did not return definitions and scan diagnostics.')
   const baseline = inventory.definitions.find((item) => item.skillId === 'smoke-baseline')
@@ -287,6 +288,11 @@ try {
   async function promotePromptCapability(capability, run, reviewerToken) {
     const canaryProjectRoot = path.join(smokeData, `prompt-canary-${capability.id}`)
     await mkdir(canaryProjectRoot, { recursive: true })
+    const decisionResponse = await fetch(`http://127.0.0.1:${port}/api/evaluations/${encodeURIComponent(run.id)}/decision`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: 'create-candidate' }),
+    })
+    if (!decisionResponse.ok) throw new Error(`Local Prompt Decision failed: ${JSON.stringify(await decisionResponse.json())}`)
     const capabilityUrl = `http://127.0.0.1:${port}/api/capabilities/${encodeURIComponent(capability.id)}`
     const action = async (name, body, token) => {
       const response = await fetch(`${capabilityUrl}/${name}`, {
@@ -382,7 +388,7 @@ try {
 
   const connectionsResponse = await fetch(`http://127.0.0.1:${port}/api/connections`)
   const connections = await connectionsResponse.json()
-  if (!connectionsResponse.ok || !Array.isArray(connections) || !connections.some((item) => item.runtime === 'codex')) {
+  if (!connectionsResponse.ok || !Array.isArray(connections.items) || !connections.items.some((item) => item.runtime === 'codex') || !connections.generatedAt) {
     throw new Error('Runtime connection API did not return current adapter status.')
   }
 
@@ -396,8 +402,16 @@ try {
   if (created.outcome !== 'unknown') throw new Error('Lifecycle-only completion was incorrectly marked successful.')
   if (JSON.stringify(created).includes('must-not-be-stored')) throw new Error('Unknown event fields were not removed.')
   if ((await readFile(path.join(smokeData, 'events.jsonl'), 'utf8')).includes('must-not-be-stored')) throw new Error('Sensitive unknown fields reached the event store.')
+  const recordingCheck = await execute(process.execPath, [
+    path.resolve('scripts/check-skill-recording.mjs'),
+    '--skill', 'smoke-test',
+    '--runtime', 'codex',
+    '--since', new Date(Date.parse(created.timestamp) - 1).toISOString(),
+    '--url', `http://127.0.0.1:${port}/api/events`,
+  ])
+  if (!recordingCheck.stdout.includes('"verdict": "GREEN"')) throw new Error('Paginated runtime recording verification failed.')
   const updatedSummary = await fetch(`http://127.0.0.1:${port}/api/events?summary=1`).then((response) => response.json())
-  if (updatedSummary.count !== events.length + 1) throw new Error('Event summary cache did not invalidate after append.')
+  if (updatedSummary.count !== eventsPage.totalItems + 1) throw new Error('Event summary cache did not invalidate after append.')
 
   const crossSiteEvent = await fetch(`http://127.0.0.1:${port}/api/events`, {
     method: 'POST',

@@ -268,15 +268,37 @@ function QuickEvaluationWorkspace({ onPrepareManaged }: { onPrepareManaged: (dra
   )
 }
 
+type EvaluationTab = 'quick' | 'suites' | 'history'
+
+const evaluationTabs: EvaluationTab[] = ['quick', 'suites', 'history']
+const evaluationPathnames = new Set(['/benchmarks', '/evaluations'])
+
+function readEvaluationTab(): EvaluationTab {
+  const requestedTab = new URLSearchParams(window.location.search).get('tab')
+  return requestedTab === 'suites' || requestedTab === 'history' ? requestedTab : 'quick'
+}
+
 export function EvaluationWorkspace() {
   const { t } = useI18n()
-  const [tab, setTab] = useState<'quick' | 'suites' | 'history'>('quick')
+  const params = new URLSearchParams(window.location.search)
+  const [tab, setTab] = useState<EvaluationTab>(readEvaluationTab)
   const [draft, setDraft] = useState<ManagedEvaluationDraft | null>(null)
-  const tabs = ['quick', 'suites', 'history'] as const
+  useEffect(() => {
+    const nextParams = new URLSearchParams(window.location.search)
+    nextParams.set('tab', tab)
+    const pathname = evaluationPathnames.has(window.location.pathname) ? window.location.pathname : '/benchmarks'
+    const next = `${pathname}?${nextParams}`
+    if (`${window.location.pathname}${window.location.search}` !== next) window.history.replaceState({}, '', next)
+  }, [tab])
+  useEffect(() => {
+    const restoreTab = () => setTab(readEvaluationTab())
+    window.addEventListener('popstate', restoreTab)
+    return () => window.removeEventListener('popstate', restoreTab)
+  }, [])
   return (
     <div className="single-page evaluation-workspace evaluation-hub">
       <div className="evaluation-tabs" role="tablist" aria-label={t('evaluations.workspaceTabs')}>
-        {tabs.map((item, index) => (
+        {evaluationTabs.map((item, index) => (
           <button
             id={`evaluation-tab-${item}`}
             key={item}
@@ -289,15 +311,15 @@ export function EvaluationWorkspace() {
             onKeyDown={(event) => {
               if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
               event.preventDefault()
-              const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length
-              setTab(tabs[next])
+              const next = event.key === 'Home' ? 0 : event.key === 'End' ? evaluationTabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + evaluationTabs.length) % evaluationTabs.length
+              setTab(evaluationTabs[next])
               ;(event.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="tab"]')[next])?.focus()
             }}
           >{t(item === 'quick' ? 'evaluations.quickTab' : item === 'suites' ? 'evaluations.suitesTab' : 'evaluations.historyTab')}</button>
         ))}
       </div>
       <div id="evaluation-panel-quick" role="tabpanel" aria-labelledby="evaluation-tab-quick" hidden={tab !== 'quick'}><QuickEvaluationWorkspace onPrepareManaged={(next) => { setDraft(next); setTab('suites') }} /></div>
-      <div id="evaluation-panel-managed" role="tabpanel" aria-labelledby={`evaluation-tab-${tab === 'history' ? 'history' : 'suites'}`} hidden={tab === 'quick'}><ManagedEvaluations tab={tab === 'history' ? 'history' : 'suites'} draft={draft} /></div>
+      <div id="evaluation-panel-managed" role="tabpanel" aria-labelledby={`evaluation-tab-${tab === 'history' ? 'history' : 'suites'}`} hidden={tab === 'quick'}><ManagedEvaluations tab={tab === 'history' ? 'history' : 'suites'} draft={draft} configureProvider={params.get('configure') === 'provider'} /></div>
     </div>
   )
 }

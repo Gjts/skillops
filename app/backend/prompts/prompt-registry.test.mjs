@@ -82,4 +82,16 @@ describe('Git-backed Prompt Registry', () => {
     const forged = listed.items[0].artifact.sourceRef.replace(encodeURIComponent('prompts/release.prompt.json'), encodeURIComponent('README.md'))
     await expect(registry.resolveArtifact(forged)).rejects.toThrow('outside the configured prompt directory')
   })
+
+  it('does not expose Git stderr in registry errors', async () => {
+    const secret = 'GIT_STDERR_SECRET_SENTINEL'
+    const parent = await mkdtemp(path.join(os.tmpdir(), 'skillops-prompt-registry-error-'))
+    temporaryDirectories.push(parent)
+    const registry = createPromptRegistry({ promptWorkspace: path.join(parent, secret) })
+
+    await expect(registry.list()).rejects.toMatchObject({
+      message: 'Prompt Registry Git operation failed.',
+      status: 409,
+    })
+  })
 })
