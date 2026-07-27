@@ -276,7 +276,8 @@ export function CommandCenter({ runtime, days, onOpen, onModeChange }: CommandCe
         onModeChange?.('local')
       } catch (loadError) {
         if (cancelled || controller.signal.aborted) return
-        const message = loadError instanceof Error ? loadError.message : 'Local aggregate unavailable.'
+        const detail = loadError instanceof Error ? loadError.message : ''
+        const message = detail && !/^[\[{]/.test(detail.trim()) ? detail : 'Local aggregate unavailable.'
         setError(message)
         if (!snapshot) onModeChange?.('loading', message)
       } finally {
@@ -301,6 +302,10 @@ export function CommandCenter({ runtime, days, onOpen, onModeChange }: CommandCe
   }, [loading, snapshot])
 
   const useDemo = () => {
+    performance.clearMarks('skillops:data-received')
+    performance.clearMarks('skillops:primary-content-ready')
+    performance.clearMeasures('skillops:primary-content')
+    performance.mark('skillops:data-received')
     setSnapshot(demoSnapshot())
     setDemo(true)
     onModeChange?.('demo')

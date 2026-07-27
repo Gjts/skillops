@@ -5,6 +5,7 @@ import type { MessageKey } from '../i18n/messages'
 import type {
   ArtifactKind,
   ArtifactRegistrySnapshot,
+  ArtifactSource,
   ArtifactStatus,
   ArtifactVersionRecord,
   Runtime,
@@ -99,14 +100,14 @@ const runtimeTargets: Runtime[] = ['codex', 'claude-code', 'cursor']
 const runtimes: Array<Runtime | 'all'> = ['all', ...runtimeTargets]
 const PAGE_SIZE = 50
 const artifactKinds = new Set(kinds)
-const artifactSources = new Set(['all', 'local-scan', 'git', 'github', 'prompt-registry', 'prompthub'])
+const artifactSources = new Set<ArtifactSource | 'all'>(['all', 'local-scan', 'git', 'github', 'prompt-registry', 'prompthub'])
 const artifactStatuses = new Set(statuses)
 const artifactRuntimes = new Set(runtimes)
 
 function readArtifactLocation() {
   const params = new URLSearchParams(window.location.search)
   const kind = params.get('artifactKind') as ArtifactKind | 'all' | null
-  const source = params.get('artifactSource')
+  const source = params.get('artifactSource') as ArtifactSource | 'all' | null
   const status = params.get('artifactStatus') as ArtifactStatus | 'all' | null
   const runtime = params.get('artifactRuntime') as Runtime | 'all' | null
   const requestedPage = Number(params.get('artifactPage'))
@@ -245,6 +246,7 @@ export function ArtifactRegistry({ refreshToken = '' }: ArtifactRegistryProps) {
   const versionsById = useMemo(() => new Map((snapshot?.versions || []).map((version) => [version.id, version])), [snapshot])
   const owners = snapshot?.facets.owners.map((item) => item.value) || []
   const sources = snapshot?.facets.sources.map((item) => item.value) || []
+  if (source !== 'all' && !sources.includes(source)) sources.unshift(source)
   const artifacts = snapshot?.artifacts || []
 
   useEffect(() => {
@@ -344,7 +346,7 @@ export function ArtifactRegistry({ refreshToken = '' }: ArtifactRegistryProps) {
       <div className="artifact-filters">
         <label className="artifact-filter"><span>{t('registry.artifactSearch')}</span><span className="search-field"><Search size={15} /><input placeholder={t('registry.artifactSearch')} value={query} onChange={(event) => { setPage(1); setQuery(event.target.value) }} /></span></label>
         <label className="artifact-filter"><span>{t('common.type')}</span><select value={kind} onChange={(event) => { setPage(1); setKind(event.target.value as ArtifactKind | 'all') }}>{kinds.map((value) => <option key={value} value={value}>{value === 'all' ? t('common.all') : t(kindKeys[value])}</option>)}</select></label>
-        <label className="artifact-filter"><span>{t('common.source')}</span><select value={source} onChange={(event) => { setPage(1); setSource(event.target.value) }}><option value="all">{t('common.all')}</option>{sources.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+        <label className="artifact-filter"><span>{t('common.source')}</span><select value={source} onChange={(event) => { setPage(1); setSource(event.target.value as ArtifactSource | 'all') }}><option value="all">{t('common.all')}</option>{sources.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
         <label className="artifact-filter"><span>{t('common.status')}</span><select value={status} onChange={(event) => { setPage(1); setStatus(event.target.value as ArtifactStatus | 'all') }}>{statuses.map((value) => <option key={value} value={value}>{value === 'all' ? t('common.all') : t(statusKeys[value])}</option>)}</select></label>
         <label className="artifact-filter"><span>{t('common.runtime')}</span><select value={runtime} onChange={(event) => { setPage(1); setRuntime(event.target.value as Runtime | 'all') }}>{runtimes.map((value) => <option key={value} value={value}>{value === 'all' ? t('common.all') : value}</option>)}</select></label>
         <label className="artifact-filter"><span>{t('registry.owner')}</span><select value={owner} onChange={(event) => { setPage(1); setOwner(event.target.value) }}><option value="all">{t('common.all')}</option>{owners.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>

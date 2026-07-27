@@ -222,6 +222,53 @@ describe('registry governance nomination', () => {
     expect(fetchMock.mock.calls.some(([input]) => input === '/api/scan?query=server-skill-1')).toBe(false)
   })
 
+  it('renders developer diagnostics for the Advanced diagnostics route', async () => {
+    window.history.replaceState({}, '', '/assets?view=diagnostics')
+    vi.stubGlobal('fetch', vi.fn((input: string) => {
+      if (!input.startsWith('/api/scan')) return Promise.reject(new Error(`Unexpected request: ${input}`))
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          generatedAt: '2026-07-27T00:00:00.000Z',
+          definitions: [],
+          scan: {
+            id: 'scan-diagnostics-1',
+            projectRoot: 'C:/workspace',
+            startedAt: '2026-07-27T00:00:00.000Z',
+            completedAt: '2026-07-27T00:00:00.012Z',
+            durationMs: 12,
+            coverage: [{ runtime: 'codex', directory: 'C:/workspace/.codex/skills', source: 'project', configurationSource: 'project', state: 'scanned' }],
+            errors: [{ runtime: 'claude-code', path: 'C:/restricted', code: 'EACCES', message: 'Access denied' }],
+            observability: [{ runtime: 'claude-code', state: 'partial', reason: 'Filesystem-only visibility.' }],
+          },
+          page: { page: 1, pageSize: 50, totalItems: 0, totalPages: 0, hasPrevious: false, hasNext: false },
+          aggregates: {
+            totalDefinitions: 0,
+            enabledDefinitionCount: 0,
+            sharedSkillCount: 0,
+            runtimes: [],
+            metrics: { uniqueEnabledSkills: 0, enabledDefinitions: 0, pluginEnabledSkills: 0, disabledSkills: 0 },
+            attention: { attention: 0, conflict: 0, duplicate: 0, disabled: 0, missing: 0 },
+            sources: [],
+            providers: [],
+            visibleRuntimes: [],
+          },
+          definitionIssues: {},
+          sharedDefinitionKeys: [],
+        }),
+      })
+    }))
+
+    render(<RegistryPage />)
+
+    const diagnostics = await screen.findByRole('region', { name: 'Developer diagnostics' })
+    expect(diagnostics.textContent).toContain('scan-diagnostics-1')
+    expect(diagnostics.textContent).toContain('C:/workspace/.codex/skills')
+    expect(diagnostics.textContent).toContain('Filesystem-only visibility.')
+    expect(diagnostics.textContent).toContain('EACCES')
+    expect(window.location.search).toContain('view=diagnostics')
+  })
+
   it('applies compatible Assets query and conflict filters from the URL', async () => {
     window.history.replaceState({}, '', '/assets?tab=skills&query=review&attention=conflict')
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({

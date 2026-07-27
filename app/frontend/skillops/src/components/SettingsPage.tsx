@@ -16,15 +16,16 @@ type SettingsPageProps = {
   onConnect: (runtime: Runtime) => void
   onRefresh: () => void
   onClear: () => Promise<{ removed: number; backupFile?: string }>
-  onNavigate: (page: PageId) => void
+  onNavigate: (page: PageId, href?: string) => void
 }
 
-const advancedPages: Array<{ page: PageId; label: 'nav.team' | 'nav.policies' | 'nav.templates' | 'nav.promptHub' | 'nav.audit' }> = [
-  { page: 'team', label: 'nav.team' },
-  { page: 'team', label: 'nav.policies' },
-  { page: 'team', label: 'nav.templates' },
-  { page: 'assets', label: 'nav.promptHub' },
-  { page: 'team', label: 'nav.audit' },
+const advancedPages: Array<{ page: PageId; label: 'nav.team' | 'nav.policies' | 'nav.templates' | 'nav.promptHub' | 'nav.audit' | 'nav.diagnostics'; href: string }> = [
+  { page: 'team', label: 'nav.team', href: '/settings?section=advanced-team' },
+  { page: 'team', label: 'nav.policies', href: '/settings?section=advanced-team&view=policies' },
+  { page: 'team', label: 'nav.templates', href: '/settings?section=advanced-team&view=templates' },
+  { page: 'assets', label: 'nav.promptHub', href: '/assets?artifactKind=prompt&artifactSource=prompthub' },
+  { page: 'releases', label: 'nav.audit', href: '/releases' },
+  { page: 'assets', label: 'nav.diagnostics', href: '/assets?view=diagnostics' },
 ]
 
 export function SettingsPage({ connections, onConnect, onRefresh, onClear, onNavigate }: SettingsPageProps) {
@@ -193,7 +194,7 @@ export function SettingsPage({ connections, onConnect, onRefresh, onClear, onNav
 
       <section ref={dataRef} tabIndex={-1} data-settings-section="data" className="panel settings-section data-controls"><header><div><h2>{t('settings.localData')}</h2><p>{t('settings.localDataDescription')}</p></div><strong>{t('settings.eventCount', { count: formatNumber(summary?.count ?? 0) })}</strong></header><dl><div><dt>{t('settings.storage')}</dt><dd className="mono">data/events.jsonl</dd></div><div><dt>{t('settings.lastRuntimeEvent')}</dt><dd>{summary?.lastRuntimeEventAt ? formatDateTime(summary.lastRuntimeEventAt) : t('connect.noActivity')}</dd></div><div><dt>{t('settings.contentBoundary')}</dt><dd>{t('settings.noRawContent')}</dd></div><div><dt>{t('settings.retention')}</dt><dd>{t('settings.noAutomaticRetention')}</dd></div><div><dt>{t('settings.encryption')}</dt><dd>{t('settings.filesystemEncryption')}</dd></div></dl><footer><button className="button secondary" type="button" disabled={!summary?.count} onClick={exportEvents}><Download size={15} />{t('settings.export')}</button><button className="button danger" type="button" disabled={!summary?.count || clearing} onClick={() => setConfirmClear(true)}><Trash2 size={15} />{t('settings.clear')}</button></footer>{summaryLoading && !summary && <p className="data-control-note" role="status">{t('mode.loadingEvents')}</p>}{summary?.sourceStatus === 'partial' && <p className="data-control-note" role="alert">{t('cc.partial')}</p>}{summaryError && <p className="data-control-note" role="alert">{summaryError} <button className="text-button" type="button" onClick={() => void loadSummary()}>{t('cc.retry')}</button></p>}{dataStatus && <p className="data-control-note" role="status">{dataStatus}</p>}</section>
 
-      <section className="panel settings-section settings-advanced"><header><div><h2>{t('settings.advanced')}</h2><p>{t('settings.advancedDescription')}</p></div></header><div className="settings-link-list">{advancedPages.map((item) => <button className="button secondary" type="button" key={item.label} onClick={() => onNavigate(item.page)}>{t(item.label)}</button>)}</div></section>
+      <section className="panel settings-section settings-advanced"><header><div><h2>{t('settings.advanced')}</h2><p>{t('settings.advancedDescription')}</p></div></header><div className="settings-link-list">{advancedPages.map((item) => <button className="button secondary" type="button" key={item.label} onClick={() => onNavigate(item.page, item.href)}>{t(item.label)}</button>)}</div></section>
 
       {confirmClear && <div ref={confirmRef} className="confirm-clear" role="alertdialog" aria-modal="true" aria-labelledby="confirm-clear-title" onKeyDown={trapConfirmFocus}><div><h2 id="confirm-clear-title">{t('settings.confirmTitle', { count: formatNumber(summary?.count ?? 0) })}</h2><p>{t('settings.confirmDescription')}</p></div><div><button ref={cancelRef} className="button secondary" type="button" onClick={() => setConfirmClear(false)}>{t('common.cancel')}</button><button className="button danger" type="button" disabled={clearing} onClick={() => void clear()}>{clearing ? t('settings.clearing') : t('settings.clearBackup')}</button></div></div>}
       <section className="privacy-note"><ShieldCheck size={20} /><div><strong>{t('settings.localFirst')}</strong><p>{t('settings.privacy')}</p></div></section>

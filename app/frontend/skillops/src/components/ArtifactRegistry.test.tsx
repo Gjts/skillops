@@ -122,7 +122,7 @@ describe('Artifact Registry UI', () => {
   })
 
   it('drives filters and stable pagination from the server and restores Artifact URL state', async () => {
-    window.history.replaceState({}, '', '/assets?tab=skills&artifactPage=2')
+    window.history.replaceState({}, '', '/assets?tab=skills&artifactPage=2&artifactSource=prompthub')
     const artifacts = Array.from({ length: 51 }, (_, index) => ({
       id: `skill:artifact-${String(index).padStart(3, '0')}`,
       artifactId: `artifact-${String(index).padStart(3, '0')}`,
@@ -189,6 +189,7 @@ describe('Artifact Registry UI', () => {
 
     expect((await screen.findAllByText('artifact-050')).length).toBeGreaterThan(0)
     expect(screen.queryByText('artifact-000')).toBeNull()
+    expect((screen.getByLabelText('Source') as HTMLSelectElement).value).toBe('prompthub')
     expect(requested[0]).toContain('page=2')
     expect(window.location.search).toContain('tab=skills')
 

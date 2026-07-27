@@ -142,6 +142,7 @@ function readRegistryLocation() {
   const requestedPage = Number.parseInt(params.get('page') || '', 10)
   const resolvedAttention = attention && attentionFilters.has(attention) ? attention : 'all'
   return {
+    diagnostics: params.get('view') === 'diagnostics',
     query: (params.get('query') || '').slice(0, 120),
     runtime: runtime && runtimeFilters.has(runtime) ? runtime : 'all' as RuntimeFilter,
     source: source && sourceFilters.has(source) ? source : 'all' as SourceFilter,
@@ -181,6 +182,7 @@ export function RegistryPage() {
   const [scanStatus, setScanStatus] = useState<'scanning' | 'complete' | 'failed'>('scanning')
   const [scanMetadata, setScanMetadata] = useState<SkillScanMetadata | null>(null)
   const [scanProjection, setScanProjection] = useState<SkillScanResponse | null>(null)
+  const [showDiagnostics, setShowDiagnostics] = useState(initialLocation.diagnostics)
   const [query, setQuery] = useState(initialLocation.query)
   const [debouncedQuery, setDebouncedQuery] = useState(initialLocation.query)
   const [runtimeFilter, setRuntimeFilter] = useState<RuntimeFilter>(initialLocation.runtime)
@@ -274,6 +276,7 @@ export function RegistryPage() {
   useEffect(() => {
     const restoreLocation = () => {
       const restored = readRegistryLocation()
+      setShowDiagnostics(restored.diagnostics)
       setQuery(restored.query)
       setRuntimeFilter(restored.runtime)
       setSourceFilter(restored.source)
@@ -411,12 +414,17 @@ export function RegistryPage() {
       <ArtifactRegistry refreshToken={scanMetadata?.id} />
 
       {scanMetadata ? (
-        <section className="panel registry-scan-summary" aria-label={t('registry.scanSummary')}>
+        <section className="panel registry-scan-summary" aria-label={t(showDiagnostics ? 'nav.diagnostics' : 'registry.scanSummary')}>
           <header>
             <div><span>{t('registry.scanSummary')}</span><strong className="mono">{scanMetadata.id}</strong></div>
             <b>{t('registry.scanDuration', { duration: formatNumber(scanMetadata.durationMs) })}</b>
           </header>
           <div><span>{t('registry.projectRoot')}</span><code>{scanMetadata.projectRoot}</code></div>
+          {showDiagnostics ? <dl className="governance-metadata">
+            {scanMetadata.coverage.map((item) => <div key={`${item.runtime}:${item.directory}`}><dt>{runtimeLabel[item.runtime]} · {item.state}</dt><dd title={item.directory}>{item.directory} · {t(sourceLabel[item.source])} · {t(configurationSourceLabel[item.configurationSource])}</dd></div>)}
+            {scanMetadata.observability.map((item) => <div key={`${item.runtime}:${item.state}`}><dt>{runtimeLabel[item.runtime]} · {item.state}</dt><dd>{item.reason || t('common.notReported')}</dd></div>)}
+            {scanMetadata.errors.map((item) => <div key={`${item.runtime}:${item.path}:${item.code}`}><dt>{runtimeLabel[item.runtime]} · {item.code}</dt><dd title={item.path}>{item.path}</dd></div>)}
+          </dl> : null}
           <footer>
             {scanMetadata.observability.some((item) => item.state === 'partial') ? <span title={scanMetadata.observability.find((item) => item.state === 'partial')?.reason}>{t('registry.partiallyObservable')}</span> : null}
             {scanMetadata.errors.length ? <span>{t('registry.scanErrors', { count: formatNumber(scanMetadata.errors.length) })}</span> : null}

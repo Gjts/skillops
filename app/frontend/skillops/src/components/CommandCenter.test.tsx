@@ -194,6 +194,26 @@ describe('Command Center', () => {
     expect(screen.getAllByText('Demo dataset').length).toBeGreaterThan(0)
   })
 
+  it('hides raw offline payloads and marks demo primary-content readiness', async () => {
+    const rawPayload = '{"code":"ECONNREFUSED","address":"127.0.0.1"}'
+    const mark = vi.spyOn(performance, 'mark')
+    const measure = vi.spyOn(performance, 'measure')
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => { callback(0); return 1 }))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error(rawPayload)))
+
+    render(<CommandCenter runtime="all" days={7} onOpen={() => undefined} />)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('Local aggregate unavailable.')
+    expect(alert.textContent).not.toContain(rawPayload)
+    fireEvent.click(screen.getByRole('button', { name: 'Use demo dataset' }))
+    await screen.findByText('Synthetic examples are never mixed with local data.')
+    expect(mark).toHaveBeenCalledWith('skillops:data-received')
+    expect(mark).toHaveBeenCalledWith('skillops:primary-content-ready')
+    expect(measure).toHaveBeenCalledWith('skillops:primary-content', 'skillops:data-received', 'skillops:primary-content-ready')
+  })
+
   it('localizes server reason, impact, readiness code, and metric definitions', async () => {
     localStorage.setItem('skillops.locale.v1', 'zh')
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({

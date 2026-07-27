@@ -8,16 +8,13 @@ import {
   Search,
   Upload,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 // @ts-expect-error Plain JavaScript schema shared with the local event API.
 import { normalizeEvent } from '../../../shared/event-schema.mjs'
 import { ActivityRail } from './components/ActivityRail'
 import { AgentsPage } from './components/AgentsPage'
 import { ConnectModal } from './components/ConnectModal'
 import { CommandCenter } from './components/CommandCenter'
-import { EvaluationWorkspace } from './components/EvaluationWorkspace'
-import { GovernancePage } from './components/GovernancePage'
-import { RegistryPage } from './components/RegistryPage'
 import { correlatedRunEvents, RunDetail } from './components/RunDetail'
 import { Sidebar } from './components/Sidebar'
 import { SettingsPage } from './components/SettingsPage'
@@ -28,6 +25,10 @@ import type { MessageKey } from './i18n/messages'
 import { filterEvents, runtimeLabel, terminalRuns } from './lib/analytics'
 import { EventFileError, parseEventFile, type EventFileErrorCode } from './lib/import-events'
 import type { Outcome, PageId, Runtime, RuntimeConnection, SkillEvent } from './types'
+
+const EvaluationWorkspace = lazy(() => import('./components/EvaluationWorkspace').then(({ EvaluationWorkspace }) => ({ default: EvaluationWorkspace })))
+const GovernancePage = lazy(() => import('./components/GovernancePage').then(({ GovernancePage }) => ({ default: GovernancePage })))
+const RegistryPage = lazy(() => import('./components/RegistryPage').then(({ RegistryPage }) => ({ default: RegistryPage })))
 
 const EVENT_REFRESH_MS = 3_000
 const CONNECTION_REFRESH_MS = 5_000
@@ -189,6 +190,8 @@ function writeRunLocation(state: RunLocationState, method: 'pushState' | 'replac
   const pathname = window.location.pathname === '/runs' ? '/runs' : '/activity'
   const params = runLocationParams(state)
   if (pathname === '/activity') params.set('tab', 'runs')
+  const run = new URLSearchParams(window.location.search).get('run')
+  if (run) params.set('run', run)
   window.history[method]({}, '', `${pathname}?${params}`)
 }
 
@@ -328,7 +331,7 @@ export default function App() {
   const [days, setDays] = useState(() => currentPage() === 'activity' ? readRunLocation().days : 7)
   const [connectOpen, setConnectOpen] = useState(false)
   const [connectRuntime, setConnectRuntime] = useState<Runtime>('codex')
-  const [requestedRunId, setRequestedRunId] = useState<string | null>(null)
+  const [requestedRunId, setRequestedRunId] = useState<string | null>(() => currentPage() === 'activity' ? new URLSearchParams(window.location.search).get('run') : null)
   const [connections, setConnections] = useState<RuntimeConnection[]>(checkingConnections)
   const [menuOpen, setMenuOpen] = useState(false)
   const [mode, setMode] = useState<'loading' | 'demo' | 'local'>('loading')
@@ -388,6 +391,7 @@ export default function App() {
         setRuntime(restored.runtime)
         setDays(restored.days)
       }
+      setRequestedRunId(nextPage === 'activity' ? new URLSearchParams(window.location.search).get('run') : null)
       setPage(nextPage)
     }
     restorePage()
@@ -395,8 +399,11 @@ export default function App() {
     return () => window.removeEventListener('popstate', restorePage)
   }, [])
 
-  const navigate = (target: PageId) => {
-    if (`${window.location.pathname}${window.location.search}` !== pathForPage[target]) window.history.pushState({}, '', pathForPage[target])
+  const navigate = (target: PageId, href = pathForPage[target]) => {
+    if (`${window.location.pathname}${window.location.search}` !== href) {
+      window.history.pushState({}, '', href)
+      if (target === page) window.dispatchEvent(new PopStateEvent('popstate'))
+    }
     setPage(target)
   }
   const openHref = (href: string) => {
@@ -454,8 +461,11 @@ export default function App() {
 
   const clearLocalEvents = async () => {
     const response = await fetch('/api/events', { method: 'DELETE' })
-    const result = await response.json() as { removed?: number; backupFile?: string; error?: string }
-    if (!response.ok) throw new Error(result.error || t('errors.clearStatus', { status: response.status }))
+    const result = await response.json() as { removed?: number; backupFile?: string; error?: string | { message?: string } }
+    if (!response.ok) {
+      const message = typeof result.error === 'string' ? result.error : result.error?.message
+      throw new Error(message || t('errors.clearStatus', { status: response.status }))
+    }
     setEvents([])
     setMode('local')
     return { removed: result.removed ?? 0, backupFile: result.backupFile }
@@ -485,14 +495,16 @@ export default function App() {
 
         {activeLoadError && page !== 'assets' && page !== 'command-center' && <div className="data-warning" role="alert">{t('mode.loadWarning', { error: activeLoadError })}</div>}
 
-        {page === 'command-center' && <CommandCenter runtime={runtime} days={days} onOpen={openHref} onModeChange={updateCommandCenterMode} />}
-        {page === 'agents' && <AgentsPage onOpen={openHref} />}
-        {page === 'assets' && <div className="single-page assets-page"><RegistryPage /></div>}
-        {page === 'activity' && <RunsPage events={filtered} mode={runsMode} runtime={runtime} days={days} requestedRunId={requestedRunId} onRequestedRunHandled={() => setRequestedRunId(null)} onRunsAvailable={markRunsAvailable} onRunsRetry={retryRuns} onRunsUnavailable={useRunsDemo} onRuntimeChange={setRuntime} onDaysChange={setDays} onConnect={() => openConnect(runtime === 'all' ? 'codex' : runtime)} onImport={importEvents} />}
-        {page === 'benchmarks' && <EvaluationWorkspace />}
-        {page === 'releases' && <GovernancePage />}
-        {page === 'team' && <TeamPage />}
-        {page === 'settings' && <SettingsPage connections={connections} onConnect={openConnect} onRefresh={loadConnections} onClear={clearLocalEvents} onNavigate={navigate} />}
+        <Suspense fallback={<div className="single-page" role="status">{t(pageTitle[page])}…</div>}>
+          {page === 'command-center' && <CommandCenter runtime={runtime} days={days} onOpen={openHref} onModeChange={updateCommandCenterMode} />}
+          {page === 'agents' && <AgentsPage onOpen={openHref} />}
+          {page === 'assets' && <div className="single-page assets-page"><RegistryPage /></div>}
+          {page === 'activity' && <RunsPage events={filtered} mode={runsMode} runtime={runtime} days={days} requestedRunId={requestedRunId} onRequestedRunHandled={() => setRequestedRunId(null)} onRunsAvailable={markRunsAvailable} onRunsRetry={retryRuns} onRunsUnavailable={useRunsDemo} onRuntimeChange={setRuntime} onDaysChange={setDays} onConnect={() => openConnect(runtime === 'all' ? 'codex' : runtime)} onImport={importEvents} />}
+          {page === 'benchmarks' && <EvaluationWorkspace />}
+          {page === 'releases' && <GovernancePage />}
+          {page === 'team' && <TeamPage />}
+          {page === 'settings' && <SettingsPage connections={connections} onConnect={openConnect} onRefresh={loadConnections} onClear={clearLocalEvents} onNavigate={navigate} />}
+        </Suspense>
       </main>
       {connectOpen && <ConnectModal initialRuntime={connectRuntime} connections={connections} onRefresh={loadConnections} onClose={() => setConnectOpen(false)} />}
     </div>
@@ -538,7 +550,7 @@ function RunsPage({ events, mode, runtime, days, requestedRunId, onRequestedRunH
   const [runsError, setRunsError] = useState<string | null>(null)
   const [refreshVersion, setRefreshVersion] = useState(0)
   const [newRunCount, setNewRunCount] = useState(0)
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(requestedRunId)
   const [runDetail, setRunDetail] = useState<RunDetailResponse | null>(null)
   const locationState: RunLocationState = { page: runPage, pageSize, query, project, outcome, sort, cost, runtime, days }
 
@@ -557,6 +569,14 @@ function RunsPage({ events, mode, runtime, days, requestedRunId, onRequestedRunH
   }, [cost, days, outcome, pageSize, project, query, runPage, runtime, sort])
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (selectedRunId) params.set('run', selectedRunId)
+    else params.delete('run')
+    const next = `${window.location.pathname}${params.size ? `?${params}` : ''}`
+    if (`${window.location.pathname}${window.location.search}` !== next) window.history[selectedRunId ? 'pushState' : 'replaceState']({}, '', next)
+  }, [selectedRunId])
+
+  useEffect(() => {
     const restore = () => {
       if (currentPage() !== 'activity') return
       const restored = readRunLocation()
@@ -568,6 +588,9 @@ function RunsPage({ events, mode, runtime, days, requestedRunId, onRequestedRunH
       setOutcome(restored.outcome)
       setSort(restored.sort)
       setCost(restored.cost)
+      const restoredRunId = new URLSearchParams(window.location.search).get('run')
+      setSelectedRunId(restoredRunId)
+      setRunDetail((current) => current?.run.id === restoredRunId ? current : null)
       onRuntimeChange(restored.runtime)
       onDaysChange(restored.days)
     }
@@ -799,6 +822,7 @@ function RunsPage({ events, mode, runtime, days, requestedRunId, onRequestedRunH
   const importStatus = importFeedback?.kind === 'success'
     ? t(importFeedback.count === 1 ? 'runs.importedOne' : 'runs.importedMany', { count: formatNumber(importFeedback.count) })
     : null
+  const filteredEmpty = Boolean(query || project || outcome || cost || runtime !== 'all' || days !== 7)
 
   return (
     <div className="single-page">
@@ -833,7 +857,7 @@ function RunsPage({ events, mode, runtime, days, requestedRunId, onRequestedRunH
       {runsError && <div className="data-warning" role="alert">{t('runs.loadError', { error: runsError })}</div>}
       <div className={`runs-list-shell${loading ? ' is-loading' : ''}`} ref={listTop} aria-busy={loading}>
         {loading && <span className="runs-loading" aria-live="polite">{t('runs.loading')}</span>}
-        <ActivityRail events={result.items} expanded onSelectRun={(run) => {
+        <ActivityRail events={result.items} expanded emptyTitle={filteredEmpty ? t('runs.noMatchesTitle') : undefined} emptyDescription={filteredEmpty ? t('runs.noMatchesDescription') : undefined} onSelectRun={(run) => {
           const detailEvents = mode === 'demo' ? correlatedRunEvents(run, events) : [run]
           setSelectedRunId(run.id)
           setRunDetail({ run, events: detailEvents, totalEvents: detailEvents.length, truncated: false })

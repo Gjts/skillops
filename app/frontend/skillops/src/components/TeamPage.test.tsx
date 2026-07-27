@@ -42,7 +42,11 @@ const configured = {
   templateAdoption: { totalProjects: 1, adoptedProjects: 1, currentProjects: 0, driftedProjects: 0, pendingUpgradeProjects: 1, adoptionRatePct: 100 },
 }
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+  window.history.replaceState({}, '', '/')
+})
 
 describe('Team control plane UI', () => {
   it('bootstraps an unconfigured local Team without offering a network deployment mode', async () => {
@@ -79,6 +83,35 @@ describe('Team control plane UI', () => {
     expect(screen.getByText('Template adoption')).toBeTruthy()
     expect(screen.getByText('100%')).toBeTruthy()
     expect(screen.getByText('Pending template upgrades')).toBeTruthy()
+  })
+
+  it.each([
+    {
+      href: '/settings?section=advanced-team&view=policies',
+      title: 'Policies status',
+      description: 'Policy editing remains available through the local CLI and API.',
+      labels: ['Policy Packs', 'Policy exceptions'],
+    },
+    {
+      href: '/settings?section=advanced-team&view=templates',
+      title: 'Templates status',
+      description: 'Template editing remains available through the local CLI and API.',
+      labels: ['Template adoption', 'Template drift', 'Pending template upgrades'],
+    },
+  ])('shows the focused $title view without implying a browser editor', async ({ href, title, description, labels }) => {
+    window.history.replaceState({}, '', href)
+    vi.stubGlobal('fetch', vi.fn((input: string) => {
+      if (input === '/api/team') return response(configured)
+      if (input === '/api/team/catalog?page=1&pageSize=20') return response(page([]))
+      if (input === '/api/team/queues?kind=approval&page=1&pageSize=20') return response(page([]))
+      if (input === '/api/team/queues?kind=release&page=1&pageSize=20') return response(page([]))
+      return response({ error: { message: 'Not found' } }, 404)
+    }))
+    render(<TeamPage />)
+
+    const focused = await screen.findByRole('region', { name: title })
+    expect(focused.textContent).toContain(description)
+    for (const label of labels) expect(focused.textContent).toContain(label)
   })
 
   it('moves through bounded server pages without loading the full Team catalog', async () => {

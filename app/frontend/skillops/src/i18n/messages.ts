@@ -135,6 +135,7 @@ export const messages = {
   'nav.templates': { zh: '模板', en: 'Templates', fr: 'Modèles', ru: 'Шаблоны', es: 'Plantillas', ja: 'テンプレート' },
   'nav.promptHub': { zh: 'PromptHub', en: 'PromptHub', fr: 'PromptHub', ru: 'PromptHub', es: 'PromptHub', ja: 'PromptHub' },
   'nav.audit': { zh: '审计', en: 'Audit', fr: 'Audit', ru: 'Аудит', es: 'Auditoría', ja: '監査' },
+  'nav.diagnostics': { zh: '开发者诊断', en: 'Developer diagnostics', fr: 'Diagnostics développeur', ru: 'Диагностика разработчика', es: 'Diagnósticos de desarrollador', ja: '開発者診断' },
   'agents.observedTab': { zh: '观察到的活动', en: 'Observed Activity', fr: 'Activité observée', ru: 'Наблюдаемая активность', es: 'Actividad observada', ja: '観測されたアクティビティ' },
   'agents.definitionsTab': { zh: '定义', en: 'Definitions', fr: 'Définitions', ru: 'Определения', es: 'Definiciones', ja: '定義' },
   'agents.noObserved': { zh: '尚未观察到 Agent 生命周期证据。Discovery 不计为执行。', en: 'No Agent lifecycle evidence observed yet. Discovery does not count as execution.', fr: 'Aucune preuve de cycle de vie Agent observée. La découverte ne compte pas comme exécution.', ru: 'Свидетельств жизненного цикла Agent пока нет. Обнаружение не считается выполнением.', es: 'Aún no hay evidencia del ciclo de vida de Agents. El descubrimiento no cuenta como ejecución.', ja: 'Agent のライフサイクル証拠はまだありません。Discovery は実行として数えません。' },
@@ -232,6 +233,10 @@ export const messages = {
   'team.templateAdoption': { zh: '模板采用率', en: 'Template adoption', fr: 'Adoption du modèle', ru: 'Внедрение шаблона', es: 'Adopción de plantilla', ja: 'テンプレート採用率' },
   'team.templateDrift': { zh: '模板漂移项目', en: 'Template drift', fr: 'Dérive du modèle', ru: 'Дрейф шаблона', es: 'Desviación de plantilla', ja: 'テンプレートドリフト' },
   'team.templateUpgrades': { zh: '待模板升级', en: 'Pending template upgrades', fr: 'Mises à niveau du modèle en attente', ru: 'Ожидающие обновления шаблона', es: 'Actualizaciones de plantilla pendientes', ja: '保留中のテンプレート更新' },
+  'team.policyViewTitle': { zh: '策略状态', en: 'Policies status', fr: 'État des politiques', ru: 'Состояние политик', es: 'Estado de las políticas', ja: 'ポリシーの状態' },
+  'team.policyViewDescription': { zh: '策略编辑仍可通过本地 CLI 和 API 进行。', en: 'Policy editing remains available through the local CLI and API.', fr: 'La modification des politiques reste disponible via la CLI et l’API locales.', ru: 'Редактирование политик доступно через локальные CLI и API.', es: 'La edición de políticas sigue disponible mediante la CLI y la API locales.', ja: 'ポリシーの編集はローカル CLI と API から引き続き利用できます。' },
+  'team.templateViewTitle': { zh: '模板状态', en: 'Templates status', fr: 'État des modèles', ru: 'Состояние шаблонов', es: 'Estado de las plantillas', ja: 'テンプレートの状態' },
+  'team.templateViewDescription': { zh: '模板编辑仍可通过本地 CLI 和 API 进行。', en: 'Template editing remains available through the local CLI and API.', fr: 'La modification des modèles reste disponible via la CLI et l’API locales.', ru: 'Редактирование шаблонов доступно через локальные CLI и API.', es: 'La edición de plantillas sigue disponible mediante la CLI y la API locales.', ja: 'テンプレートの編集はローカル CLI と API から引き続き利用できます。' },
   'team.lastCollector': { zh: '最近 Collector 活动：{{time}}', en: 'Latest Collector activity: {{time}}', fr: 'Dernière activité Collector : {{time}}', ru: 'Последняя активность Collector: {{time}}', es: 'Última actividad del Collector: {{time}}', ja: '最新 Collector アクティビティ：{{time}}' },
   'mode.loadingEvents': { zh: '正在加载本地事件…', en: 'Loading local events…', fr: 'Chargement des événements locaux…', ru: 'Загрузка локальных событий…', es: 'Cargando eventos locales…', ja: 'ローカルイベントを読み込み中…' },
   'mode.demoDataset': { zh: '演示数据集', en: 'Demo dataset', fr: 'Jeu de données de démonstration', ru: 'Демонстрационные данные', es: 'Conjunto de datos de demostración', ja: 'デモデータセット' },
@@ -399,6 +404,8 @@ export const messages = {
   'runs.prompts': { zh: '提示词', en: 'Prompts', fr: 'Invites', ru: 'Промпты', es: 'Prompts', ja: 'プロンプト' },
   'runs.toolCalls': { zh: '工具调用', en: 'Tool calls', fr: 'Appels d’outils', ru: 'Вызовы инструментов', es: 'Llamadas a herramientas', ja: 'ツール呼び出し' },
   'runs.subagents': { zh: '子代理', en: 'Subagents', fr: 'Sous-agents', ru: 'Субагенты', es: 'Subagentes', ja: 'サブエージェント' },
+  'runs.noMatchesTitle': { zh: '没有运行符合当前筛选。', en: 'No runs match the current filters.', fr: 'Aucune exécution ne correspond aux filtres actuels.', ru: 'Нет запусков, соответствующих текущим фильтрам.', es: 'Ninguna ejecución coincide con los filtros actuales.', ja: '現在のフィルターに一致する実行はありません。' },
+  'runs.noMatchesDescription': { zh: '更改或清除筛选条件以查看其他运行。', en: 'Change or clear filters to see other runs.', fr: 'Modifiez ou effacez les filtres pour afficher d’autres exécutions.', ru: 'Измените или сбросьте фильтры, чтобы увидеть другие запуски.', es: 'Cambia o borra los filtros para ver otras ejecuciones.', ja: 'フィルターを変更または解除して、ほかの実行を表示してください。' },
 
 
   'activity.title': { zh: '最近活动', en: 'Recent activity', fr: 'Activité récente', ru: 'Недавняя активность', es: 'Actividad reciente', ja: '最近のアクティビティ' },
@@ -622,7 +629,7 @@ export const messages = {
   'settings.encryption': { zh: '静态加密', en: 'Encryption at rest', fr: 'Chiffrement au repos', ru: 'Шифрование при хранении', es: 'Cifrado en reposo', ja: '保存時の暗号化' },
   'settings.filesystemEncryption': { zh: '无应用层加密；依赖操作系统与文件系统保护', en: 'No application-level encryption; relies on OS and filesystem protection', fr: 'Aucun chiffrement applicatif ; dépend de la protection du système et du système de fichiers', ru: 'Шифрования на уровне приложения нет; защита зависит от ОС и файловой системы', es: 'Sin cifrado a nivel de aplicación; depende de la protección del sistema y del sistema de archivos', ja: 'アプリ層の暗号化なし。OS とファイルシステムの保護に依存します' },
   'settings.advanced': { zh: '高级', en: 'Advanced', fr: 'Avancé', ru: 'Дополнительно', es: 'Avanzado', ja: '詳細設定' },
-  'settings.advancedDescription': { zh: '打开团队、策略、模板、PromptHub 与审计的现有高级控制。', en: 'Open the existing advanced controls for Team, Policies, Templates, PromptHub, and Audit.', fr: 'Ouvrez les contrôles avancés existants pour Team, Policies, Templates, PromptHub et Audit.', ru: 'Откройте существующие дополнительные разделы Team, Policies, Templates, PromptHub и Audit.', es: 'Abre los controles avanzados existentes de Team, Policies, Templates, PromptHub y Audit.', ja: 'Team、Policies、Templates、PromptHub、Audit の既存の詳細機能を開きます。' },
+  'settings.advancedDescription': { zh: '查看团队状态、PromptHub Artifact、发布审计与开发者诊断。', en: 'Open Team status views, PromptHub Artifacts, release audit controls, and developer diagnostics.', fr: 'Consultez l’état Team, les Artifacts PromptHub, l’audit des versions et les diagnostics développeur.', ru: 'Откройте состояние Team, Artifact PromptHub, аудит релизов и диагностику разработчика.', es: 'Consulta el estado de Team, Artifacts de PromptHub, la auditoría de versiones y los diagnósticos de desarrollador.', ja: 'Team の状態、PromptHub Artifact、リリース監査、開発者診断を確認します。' },
   'settings.view': { zh: '查看', en: 'View', fr: 'Afficher', ru: 'Открыть', es: 'Ver', ja: '表示' },
 
   'registry.global': { zh: '全局', en: 'Global', fr: 'Global', ru: 'Глобальный', es: 'Global', ja: 'グローバル' },

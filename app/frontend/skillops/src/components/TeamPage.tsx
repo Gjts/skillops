@@ -39,6 +39,13 @@ type PageEnvelope<T> = {
   revision: number
 }
 
+type TeamView = 'policies' | 'templates' | null
+
+function readTeamView(): TeamView {
+  const view = new URLSearchParams(window.location.search).get('view')
+  return view === 'policies' || view === 'templates' ? view : null
+}
+
 function emptyPage<T>(): PageEnvelope<T> {
   return { items: [], page: 1, pageSize: TEAM_PAGE_SIZE, totalItems: 0, totalPages: 0, hasPrevious: false, hasNext: false, revision: 0 }
 }
@@ -52,6 +59,7 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
 
 export function TeamPage() {
   const { formatDateTime, formatNumber, t } = useI18n()
+  const [focusedView, setFocusedView] = useState<TeamView>(readTeamView)
   const [state, setState] = useState<TeamState | null>(null)
   const [catalog, setCatalog] = useState<PageEnvelope<CatalogItem>>(emptyPage)
   const [approvals, setApprovals] = useState<PageEnvelope<ApprovalItem>>(emptyPage)
@@ -97,6 +105,11 @@ export function TeamPage() {
   }, [approvalPage, catalogPage, releasePage, t])
 
   useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    const restoreView = () => setFocusedView(readTeamView())
+    window.addEventListener('popstate', restoreView)
+    return () => window.removeEventListener('popstate', restoreView)
+  }, [])
 
   const createTeam = async () => {
     setBusy(true)
@@ -138,6 +151,27 @@ export function TeamPage() {
     </div>
   )
 
+  const focusedStatus = focusedView === 'policies'
+    ? {
+        title: t('team.policyViewTitle'),
+        description: t('team.policyViewDescription'),
+        metrics: [
+          { label: t('team.policyPacks'), value: formatNumber(state.counts.policyPacks) },
+          { label: t('team.exceptions'), value: formatNumber(state.counts.exceptions) },
+        ],
+      }
+    : focusedView === 'templates'
+      ? {
+          title: t('team.templateViewTitle'),
+          description: t('team.templateViewDescription'),
+          metrics: [
+            { label: t('team.templateAdoption'), value: `${formatNumber(state.templateAdoption.adoptionRatePct)}%` },
+            { label: t('team.templateDrift'), value: formatNumber(state.templateAdoption.driftedProjects) },
+            { label: t('team.templateUpgrades'), value: formatNumber(state.templateAdoption.pendingUpgradeProjects) },
+          ],
+        }
+      : null
+
   return (
     <div className="single-page team-page">
       <div className="page-intro">
@@ -146,6 +180,10 @@ export function TeamPage() {
       </div>
       {error && <div className="data-warning" role="alert">{error}</div>}
       {status && <div className="import-status" role="status">{status}</div>}
+      {focusedStatus && <section className="panel team-entities team-focused-view" aria-label={focusedStatus.title}>
+        <header><ShieldCheck size={18} /><div><h3>{focusedStatus.title}</h3><p>{focusedStatus.description}</p></div></header>
+        <dl className="governance-metadata">{focusedStatus.metrics.map((metric) => <div key={metric.label}><dt>{metric.label}</dt><dd>{metric.value}</dd></div>)}</dl>
+      </section>}
 
       <section className="registry-summary" aria-label={t('team.summary')}>
         <article className="registry-metric"><span>{t('team.assets')}</span><strong>{formatNumber(catalog.totalItems)}</strong><p>{t('team.assetsHint')}</p></article>

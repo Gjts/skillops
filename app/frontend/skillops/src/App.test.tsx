@@ -198,14 +198,14 @@ describe('SkillOps primary flow', () => {
     expect(container.querySelector('[data-metric="Skill runs"] strong')?.getAttribute('data-value')).toBe('1,284')
   })
 
-  it('navigates between product surfaces', () => {
+  it('navigates between product surfaces', async () => {
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: 'Assets' }))
     expect(screen.getByRole('heading', { level: 1, name: 'Assets' })).toBeTruthy()
-    expect(screen.getByRole('heading', { level: 2, name: 'Installed Skill inventory' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { level: 2, name: 'Installed Skill inventory' })).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Benchmarks' }))
-    expect(screen.getByRole('heading', { level: 2, name: 'Compare a new open-source Skill' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { level: 2, name: 'Compare a new open-source Skill' })).toBeTruthy()
     expect(document.querySelector('.sidebar')?.classList.contains('is-open')).toBe(false)
   })
 
@@ -219,6 +219,73 @@ describe('SkillOps primary flow', () => {
     window.history.pushState({}, '', '/skills')
     await act(async () => { window.dispatchEvent(new PopStateEvent('popstate')) })
     expect(screen.getByRole('heading', { level: 1, name: 'Assets' })).toBeTruthy()
+  })
+
+  it('preserves the distinct advanced destination when leaving Settings', async () => {
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await screen.findByText('0 events')
+
+    const advanced = screen.getByRole('heading', { level: 2, name: 'Advanced' }).closest('section') as HTMLElement
+    fireEvent.click(within(advanced).getByRole('button', { name: 'Policies' }))
+    expect(window.location.pathname).toBe('/settings')
+    expect(new URLSearchParams(window.location.search).get('section')).toBe('advanced-team')
+    expect(new URLSearchParams(window.location.search).get('view')).toBe('policies')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    const restoredAdvanced = screen.getByRole('heading', { level: 2, name: 'Advanced' }).closest('section') as HTMLElement
+    fireEvent.click(within(restoredAdvanced).getByRole('button', { name: 'PromptHub' }))
+    expect(window.location.pathname).toBe('/assets')
+    expect(new URLSearchParams(window.location.search).get('artifactKind')).toBe('prompt')
+    expect(new URLSearchParams(window.location.search).get('artifactSource')).toBe('prompthub')
+  })
+
+  it('refreshes the focused Team subview when same-page navigation changes its query', async () => {
+    const team = {
+      revision: 1,
+      team: { id: 'local-team', name: 'Local Team' },
+      counts: { workspaces: 0, projects: 0, environments: 0, activeMembers: 0, activeDevices: 0, policyPacks: 1, exceptions: 0 },
+      lastCollectorAt: null,
+      capabilities: { deployment: 'local', networkApi: false, sso: false, scim: false },
+      templateAdoption: { totalProjects: 1, adoptedProjects: 1, currentProjects: 1, driftedProjects: 0, pendingUpgradeProjects: 0, adoptionRatePct: 100 },
+    }
+    const emptyPage = { items: [], page: 1, pageSize: 20, totalItems: 0, totalPages: 0, hasPrevious: false, hasNext: false, revision: 1 }
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => {
+      const url = new URL(input, 'http://localhost')
+      if (url.pathname === '/api/team') return Promise.resolve(okResponse(team))
+      if (url.pathname === '/api/team/catalog' || url.pathname === '/api/team/queues') return Promise.resolve(okResponse(emptyPage))
+      return Promise.resolve(okResponse(apiBody(input)))
+    }))
+
+    render(<App />)
+    const advanced = document.querySelector<HTMLDetailsElement>('details.advanced-navigation')!
+    fireEvent.click(within(advanced).getByText('Advanced'))
+    fireEvent.click(within(advanced).getByRole('button', { name: 'Policies' }))
+    expect(await screen.findByRole('region', { name: 'Policies status' })).toBeTruthy()
+
+    fireEvent.click(within(advanced).getByRole('button', { name: 'Templates' }))
+
+    expect(new URLSearchParams(window.location.search).get('view')).toBe('templates')
+    expect(await screen.findByRole('region', { name: 'Templates status' })).toBeTruthy()
+    expect(screen.queryByRole('region', { name: 'Policies status' })).toBeNull()
+  })
+
+  it('refreshes Artifact filters when same-page navigation changes its query', async () => {
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Assets' }))
+    await screen.findByRole('heading', { level: 3, name: 'Unified Artifact Registry' })
+    const registry = document.querySelector<HTMLElement>('.artifact-registry')!
+    expect((within(registry).getByLabelText('Type') as HTMLSelectElement).value).toBe('all')
+    expect((within(registry).getByLabelText('Source') as HTMLSelectElement).value).toBe('all')
+
+    const advanced = document.querySelector<HTMLDetailsElement>('details.advanced-navigation')!
+    fireEvent.click(within(advanced).getByText('Advanced'))
+    fireEvent.click(within(advanced).getByRole('button', { name: 'PromptHub' }))
+
+    expect(new URLSearchParams(window.location.search).get('artifactKind')).toBe('prompt')
+    expect(new URLSearchParams(window.location.search).get('artifactSource')).toBe('prompthub')
+    expect((within(registry).getByLabelText('Type') as HTMLSelectElement).value).toBe('prompt')
+    expect((within(registry).getByLabelText('Source') as HTMLSelectElement).value).toBe('prompthub')
   })
 
   it('uses the personal developer IA while preserving legacy routes', async () => {
@@ -537,6 +604,11 @@ describe('SkillOps primary flow', () => {
     expect(await screen.findByText('1–1 of 1 run')).toBeTruthy()
     expect(new URLSearchParams(window.location.search).get('page')).toBe('1')
     expect(new URLSearchParams(window.location.search).get('query')).toBe('needle-project')
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search runs' }), { target: { value: 'no-match' } })
+    expect(await screen.findByText('No runs match the current filters.')).toBeTruthy()
+    expect(screen.getByText('Change or clear filters to see other runs.')).toBeTruthy()
+    expect(screen.queryByText('Connect Codex or Claude Code, or import an event file to start recording activity.')).toBeNull()
   })
 
   it('rejects malformed run items from the local API', async () => {
@@ -953,12 +1025,86 @@ describe('SkillOps primary flow', () => {
     render(<App />)
     expect(await screen.findByText('detail-skill')).toBeTruthy()
     expect(fetchMock.mock.calls.some(([input]) => new URL(input, 'http://localhost').pathname === '/api/runs/~.')).toBe(false)
+    const historyLength = window.history.length
     fireEvent.click(screen.getByRole('button', { name: /View run \. for detail-skill/ }))
 
     const dialog = await screen.findByRole('dialog', { name: 'detail-skill' })
     expect(await within(dialog).findByText('2 / 3 events')).toBeTruthy()
     expect(within(dialog).getByText('Showing 2 of 3 correlated events.')).toBeTruthy()
+    expect(new URLSearchParams(window.location.search).get('run')).toBe('.')
+    expect(window.history.length).toBe(historyLength + 1)
     expect(fetchMock.mock.calls.some(([input]) => new URL(input, 'http://localhost').pathname === '/api/runs/~.')).toBe(true)
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close run detail' }))
+    expect(new URLSearchParams(window.location.search).has('run')).toBe(false)
+  })
+
+  it('restores a run detail deep link without stripping its run id', async () => {
+    const runId = `codex-${'x'.repeat(160)}`
+    const run = {
+      id: runId,
+      event: 'skill.completed',
+      skillId: 'deep-linked-skill',
+      runtime: 'codex',
+      timestamp: '2026-07-23T12:00:02.000Z',
+      outcome: 'success',
+    }
+    window.history.replaceState({}, '', `/activity?tab=runs&run=${encodeURIComponent(runId)}`)
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => {
+      const url = new URL(input, 'http://localhost')
+      if (url.pathname === '/api/runs') return Promise.resolve(okResponse({ items: [run], page: 1, pageSize: 20, totalItems: 1, totalPages: 1, hasPrevious: false, hasNext: false }))
+      if (url.pathname === `/api/runs/~${runId}`) return Promise.resolve(okResponse({ run, events: [run], totalEvents: 1, truncated: false }))
+      return Promise.resolve(okResponse(apiBody(input)))
+    }))
+
+    render(<App />)
+
+    expect(await screen.findByRole('dialog', { name: 'deep-linked-skill' })).toBeTruthy()
+    expect(new URLSearchParams(window.location.search).get('run')).toBe(runId)
+
+    await act(async () => {
+      window.history.pushState({}, '', '/activity?tab=runs')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    expect(screen.queryByRole('dialog', { name: 'deep-linked-skill' })).toBeNull()
+
+    await act(async () => {
+      window.history.pushState({}, '', `/activity?tab=runs&run=${encodeURIComponent(runId)}`)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    expect(await screen.findByRole('dialog', { name: 'deep-linked-skill' })).toBeTruthy()
+  })
+
+  it('restores a run detail when browser navigation returns from another page', async () => {
+    const runId = 'codex-back-navigation'
+    const run = {
+      id: runId,
+      event: 'skill.completed',
+      skillId: 'back-navigation-skill',
+      runtime: 'codex',
+      timestamp: '2026-07-23T12:00:02.000Z',
+      outcome: 'success',
+    }
+    const activityHref = `/activity?tab=runs&run=${runId}`
+    window.history.replaceState({}, '', activityHref)
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => {
+      const url = new URL(input, 'http://localhost')
+      if (url.pathname === '/api/runs') return Promise.resolve(okResponse({ items: [run], page: 1, pageSize: 20, totalItems: 1, totalPages: 1, hasPrevious: false, hasNext: false }))
+      if (url.pathname === `/api/runs/~${runId}`) return Promise.resolve(okResponse({ run, events: [run], totalEvents: 1, truncated: false }))
+      return Promise.resolve(okResponse(apiBody(input)))
+    }))
+
+    render(<App />)
+    expect(await screen.findByRole('dialog', { name: 'back-navigation-skill' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    expect(screen.getByRole('heading', { level: 1, name: 'Settings' })).toBeTruthy()
+
+    await act(async () => {
+      window.history.replaceState({}, '', activityHref)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+
+    expect(await screen.findByRole('dialog', { name: 'back-navigation-skill' })).toBeTruthy()
+    expect(new URLSearchParams(window.location.search).get('run')).toBe(runId)
   })
 
   it('restores the full loaded state when a page or filter request fails', async () => {
@@ -1151,6 +1297,31 @@ describe('SkillOps primary flow', () => {
     expect(within(connectionDialog).queryByText('npm run claude:install')).toBeNull()
     fireEvent.click(await within(connectionDialog).findByRole('checkbox', { name: 'I reviewed the redacted dry-run preview.' }))
     expect(within(connectionDialog).getByText('npm run claude:install')).toBeTruthy()
+  })
+
+  it('shows the safe API message when clearing a partial event source fails', async () => {
+    const event = { id: 'partial-event', event: 'skill.completed', skillId: 'review', runtime: 'codex', timestamp: new Date().toISOString(), outcome: 'success' }
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string, init?: RequestInit) => {
+      const url = new URL(input, 'http://localhost')
+      if (url.pathname === '/api/events' && init?.method === 'DELETE') {
+        return Promise.resolve({
+          ok: false,
+          status: 409,
+          headers: new Headers(),
+          json: async () => ({ error: { code: 'PARTIAL_SOURCE', message: 'Partial event sources cannot be cleared.' } }),
+        })
+      }
+      return Promise.resolve(okResponse(apiBody(input, [event])))
+    }))
+
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await screen.findByText('1 events')
+    fireEvent.click(screen.getByRole('button', { name: 'Clear event data' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Clear and create backup' }))
+
+    expect(await screen.findByText('Clear failed: Partial event sources cannot be cleared.')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('[object Object]')
   })
 
   it('uses scanner source metadata for project Skills', async () => {

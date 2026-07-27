@@ -138,8 +138,17 @@ describe('theme accessibility', () => {
   })
 
   it('keeps keyboard focus visible, managed views responsive, and reduced motion bounded', () => {
+    const tabletStart = styles.indexOf('@media (max-width: 920px)')
+    const mobileStart = styles.indexOf('@media (max-width: 680px)', tabletStart)
+    const tablet = styles.slice(tabletStart, mobileStart)
+    const mobile = styles.slice(mobileStart, styles.indexOf('@media (prefers-reduced-motion: reduce)', mobileStart))
     expect(styles).toMatch(/button:focus-visible,[^{]*a:focus-visible,[^{]*summary:focus-visible[^{]*\{[^}]*outline:\s*2px solid var\(--accent\)/)
     expect(styles).toMatch(/@media \(max-width: 900px\)\s*{[^}]*\.managed-suite-grid\s*{\s*grid-template-columns:\s*1fr;/s)
+    expect(tablet).toMatch(/\.runs-toolbar\s*{\s*grid-template-columns:\s*1fr;/)
+    expect(tablet).toMatch(/\.full-activity \.activity-list\s*{\s*grid-template-columns:\s*1fr;/)
+    expect(mobile).toMatch(/\.page-intro\s*{[^}]*flex-direction:\s*column;/)
+    expect(mobile).toMatch(/\.agents-toolbar\s*{[^}]*grid-template-columns:\s*1fr;/)
+    expect(mobile).toMatch(/\.registry-toolbar select\s*{\s*min-width:\s*0;/)
     expect(styles).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*{\s*\*, \*::before, \*::after\s*{[^}]*animation-duration:\s*\.01ms !important;/s)
   })
 

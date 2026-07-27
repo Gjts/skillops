@@ -68,5 +68,10 @@ export default defineConfig({
   build: {
     outDir: path.resolve('dist'),
     emptyOutDir: true,
+    rolldownOptions: {
+      output: {
+        manualChunks: (id) => id.endsWith('/src/i18n/messages.ts') ? 'i18n-catalog' : undefined,
+      },
+    },
   },
 })

@@ -31,7 +31,7 @@ const navigation: Array<{ id: PageId; label: MessageKey; icon: typeof Activity }
 interface SidebarProps {
   page: PageId
   open: boolean
-  onNavigate: (page: PageId) => void
+  onNavigate: (page: PageId, href?: string) => void
   onToggle: () => void
   onClose: () => void
 }
@@ -99,11 +99,12 @@ export function Sidebar({ page, open, onNavigate, onToggle, onClose }: SidebarPr
         </nav>
         <details className="advanced-navigation">
           <summary>{t('nav.advanced')}</summary>
-          <button type="button" onClick={() => { onNavigate('team'); close() }}><Users size={16} />{t('nav.team')}</button>
-          <button type="button" onClick={() => { onNavigate('team'); close() }}><ShieldCheck size={16} />{t('nav.policies')}</button>
-          <button type="button" onClick={() => { onNavigate('team'); close() }}><Boxes size={16} />{t('nav.templates')}</button>
-          <button type="button" onClick={() => { onNavigate('assets'); close() }}><Bot size={16} />{t('nav.promptHub')}</button>
-          <button type="button" onClick={() => { onNavigate('team'); close() }}><Activity size={16} />{t('nav.audit')}</button>
+          <button type="button" onClick={() => { onNavigate('team', '/settings?section=advanced-team'); close() }}><Users size={16} />{t('nav.team')}</button>
+          <button type="button" onClick={() => { onNavigate('team', '/settings?section=advanced-team&view=policies'); close() }}><ShieldCheck size={16} />{t('nav.policies')}</button>
+          <button type="button" onClick={() => { onNavigate('team', '/settings?section=advanced-team&view=templates'); close() }}><Boxes size={16} />{t('nav.templates')}</button>
+          <button type="button" onClick={() => { onNavigate('assets', '/assets?artifactKind=prompt&artifactSource=prompthub'); close() }}><Bot size={16} />{t('nav.promptHub')}</button>
+          <button type="button" onClick={() => { onNavigate('releases', '/releases'); close() }}><Activity size={16} />{t('nav.audit')}</button>
+          <button type="button" onClick={() => { onNavigate('assets', '/assets?view=diagnostics'); close() }}><Settings size={16} />{t('nav.diagnostics')}</button>
         </details>
         <div className="sidebar-bottom">
           <ThemeChooser />

@@ -62,6 +62,8 @@ describe('ConflictDetailPage', () => {
     fireEvent.change(screen.getByLabelText('Action'), { target: { value: 'remove' } })
     fireEvent.click(screen.getByRole('button', { name: 'Generate Action Plan' }))
     const confirmation = await screen.findByRole('checkbox')
+    expect(confirmation.closest('label')?.textContent).toContain(definitions[0].sourcePath)
+    expect(confirmation.closest('label')?.textContent).not.toContain('{{path}}')
     const apply = screen.getByRole('button', { name: 'Apply confirmed action' })
     expect((apply as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(confirmation)
