@@ -46,17 +46,20 @@ export function assertLocalBrowserRequest(request) {
   return assertLocalApiRequest(request, { requireJson: true })
 }
 
-export async function readEvaluationJsonBody(request) {
+export async function readEvaluationJsonBody(request, {
+  maxBytes = MAX_EVALUATION_REQUEST_BYTES,
+  limitMessage = 'Evaluation request body exceeds the 512 KB limit.',
+} = {}) {
   const declaredLength = Number(requestHeader(request, 'content-length'))
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_EVALUATION_REQUEST_BYTES) {
-    throw new EvaluationError('Evaluation request body exceeds the 512 KB limit.', 413)
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new EvaluationError(limitMessage, 413)
   }
   const chunks = []
   let total = 0
   for await (const chunk of request) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
     total += bytes.byteLength
-    if (total > MAX_EVALUATION_REQUEST_BYTES) throw new EvaluationError('Evaluation request body exceeds the 512 KB limit.', 413)
+    if (total > maxBytes) throw new EvaluationError(limitMessage, 413)
     chunks.push(bytes)
   }
   try {

@@ -55,7 +55,7 @@ export function SettingsPage({ connections, onConnect, onRefresh, onClear, onNav
       setSummary({ generatedAt: result.generatedAt ?? new Date().toISOString(), count: result.count ?? 0, lastRuntimeEventAt: result.lastRuntimeEventAt ?? null, sourceStatus: result.sourceStatus === 'partial' ? 'partial' : 'ok' })
       setSummaryError(null)
     } catch (error) {
-      setSummaryError(error instanceof Error ? error.message : t('common.unknown'))
+      setSummaryError(error instanceof SyntaxError ? t('errors.localUnavailable') : error instanceof Error ? error.message : t('errors.localUnavailable'))
     } finally {
       setSummaryLoading(false)
     }
@@ -70,7 +70,7 @@ export function SettingsPage({ connections, onConnect, onRefresh, onClear, onNav
       setAiSettings(result)
       setAiSettingsError(null)
     } catch (error) {
-      setAiSettingsError(error instanceof Error ? error.message : t('settings.aiSettingsUnavailable'))
+      setAiSettingsError(error instanceof SyntaxError ? t('settings.aiSettingsUnavailable') : error instanceof Error ? error.message : t('settings.aiSettingsUnavailable'))
     }
   }, [t])
 

@@ -485,6 +485,64 @@ describe('SkillOps primary flow', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/import', expect.objectContaining({ method: 'POST' }))
   })
 
+  it('shows the structured API message when an import request is rejected', async () => {
+    window.history.replaceState({}, '', '/runs')
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string, init?: RequestInit) => {
+      const url = new URL(input, 'http://localhost')
+      if (url.pathname === '/api/import' && init?.method === 'POST') {
+        return Promise.resolve({
+          ok: false,
+          status: 413,
+          headers: new Headers(),
+          json: async () => ({ error: { code: 'PAYLOAD_TOO_LARGE', message: 'Event import request body exceeds the 32 MiB limit.' } }),
+        })
+      }
+      if (url.pathname === '/api/runs') {
+        return Promise.resolve(okResponse({ items: [], page: 1, pageSize: 20, totalItems: 0, totalPages: 0, hasPrevious: false, hasNext: false }))
+      }
+      return Promise.resolve(okResponse(apiBody(input)))
+    }))
+    const { container } = render(<App />)
+    await screen.findByText('Local events')
+    const file = new File([JSON.stringify([{ id: 'too-large', event: 'skill.completed', skillId: 'review', runtime: 'codex', timestamp: new Date().toISOString(), outcome: 'success' }])], 'events.json', { type: 'application/json' })
+
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [file] } })
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('Import failed: Event import request body exceeds the 32 MiB limit.')
+    expect(alert.textContent).not.toContain('[object Object]')
+  })
+
+  it('hides non-JSON import response details', async () => {
+    window.history.replaceState({}, '', '/runs')
+    const parseError = `Unexpected token '<', "<!doctype "... is not valid JSON`
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string, init?: RequestInit) => {
+      const url = new URL(input, 'http://localhost')
+      if (url.pathname === '/api/import' && init?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => { throw new SyntaxError(parseError) },
+        })
+      }
+      if (url.pathname === '/api/runs') {
+        return Promise.resolve(okResponse({ items: [], page: 1, pageSize: 20, totalItems: 0, totalPages: 0, hasPrevious: false, hasNext: false }))
+      }
+      return Promise.resolve(okResponse(apiBody(input)))
+    }))
+    const { container } = render(<App />)
+    await screen.findByText('Local events')
+    const file = new File([JSON.stringify([{ id: 'offline', event: 'skill.completed', skillId: 'review', runtime: 'codex', timestamp: new Date().toISOString(), outcome: 'success' }])], 'events.json', { type: 'application/json' })
+
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [file] } })
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('Could not import this event file.')
+    expect(alert.textContent).not.toContain(parseError)
+  })
+
+
   it.each([
     { count: 0, firstLabel: '0–0 of 0 runs', lastLabel: null, lastCount: 0 },
     { count: 1, firstLabel: '1–1 of 1 run', lastLabel: null, lastCount: 1 },
@@ -626,6 +684,24 @@ describe('SkillOps primary flow', () => {
 
     expect((await screen.findByRole('alert')).textContent).toContain('Could not load runs: The runs response was invalid.')
   })
+
+  it('hides non-JSON run response details', async () => {
+    window.history.replaceState({}, '', '/runs')
+    const parseError = `Unexpected token '<', "<!doctype "... is not valid JSON`
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string) => Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => { if (input.startsWith('/api/runs')) throw new SyntaxError(parseError); return [] },
+    })))
+
+    render(<App />)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('Could not load runs')
+    expect(alert.textContent).not.toContain(parseError)
+  })
+
 
   it('restores page two and ignores an older page-three response after rapid navigation', async () => {
     window.history.replaceState({}, '', '/runs?page=2&pageSize=20&sort=timestamp_desc')

@@ -271,8 +271,12 @@ Example response:
 
 ### `POST /api/import`
 
-Accepts a JSON event array. The complete batch is normalized first. Existing
-event IDs and repeated IDs in the batch are skipped.
+Accepts a JSON event array up to 32 MiB. The complete batch is normalized
+before any append. Existing event IDs and repeated IDs in the batch are
+skipped.
+
+Oversized bodies return `413` without appending events. Other JSON endpoints
+retain the shared 512,000-byte request limit.
 
 Example response:
 

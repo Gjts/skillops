@@ -17,6 +17,7 @@ import { parseRegistryScanQuery, projectRegistryScan } from './registry-scan-pro
 import { scanSkillInventory } from './skill-scanner.mjs'
 
 const ROUTES = new Set(['/api/connections', '/api/scan', '/api/events', '/api/import'])
+const MAX_EVENT_IMPORT_REQUEST_BYTES = 32 * 1024 * 1024
 const scanSnapshots = new WeakMap()
 
 function requireMethod(request, response, allowed) {
@@ -25,9 +26,9 @@ function requireMethod(request, response, allowed) {
   throw new EvaluationError('Method not allowed.', 405)
 }
 
-async function boundedJson(request, message) {
+async function boundedJson(request, message, options) {
   try {
-    return await readEvaluationJsonBody(request)
+    return await readEvaluationJsonBody(request, options)
   } catch (error) {
     if (error instanceof EvaluationError) throw error
     throw new EvaluationError(message, 400)
@@ -119,7 +120,10 @@ export async function handleLocalDataApi(request, response, pathname, {
       sendJson(response, 200, projectRegistryScan(snapshot, filters, generatedAt))
     } else if (pathname === '/api/import') {
       requireMethod(request, response, ['POST'])
-      const created = await appendEvents(validatedEvents(await boundedJson(request, 'Import payload is invalid.'), true))
+      const created = await appendEvents(validatedEvents(await boundedJson(request, 'Import payload is invalid.', {
+        maxBytes: MAX_EVENT_IMPORT_REQUEST_BYTES,
+        limitMessage: 'Event import request body exceeds the 32 MiB limit.',
+      }), true))
       sendJson(response, 201, { created, importedCount: created.length })
     } else if (request.method === 'GET') {
       const mode = new URL(request.url || pathname, 'http://127.0.0.1').searchParams

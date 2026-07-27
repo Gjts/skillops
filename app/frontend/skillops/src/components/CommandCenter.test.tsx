@@ -214,6 +214,21 @@ describe('Command Center', () => {
     expect(measure).toHaveBeenCalledWith('skillops:primary-content', 'skillops:data-received', 'skillops:primary-content-ready')
   })
 
+  it('hides static HTML fallback parse details when the local API is unavailable', async () => {
+    const parseError = `Unexpected token '<', "<!doctype "... is not valid JSON`
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => { throw new SyntaxError(parseError) },
+    }))
+
+    render(<CommandCenter runtime="all" days={7} onOpen={() => undefined} />)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('Local aggregate unavailable.')
+    expect(alert.textContent).not.toContain(parseError)
+  })
+
   it('localizes server reason, impact, readiness code, and metric definitions', async () => {
     localStorage.setItem('skillops.locale.v1', 'zh')
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({

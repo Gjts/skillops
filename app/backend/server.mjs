@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import path from 'node:path'
+import { sendJson, setJsonApiHeaders } from './api-response.mjs'
 import { initializeConflictServices } from './conflicts/conflict-api.mjs'
 import { handleEvaluationApi, initializeGovernanceServices, initializeManagedEvaluationServices, initializeTeamControlPlane } from './skill-evaluations.mjs'
 import { handleCommandCenterApi } from './command-center.mjs'
@@ -29,7 +30,16 @@ const teamControlPlane = await initializeTeamControlPlane()
 initializeConflictServices()
 
 const server = createServer(async (request, response) => {
-  const pathname = new URL(request.url || '/', 'http://localhost').pathname
+  let pathname
+  let decodedPathname
+  try {
+    pathname = new URL(request.url || '/', 'http://localhost').pathname
+    decodedPathname = decodeURIComponent(pathname)
+  } catch {
+    setJsonApiHeaders(response)
+    sendJson(response, 400, { error: { code: 'INVALID_REQUEST', message: 'Request URL encoding is invalid.' } })
+    return
+  }
   if (await handleSetupPreflightApi(request, response, pathname)) return
   if (await handleCommandCenterApi(request, response, pathname)) return
   if (await handleAgentsApi(request, response, pathname)) return
@@ -37,7 +47,7 @@ const server = createServer(async (request, response) => {
   if (await handleRunsApi(request, response, pathname)) return
   if (await handleLocalDataApi(request, response, pathname)) return
 
-  const relative = pathname === '/' ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, '')
+  const relative = pathname === '/' ? 'index.html' : decodedPathname.replace(/^\/+/, '')
   let file = path.resolve(dist, relative)
   if (file !== dist && !file.startsWith(`${dist}${path.sep}`)) {
     response.statusCode = 403

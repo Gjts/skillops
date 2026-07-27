@@ -32,6 +32,20 @@ describe('Settings deep links', () => {
     await waitFor(() => expect((document.activeElement as HTMLElement)?.dataset.settingsSection).toBe(expected))
   })
 
+  it('hides static HTML fallback parse details when local APIs are unavailable', async () => {
+    const parseError = `Unexpected token '<', "<!doctype "... is not valid JSON`
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => { throw new SyntaxError(parseError) },
+    })))
+    render(<SettingsPage connections={[]} onConnect={() => undefined} onRefresh={() => undefined} onClear={async () => ({ removed: 0 })} onNavigate={() => undefined} />)
+
+    expect(await screen.findByText('The local event API is unavailable.')).toBeTruthy()
+    expect(await screen.findByText('The AI settings API is unavailable.')).toBeTruthy()
+    expect(screen.queryByText(parseError)).toBeNull()
+  })
+
   it('warns when the event summary was recovered from a partial source', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string) => ({
       ok: true,

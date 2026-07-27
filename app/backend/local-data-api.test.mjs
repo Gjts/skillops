@@ -8,6 +8,14 @@ const events = [
   { id: 'discovery', event: 'skill.discovered', skillId: 'review', runtime: 'codex', timestamp: '2026-07-25T11:59:00.000Z' },
   { id: 'terminal', event: 'skill.completed', skillId: 'review', runtime: 'codex', timestamp: '2026-07-25T11:58:00.000Z' },
 ]
+const largeImportEvents = Array.from({ length: 3_600 }, (_, index) => ({
+  id: `bulk-${index}`,
+  event: 'skill.completed',
+  skillId: `skill-${index}`,
+  runtime: 'codex',
+  timestamp: '2026-07-25T11:58:00.000Z',
+  outcome: 'success',
+}))
 
 function request(url, method = 'GET', body) {
   const bytes = Buffer.from(body === undefined ? '' : JSON.stringify(body))
@@ -143,6 +151,76 @@ describe('local data API', () => {
     expect((await call('/api/events', 'POST', events[1])).response.statusCode).toBe(201)
     expect((await call('/api/events', 'DELETE')).json).toEqual({ cleared: 2 })
     expect((await call('/api/import', 'POST', events)).json.importedCount).toBe(2)
+  })
+
+  it('accepts a valid event import larger than the shared 512 KB request limit', async () => {
+    const payloadBytes = Buffer.byteLength(JSON.stringify(largeImportEvents))
+    expect(payloadBytes).toBeGreaterThan(512_000)
+    expect(payloadBytes).toBeLessThan(32 * 1024 * 1024)
+
+    const importServices = services()
+    const target = response()
+    await handleLocalDataApi(request('/api/import', 'POST', largeImportEvents), target, '/api/import', importServices)
+
+    expect(target.statusCode).toBe(201)
+    expect(JSON.parse(target.body).importedCount).toBe(3_600)
+    expect(importServices.appendEvents).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a declared event import larger than 32 MiB before reading or appending', async () => {
+    const importServices = services()
+    const incoming = {
+      ...request('/api/import', 'POST', []),
+      headers: {
+        host: '127.0.0.1:4173',
+        'content-type': 'application/json',
+        'content-length': String(32 * 1024 * 1024 + 1),
+      },
+      async *[Symbol.asyncIterator]() { throw new Error('oversized declared body should not be read') },
+    }
+    const target = response()
+
+    await handleLocalDataApi(incoming, target, '/api/import', importServices)
+
+    expect(target.statusCode).toBe(413)
+    expect(JSON.parse(target.body).error.message).toBe('Event import request body exceeds the 32 MiB limit.')
+    expect(importServices.appendEvents).not.toHaveBeenCalled()
+  })
+
+  it('rejects a streamed event import larger than 32 MiB before appending', async () => {
+    const importServices = services()
+    const chunk = Buffer.alloc(1024 * 1024, 0x20)
+    const incoming = {
+      ...request('/api/import', 'POST', []),
+      async *[Symbol.asyncIterator]() {
+        for (let index = 0; index < 33; index += 1) yield chunk
+      },
+    }
+    const target = response()
+
+    await handleLocalDataApi(incoming, target, '/api/import', importServices)
+
+    expect(target.statusCode).toBe(413)
+    expect(JSON.parse(target.body).error.message).toBe('Event import request body exceeds the 32 MiB limit.')
+    expect(importServices.appendEvents).not.toHaveBeenCalled()
+  })
+
+  it('validates a large import batch completely before appending any event', async () => {
+    const importServices = services()
+    const invalidBatch = [...largeImportEvents, {
+      id: 'invalid-bulk-event',
+      event: 'skill.completed',
+      skillId: 'invalid-bulk-event',
+      runtime: 'codex',
+      durationMs: 'abc',
+    }]
+    const target = response()
+
+    await handleLocalDataApi(request('/api/import', 'POST', invalidBatch), target, '/api/import', importServices)
+
+    expect(target.statusCode).toBe(400)
+    expect(JSON.parse(target.body).error.message).toContain('durationMs must be a finite number')
+    expect(importServices.appendEvents).not.toHaveBeenCalled()
   })
 
   it('returns a bounded, stable, server-filtered Registry page for large scans', async () => {
@@ -322,12 +400,15 @@ describe('local data API', () => {
     expect(target.statusCode).toBe(403)
     expect(target.body).not.toContain('10.0.0.1')
 
+    const eventServices = services()
     const large = response()
     await handleLocalDataApi({
       ...request('/api/events', 'POST', {}),
       headers: { host: '127.0.0.1:4173', 'content-type': 'application/json', 'content-length': '600000' },
-    }, large, '/api/events', services())
+    }, large, '/api/events', eventServices)
     expect(large.statusCode).toBe(413)
+    expect(JSON.parse(large.body).error.message).toBe('Evaluation request body exceeds the 512 KB limit.')
+    expect(eventServices.appendEvent).not.toHaveBeenCalled()
   })
 
   it('returns a client error when event schema validation rejects a mutation', async () => {

@@ -98,7 +98,7 @@ const importErrorKey: Record<EventFileErrorCode, MessageKey> = {
 type ImportFeedback =
   | { kind: 'success'; count: number }
   | { kind: 'error'; code: EventFileErrorCode; line?: number }
-  | { kind: 'error'; code: 'request-failed'; line?: number }
+  | { kind: 'error'; code: 'request-failed'; message?: string }
 
 
 type RunPageSize = 20 | 50 | 100
@@ -432,8 +432,9 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(incoming),
     })
-    const result = await response.json() as { importedCount?: number; error?: string }
-    if (!response.ok) throw new Error(result.error || t('errors.importStatus', { status: response.status }))
+    const result = await response.json() as { importedCount?: number; error?: string | { message?: string } }
+    const errorMessage = typeof result.error === 'string' ? result.error : result.error?.message
+    if (!response.ok) throw new Error(errorMessage || t('errors.importStatus', { status: response.status }))
     return result.importedCount ?? 0
   }
 
@@ -648,7 +649,7 @@ function RunsPage({ events, mode, runtime, days, requestedRunId, onRequestedRunH
         previousLoadedPage.current = body.page
       } catch (error) {
         if (!controller.signal.aborted && sequence === requestSequence.current) {
-          const message = error instanceof Error ? error.message : t('runs.loadFailed')
+          const message = error instanceof SyntaxError ? t('runs.loadFailed') : error instanceof Error ? error.message : t('runs.loadFailed')
           const locationKey = runLocationParams(locationState).toString()
           if (pendingPagePush.current === locationKey) pendingPagePush.current = null
           if (mode === 'loading' && apiResponded) onRunsAvailable()
@@ -769,7 +770,7 @@ function RunsPage({ events, mode, runtime, days, requestedRunId, onRequestedRunH
         if (!isRunDetailResponse(body)) throw new Error(t('runs.invalidResponse'))
         if (!controller.signal.aborted) setRunDetail(body)
       } catch (error) {
-        if (!controller.signal.aborted) setRunsError(error instanceof Error ? error.message : t('runs.loadFailed'))
+        if (!controller.signal.aborted) setRunsError(error instanceof SyntaxError ? t('runs.loadFailed') : error instanceof Error ? error.message : t('runs.loadFailed'))
       }
     })()
     return () => controller.abort()
@@ -803,7 +804,7 @@ function RunsPage({ events, mode, runtime, days, requestedRunId, onRequestedRunH
     } catch (error) {
       setImportFeedback(error instanceof EventFileError
         ? { kind: 'error', code: error.code, line: error.line }
-        : { kind: 'error', code: 'request-failed' })
+        : { kind: 'error', code: 'request-failed', message: error instanceof SyntaxError ? undefined : error instanceof Error ? error.message : undefined })
     } finally {
       setImporting(false)
     }
@@ -817,7 +818,9 @@ function RunsPage({ events, mode, runtime, days, requestedRunId, onRequestedRunH
     unit: t(result.totalItems === 1 ? 'common.run' : 'common.runs'),
   })
   const importError = importFeedback?.kind === 'error'
-    ? t(importFeedback.code === 'request-failed' ? 'runs.couldNotImport' : importErrorKey[importFeedback.code], { line: importFeedback.line ?? '' })
+    ? importFeedback.code === 'request-failed'
+      ? importFeedback.message || t('runs.couldNotImport')
+      : t(importErrorKey[importFeedback.code], { line: importFeedback.line ?? '' })
     : null
   const importStatus = importFeedback?.kind === 'success'
     ? t(importFeedback.count === 1 ? 'runs.importedOne' : 'runs.importedMany', { count: formatNumber(importFeedback.count) })

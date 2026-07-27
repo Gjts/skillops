@@ -275,7 +275,7 @@ No template API or hosted template store is introduced.
 | `GET` | `/api/runs/~:id` | Read one terminal run in a bounded 200-event correlated session/turn window that preserves the run and reports total/truncation metadata, on demand |
 | `POST` | `/api/events` | Validate and append one event |
 | `DELETE` | `/api/events` | Back up and clear active events |
-| `POST` | `/api/import` | Atomically validate/deduplicate/append an event array |
+| `POST` | `/api/import` | Atomically validate/deduplicate/append an event array up to 32 MiB |
 | `POST` | `/api/scan` | Return one filtered, bounded page from the cached live-definition scan; `refresh=1` explicitly rescans |
 | `GET` | `/api/connections` | Return one stable runtime-status page with activity and `generatedAt` |
 | `POST` | `/api/evaluations/compare` | Discover a public GitHub candidate and rank local overlaps |
@@ -361,7 +361,8 @@ interfaces without independent deployment needs.
 
 - **Runtime payload seam**: adapters accept untrusted host payload shapes and
   emit only allowlisted metadata.
-- **Import seam**: the complete JSON/JSONL batch is normalized before append.
+- **Import seam**: the complete JSON/JSONL batch is normalized before append;
+  the JSON API request is capped at 32 MiB.
 - **Filesystem seam**: the scanner tolerates missing/inaccessible conventional
   directories and prevents recursion loops through canonical paths.
 - **HTTP seam**: the interface is unauthenticated and therefore loopback-only by

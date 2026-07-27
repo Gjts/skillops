@@ -276,7 +276,7 @@ export function CommandCenter({ runtime, days, onOpen, onModeChange }: CommandCe
         onModeChange?.('local')
       } catch (loadError) {
         if (cancelled || controller.signal.aborted) return
-        const detail = loadError instanceof Error ? loadError.message : ''
+        const detail = loadError instanceof SyntaxError ? '' : loadError instanceof Error ? loadError.message : ''
         const message = detail && !/^[\[{]/.test(detail.trim()) ? detail : 'Local aggregate unavailable.'
         setError(message)
         if (!snapshot) onModeChange?.('loading', message)
