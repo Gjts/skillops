@@ -40,6 +40,13 @@ Depending on available runtime signals, SkillOps may store:
 Source paths and identifiers can still be sensitive local metadata. Treat event
 exports and backups as private files.
 
+Claude `SessionEnd` reasons are minimized to the allowlist `clear`, `resume`,
+`logout`, `prompt_input_exit`, `bypass_permissions_disabled`, and `other`;
+missing or unrecognized values become `unknown`. `normalizeEvent` validates only
+that `reason` is a string. The persisted event-store append and migration
+boundary separately canonicalizes any value outside that allowlist plus
+`unknown`, so an arbitrary host reason is not stored.
+
 ## 4. Data deliberately not collected
 
 Built-in adapters must not persist:
@@ -83,6 +90,15 @@ Artifact identities, and suite/dataset/policy hashes. Local-scan Artifact
 references replace filesystem paths with deterministic SHA-256 pseudonyms.
 Provider keys, content bodies, task text, workspace excerpts, raw outputs,
 judge responses, and raw errors are not persisted.
+
+Suite Schema v1 may declare an optional Gate with a positive-integer
+`minSampleSize` and/or a 0-through-100 `minSuiteCaseCoveragePct`; an empty Gate
+is invalid. The current Capability policy and Suite Gate are merged by taking
+the stricter maximum for each threshold. The canonical effective-policy hash
+protects Gate-policy freshness, while current Suite and dataset hashes protect
+definition freshness. Governance list/detail responses expose only the
+sanitized `effectiveGateResult`, `effectiveGates`, and `effectivePolicyHash`
+projections.
 
 A final Managed Decision persists exactly `decisionId`, `evaluationRunId`,
 `artifactId`, `candidateRefHash`, `decision`, and `recordedAt`. It cannot carry
@@ -138,6 +154,11 @@ or credentials. New installations are confined to `SKILLOPS_SKELETON_ROOT`;
 existing mutations accept only regular, non-symlink targets from the enabled
 scan inventory.
 
+The project lock, not a browser selection, is authoritative for Stable history.
+Rollback may restore only its immediate previous Stable entry. Preview and
+confirmation bind the selected Capability/Candidate and lock hashes; switching
+the Candidate invalidates both and requires a fresh preview.
+
 The Team control plane stores local entity metadata, role assignments, policy
 exceptions, and SHA-256 device-token hashes, never device-token values. A token
 is returned once, has only `collector:write`, and stops authorizing immediately
@@ -161,6 +182,9 @@ and `skillops init` rejects API keys supplied directly on the command line.
 Failed gates write nothing. File-transaction backups are random, target-adjacent
 temporary files removed before return and are never copied to SkillOps data,
 Team exports, telemetry, or API responses.
+Team Template CLI governance credentials are accepted only through
+`SKILLOPS_GOVERNANCE_TOKEN` or an environment variable named by
+`--governance-token-env`; raw command-line token values are rejected.
 
 The shared event allowlist is a persistence control, not merely a display filter.
 
@@ -271,6 +295,9 @@ text; Skill code is not executed.
 - Answer A/B ordering is stable-blinded before judging;
 - a judge winner that contradicts its normalized scores is rejected;
 - evaluation and assistant success payloads do not echo credentials, and persisted error records never contain them;
+- Managed Evaluation unknown-field errors use the fixed public message
+  `Evaluation request contains unsupported fields.`, and unsupported providers
+  use `Unsupported AI provider.`; rejected names and values are never reflected;
 - credentialed custom Base URLs require HTTPS and reject embedded credentials,
   query strings, and fragments; keyless Ollama HTTP must use loopback;
 - remote candidate and provider response bodies are byte-bounded while streaming.
@@ -310,6 +337,9 @@ exist, reducing stale-command risk after repository moves.
   atomically records the latest safe status. The replacement never writes
   through symlink/hardlink targets or copies sensitive source into a backup.
 - Readers tolerate one partial JSONL line.
+- Explicit migration can repair only a malformed final row, after first copying
+  the exact source to a timestamped backup. Middle corruption fails closed and
+  leaves the original file byte-for-byte unchanged.
 - Discovery locks have stale-lock recovery.
 - Clear/compaction rewrites use temporary files and atomic rename.
 - Material event removal creates a backup by default.

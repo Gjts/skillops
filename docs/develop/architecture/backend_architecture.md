@@ -131,7 +131,9 @@ is split behind that small interface:
   Skill metadata adaptation, and kind-specific renderers;
 - `provider-client.mjs` owns provider normalization and calls;
 - `session-evaluator.mjs` owns sequential variants, blinded judging, and
-  minimized assistant context.
+  minimized assistant context;
+- `suite-schema.mjs` owns strict Suite Schema v1 parsing, including the optional
+  per-Suite Gate override.
 
 All external evaluation JSON reaches the shared Evaluation Schema before these
 modules. The current GitHub interface and response fields remain compatible.
@@ -139,6 +141,11 @@ Prompt Artifacts have a distinct renderer seam and are not represented as
 `SKILL.md`. Tasks, prompts, and model responses are not written to disk;
 provider credentials may exist in the current request or the explicit local AI
 settings file after Save.
+
+Suite Schema v1 accepts an optional `gate` object containing
+`minSampleSize`, a positive integer, and/or `minSuiteCaseCoveragePct`, a finite
+number from 0 through 100. At least one threshold is required when `gate` is
+present; unknown Gate fields and an empty object are rejected.
 
 ### `evaluation-agent.mjs`
 
@@ -373,10 +380,21 @@ The server derives identity fields from the authoritative run. Repeating the
 same Decision is idempotent; submitting another value returns `409`, so a
 changed judgment or supplemental evidence requires a new run. The compatibility
 path `/api/evaluation-runs/:id/decision` resolves to the same store behavior.
-`create-candidate` additionally requires current passing evidence and the
-blocking `suite-case-coverage` gate at 100%. The backend derives that metric
-from persisted `casesTotal / eligibleCases`; a missing eligible count is
-`not-available` and fails closed.
+
+The effective Gate policy takes the stricter, per-threshold maximum of the
+current Capability policy and the Suite's optional `gate`. Its canonical hash
+is the Gate-policy freshness boundary. The current Suite and dataset hashes are
+separate definition freshness boundaries; changing any of the three makes
+existing evidence stale. Capability list and detail projections recompute the
+current result and expose
+`effectiveGateResult`, `effectiveGates`, and `effectivePolicyHash`; callers do
+not infer current eligibility from a stored stage or historical Gate result.
+
+`create-candidate` additionally requires a completed, current run whose overall
+Gate result passed and whose blocking `sample-size` and
+`suite-case-coverage` Gates both passed under that effective policy. The backend
+derives Suite case coverage from persisted `casesTotal / eligibleCases`; a
+missing eligible count is `not-available` and fails closed.
 
 ### Managed Decision to Capability nomination
 
@@ -406,6 +424,13 @@ authenticated-only resolver. The frontend performs a protected audit read only
 after an explicit transient Bearer token is supplied; a rejection remains a
 locked/error state rather than an empty audit.
 
+The project skeleton lock is authoritative for Stable history. Promotion places
+the former Stable at the head of `previous`; rollback can restore only that
+immediate previous entry, not an arbitrary historical Candidate. Rollback
+preview and confirmation are bound to the selected Capability/Candidate and
+current lock hashes. Switching the rollback Candidate invalidates the prior
+preview and confirmation, so the caller must preview and confirm again.
+
 ## 5. Event-store invariants
 
 ### Append behavior
@@ -424,6 +449,15 @@ locked/error state rather than an empty audit.
 - A malformed complete record or any malformed non-final record fails with an
   explicit corruption error.
 - Reading does not rewrite the source file.
+
+### Explicit migration behavior
+
+Valid legacy rows can be normalized and migrated atomically. If migration must
+repair corruption, only a malformed final row is eligible: the caller must
+enable backup, the exact original file is copied to a timestamped backup first,
+and only that final bad row is discarded. Malformed middle rows and other
+non-final corruption fail closed, and the original file remains byte-for-byte
+unchanged.
 
 ### Batch import behavior
 
@@ -530,6 +564,7 @@ Activity is calculated from non-discovery events only.
 | `CLAUDE_CONFIG_DIR` | resolved by Claude adapter | Claude effective config home |
 | `SKILLOPS_SKELETON_ROOT` | unset | Explicit managed project root for governed new-file installation |
 | `SKILLOPS_GOVERNANCE_PRINCIPALS` | unset | JSON array mapping 32+ character Bearer tokens to server-defined governance principals |
+| `SKILLOPS_GOVERNANCE_TOKEN` | unset | Request-scoped Team Template CLI Bearer token; may be replaced by `--governance-token-env <name>` and is never persisted |
 
 CC Switch configuration participates in Claude home resolution as documented in
 [runtime adapters](../integrations/runtime_adapters.md).
@@ -607,7 +642,9 @@ Migration and rollback require a clean non-default Git branch. Affected Managed
 Suites run before the compensating multi-file transaction, so a gate failure
 does not touch the project. The project lock stores references and hashes, not
 file bodies. `bin/project-template-cli.mjs` supplies the existing evaluation
-runner and rejects command-line provider keys.
+runner and rejects command-line provider keys and governance tokens. A Team
+Template nomination or approval may resolve an independently configured
+principal from an environment-named Bearer token.
 
 ## 11. Error and privacy behavior
 
@@ -627,6 +664,10 @@ runner and rejects command-line provider keys.
   endpoint receives the key.
 - Evaluation prompts, generated answers, judge rationales, and chat messages are
   returned in memory and are never appended to the event store or diagnostics.
+- Managed Evaluation requests with unknown fields return the fixed public
+  message `Evaluation request contains unsupported fields.` Unsupported
+  providers return `Unsupported AI provider.` Neither response reflects the
+  rejected field name or provider value.
 - Managed evidence contains statuses, scores, gates, and identity hashes only;
   provider keys, Artifact bodies, case inputs, raw outputs, and raw errors are
   excluded by schema and store tests.

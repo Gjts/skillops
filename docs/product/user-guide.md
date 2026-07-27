@@ -291,11 +291,24 @@ The persisted Decision contains exactly `decisionId`, `evaluationRunId`,
 same Decision returns the existing record. A different judgment or
 supplemental evidence requires a new Managed Suite run.
 
+Suite Schema v1 can define an optional `gate` containing a positive-integer
+`minSampleSize` and/or a `minSuiteCaseCoveragePct` from 0 through 100; if the
+object is present, it must contain at least one threshold. SkillOps takes the
+stricter maximum of each Suite threshold and the current Capability policy. The
+built-in Capability-policy coverage default is 100%, but the effective
+threshold always comes from that per-field merge rather than a hardcoded
+Decision rule.
+
 Suite case coverage is persisted as evaluated cases divided by the run's
-authoritative eligible-case count. **Create Candidate** requires current,
-passing evidence at exactly 100% coverage; incomplete or legacy evidence
-without an eligible-case count can only be kept, rejected, or sent back for
-more evidence.
+authoritative eligible-case count. The effective policy hash binds Gate
+thresholds, while the current Suite and dataset hashes bind the tested
+definition. Changing any of those inputs makes older evidence stale.
+Capability list and detail responses report `effectiveGateResult`,
+`effectiveGates`, and `effectivePolicyHash` for the current policy. **Create
+Candidate** requires a current run whose overall Gate result and both blocking
+`sample-size` and `suite-case-coverage` Gates passed. Incomplete or legacy
+evidence without an eligible-case count fails closed and can only be kept,
+rejected, or sent back for more evidence.
 
 Registry and PromptHub import flows may first persist an exact-revision
 **Candidate** proposal without evaluation evidence. It remains at Candidate and
@@ -375,6 +388,10 @@ SkillOps does not automatically upload the store. Backups created by clear are
 kept beside the active event file and must be removed manually if no longer
 needed.
 
+Explicit legacy-store migration can repair only a malformed final row and must
+first create a timestamped copy of the exact original. A malformed middle row
+stops migration and leaves the original file unchanged.
+
 Skill Lab evaluation content is separate from `data/events.jsonl`: tasks, chat
 messages, and generated output are not written there. Saved AI provider settings
 may exist beside that store in `data/ai-settings.json`.
@@ -439,12 +456,15 @@ root when applicable, target, hashes, Diff, backup, and recovery details.
 
 A Stable version offers **Preview deprecation and removal** and **Preview
 rollback**. Deprecation takes an exact-byte backup, removes only the selected
-file, rescans, and records `Deprecated`. Rollback restores the exact previous
-immutable Stable or just-deprecated file. If that historical version's evidence
-is stale, select it, bind a current Managed Suite run, and obtain a new
-independent approval first; rollback then atomically rebinds the lock to the new
-Evidence Hash. Failed apply or state commit compensates the file, Capability
-registry, and project lock; the append-only audit retains the failed outcome.
+file, rescans, and records `Deprecated`. The authoritative project lock permits
+rollback only to its immediate previous immutable Stable, not an arbitrary
+historical Candidate. If that version's evidence is stale, select it, bind a
+current Managed Suite run, and obtain a new independent approval first.
+Rollback preview and confirmation are bound to that selected Candidate and the
+current lock; switching Candidates invalidates both, so preview and confirm
+again. A successful rollback atomically rebinds the lock to the new Evidence
+Hash. Failed apply or state commit compensates the file, Capability registry,
+and project lock; the append-only audit retains the failed outcome.
 Opaque recovery metadata survives restarts in
 `SKILLOPS_DATA_DIR/governance-release-recoveries.json`; backup bytes remain
 beside the managed target and never enter API responses.
@@ -522,7 +542,8 @@ the run's exact baseline reference.
 
 
 Minimal shape (file `contentHash` values are computed from `content`; Artifact
-hashes are supplied explicitly):
+hashes are supplied explicitly). A Skill Artifact hash covers every committed
+regular file in the complete Skill directory, not only `SKILL.md`:
 
 ```json
 {
@@ -587,6 +608,25 @@ existing files. The command previews by default. Add `--apply` only after
 reviewing its paths, actions, hashes, conflicts, and Suite list. Divergent
 existing files block the entire operation and remain unchanged.
 
+Nomination uses the local operating-system principal unless
+`SKILLOPS_GOVERNANCE_TOKEN` is set. Approval must use a separate configured
+principal. Read the token without echoing it, expose it only to the current
+process for the approval command, and remove it afterward:
+
+```powershell
+npm run template:init -- --manifest <stable-candidate.json> --nominate
+$reviewerToken = Read-Host 'Reviewer token' -AsSecureString
+$env:TEAM_TEMPLATE_REVIEWER_TOKEN = [System.Net.NetworkCredential]::new('', $reviewerToken).Password
+try {
+  npm run template:init -- --approve --approval <approval-id> --governance-token-env TEAM_TEMPLATE_REVIEWER_TOKEN
+} finally {
+  Remove-Item Env:TEAM_TEMPLATE_REVIEWER_TOKEN -ErrorAction SilentlyContinue
+  $reviewerToken.Dispose()
+}
+```
+
+The CLI rejects a raw `--governance-token` value.
+
 For upgrades, create a clean non-default Git branch, then use `--mode migration`.
 SkillOps validates the existing template lock, rejects managed-file drift, runs
 the affected Suites, and blocks writes when any gate fails. A successful apply
@@ -626,8 +666,7 @@ This release remains a local + Git Limited Preview. P0 implementation is
 present, but the five-person validation sample, independent manual
 review/keyboard evidence, the corrected-candidate four-job matrix,
 immutable-candidate real-runtime, Broken-to-Repair, performance, browser/axe
-evidence, complete packet fields, and the dependency-risk decision remain
-external release gates.
+evidence, and complete packet fields remain external release gates.
 P1 SET/ACT/AST work stays gated until those P0 gates close. The current
 four-job cross-platform baseline is
 [GitHub Actions run 30145860716](https://github.com/Gjts/skillops/actions/runs/30145860716).

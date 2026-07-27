@@ -121,7 +121,7 @@ Command Center and Activity projections.
 | `costUsd` | finite number | Reported USD cost, not estimated by SkillOps |
 | `tokens` | finite number | Reported token count |
 | `outcome` | enum | `success`, `failed`, or `unknown` |
-| `reason` | string | Sanitized skip/failure reason |
+| `reason` | string | Persisted values: `clear`, `resume`, `logout`, `prompt_input_exit`, `bypass_permissions_disabled`, `other`, or `unknown` |
 
 `costUsd` is optional provenance, not an estimate. An absent value means
 **unreported**; imported or legacy JSONL `null` is normalized to absence, while
@@ -151,6 +151,13 @@ Evaluation cost remains separate Evaluation evidence.
 - tags must be an array of strings;
 - enum/boolean/string fields must have the documented type;
 - unsupported fields are discarded.
+
+`normalizeEvent` checks that a supplied `reason` is a string; it does not
+enum-normalize the value. The Claude adapter maps `SessionEnd.reason` only from
+`clear`, `resume`, `logout`, `prompt_input_exit`,
+`bypass_permissions_disabled`, and `other`, with absent or unrecognized values
+becoming `unknown`. Before append, batch append, or explicit migration, the
+event-store write boundary canonicalizes any other reason to `unknown`.
 
 When reading legacy JSONL, the event store assigns a deterministic
 `legacy-sha256:` ID to a row whose ID is not a non-empty string. The hash uses
@@ -225,6 +232,15 @@ potentially sensitive backup.
 valid prefix as `partial` without rewriting the file. A malformed complete
 record, semantic schema violation, or malformed non-final record is an explicit
 corruption error and is never rewritten by a read.
+
+### Legacy migration
+
+Explicit migration can persist valid normalized legacy rows and their
+deterministic IDs. If corruption must be repaired, only a malformed final row
+is eligible, backup must be enabled, and the exact original is copied to a
+timestamped backup before the atomic replacement drops that final row.
+Malformed middle rows and all other non-final corruption fail closed; migration
+does not change the original file.
 
 Every append path, including runtime adapters, desktop ingestion, CLI emission,
 and JSON/JSONL import, replaces a raw `sessionId` and any matching substring in
@@ -322,5 +338,8 @@ Do not add a generic payload/metadata object to bypass the allowlist.
 - [ ] Unknown completions remain outside the success-rate denominator.
 - [ ] Discovery events cannot appear as Activity runs or observed Agent activity.
 - [ ] Import is atomic and duplicate IDs are skipped.
+- [ ] Persisted reasons use the documented enum or `unknown`.
+- [ ] Final-row migration repair is backup-first; middle corruption leaves the
+      original file unchanged.
 - [ ] Clear and selective removal create recoverable backups.
 - [ ] New adapters emit only fields declared here.

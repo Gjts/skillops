@@ -49,7 +49,8 @@ Current evidence state:
 - [ ] `VAL-002` The audit-corrected working tree passed the deterministic
   100k/5k endpoint and 30-minute memory fixture plus local browser-network,
   UI-timing, responsive, accessibility-tree, and current axe-core checks on
-  2026-07-25/26. Endpoint p95 was 16.03/58.39 ms for Command Center/Runs;
+  2026-07-25/26. The final endpoint rerun p95 was 16.21/94.80 ms for Command
+  Center/Runs;
   foreground 1366-by-768 UI p95 was 114.70 ms, with 0/50 samples above the
   500 ms release ceiling and 1/50 above 120 ms. The isolated GP-03 UI path took
   3.337 seconds and exposed none of its injected prompt/output/raw-error
@@ -66,7 +67,8 @@ Current evidence state:
 - [ ] `VAL-003` Record the five-person first-value and decision-loop sample.
 - [ ] `VAL-004` Record independent end-to-end keyboard-only sign-off.
 - [ ] `VAL-005` Record an independent P0 Blocker / P1 Critical defect review.
-- [ ] `VAL-006` Record the RC owner's dependency-advisory decision.
+- [x] `VAL-006` Resolve the dependency advisory with a compatible scoped
+  override and record a zero-vulnerability audit.
 - [ ] `VAL-007` Complete the RC packet fields: independent executor/reviewer,
   remaining per-Golden-Path result/duration, linked issues, and
   cleanup/rollback. Exact local Runtime versions and the timed GP-03 result are

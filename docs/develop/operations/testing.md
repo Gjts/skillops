@@ -50,11 +50,22 @@ file-as-directory rejection, unavailable-vs-read-only preflight truth, retention
 of every referenced Capability run across concurrent release and cross-process
 registry activity, and Git-backed Prompt Registry validation/version handling.
 
+Focused regressions also verify Suite Schema v1 Gate bounds and non-empty
+requirements; stricter per-threshold policy merging, effective-policy hashing,
+freshness, and Governance list/detail projections; both blocking
+`sample-size` and `suite-case-coverage` requirements for **Create Candidate**;
+fixed non-reflective Managed Evaluation errors; backup-first final-row migration
+with byte-preserving failure on middle corruption; persisted reason
+canonicalization; and immediate-previous rollback with preview invalidation when
+the selected Candidate changes.
+
 ### Adapter tests
 
 Verify configuration merge, backup/idempotency/uninstall, scope resolution,
 privacy minimization, exact/heuristic detection, lifecycle closure, CC Switch
-resolution, and non-blocking error behavior.
+resolution, and non-blocking error behavior. Claude coverage includes every
+documented `SessionEnd` reason and maps absent or unrecognized values to
+`unknown`.
 
 ### Frontend tests
 
@@ -164,8 +175,8 @@ macOS/Node 22, Windows/Node 22, and Ubuntu/Node 24:
 This automated baseline does not close the five-person validation,
 independent-review/keyboard, audit-correction commit-binding,
 immutable-candidate real-runtime, Broken-to-Repair, performance, browser/axe,
-dependency-risk-decision, or complete-packet evidence gates. P1 SET/ACT/AST
-work remains gated until those P0 gates close.
+or complete-packet evidence gates. P1 SET/ACT/AST work remains gated until
+those P0 gates close.
 
 ### Pull-request Artifact gate
 
@@ -270,15 +281,23 @@ removal operation. Automated tests normally create their own temporary folders.
 ### Scenario E: Claude Code real execution
 
 Repeat Scenario D using an explicit `/skill-name` or Skill tool invocation and
-`--runtime claude-code`.
+`--runtime claude-code`. End sessions with documented reasons where practical
+and confirm only `clear`, `resume`, `logout`, `prompt_input_exit`,
+`bypass_permissions_disabled`, `other`, or the fallback `unknown` persists.
 
-### Scenario F: Import atomicity
+### Scenario F: Import atomicity and migration repair
 
 1. Prepare JSONL containing one valid and one invalid event.
 2. Import from Runs.
 3. Confirm visible error and zero appended records.
 4. Correct the file and import twice.
 5. Confirm the second import adds zero duplicate IDs.
+6. In an isolated store, append one malformed final row and run explicit legacy
+   migration with backup enabled.
+7. Confirm the exact original has a timestamped backup and only the final bad
+   row was removed.
+8. Repeat with a malformed middle row and confirm migration fails while the
+   original file remains byte-for-byte unchanged.
 
 ### Scenario G: Clear and recovery
 
@@ -316,27 +335,41 @@ adapter reference health without returning the missing absolute path.
 
 ### Scenario J: Managed Suite governance
 
-1. Run a deterministic local Suite and inspect sample/coverage metrics.
-2. Confirm persisted evidence contains hashes and sanitized status/score fields,
+1. Validate that an optional Suite Schema v1 `gate` accepts a positive
+   `minSampleSize` and/or 0-through-100 `minSuiteCaseCoveragePct`, and rejects an
+   empty Gate or an out-of-range threshold.
+2. Run a deterministic local Suite with one Suite threshold above and one below
+   the Capability policy. Confirm each effective threshold is the stricter
+   maximum and that its hash is the evidence freshness boundary.
+3. Change the Suite or dataset hash and confirm existing Release evidence turns
+   stale and cannot be rebound without a current Managed Suite run.
+4. Confirm Capability list and detail responses expose matching
+   `effectiveGateResult`, `effectiveGates`, and `effectivePolicyHash`.
+5. Confirm **Create Candidate** requires a current run whose overall result and
+   both blocking `sample-size` and `suite-case-coverage` Gates passed.
+6. Confirm persisted evidence contains hashes and sanitized status/score fields,
    not inputs, Prompt/Skill bodies, raw outputs/errors, or credentials.
-3. Record one final `create-candidate` Decision. Confirm the response contains
+7. Record one final `create-candidate` Decision. Confirm the response contains
    exactly the six public Decision fields, a same-value retry reuses it, and a
    different Decision returns `409`.
-4. Nominate twice from that run and confirm the same Release Candidate is
+8. Nominate twice from that run and confirm the same Release Candidate is
    reused; a concurrent different-target nomination must not create another.
-5. Bind later evidence and confirm `latestEvidenceRunId` changes while
+9. Bind later evidence and confirm `latestEvidenceRunId` changes while
    `originEvaluationRunId` remains fixed.
-6. Apply Team retention past the origin run and confirm origin, latest, quality,
+10. Apply Team retention past the origin run and confirm origin, latest, quality,
    and Red Team evidence references all remain resolvable. Repeat while a
    governance release transaction and a separate-process Capability registry
    write contend with pruning.
-7. Confirm approval without a configured Bearer token fails even when the local
-   OS principal is available, and confirm the owner cannot self-approve.
-8. Confirm the audit timeline begins locked, loads only with an authenticated
-   transient token, clears that token, and does not map `403` to an empty audit.
-9. Approve with a distinct configured principal, preview Canary/Stable, confirm
-   twice, and inspect the lock/backup/verification result.
-10. Roll back and confirm unrelated files are unchanged.
+11. Confirm approval without a configured Bearer token fails even when the local
+    OS principal is available, and confirm the owner cannot self-approve.
+12. Confirm the audit timeline begins locked, loads only with an authenticated
+    transient token, clears that token, and does not map `403` to an empty audit.
+13. Approve with a distinct configured principal, preview Canary/Stable, confirm
+    twice, and inspect the lock/backup/verification result.
+14. Preview rollback to the lock's immediate previous Stable. Switch the selected
+    Candidate and confirm the old preview/confirmation is rejected; preview
+    again, roll back, and confirm arbitrary older history and unrelated files
+    are unchanged.
 
 ### Scenario K: Local Prompt Registry contract
 
@@ -402,6 +435,11 @@ and remote Git commands, and must inject itself into nested Node processes.
 
 Unknown fields should be absent from the stored JSONL record, not merely hidden
 in the UI.
+
+For Managed Evaluation API rejection tests, include sentinel field names and
+provider values. Assert the public messages are exactly
+`Evaluation request contains unsupported fields.` and
+`Unsupported AI provider.`, and that neither sentinel appears in the response.
 
 ## 9. Completion gate
 
