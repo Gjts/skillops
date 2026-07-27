@@ -98,31 +98,36 @@ silently skipping a probe.
 5. Run `npm test`, `npm run build`, `npm run smoke`, and `npm audit` before
    accepting the upgrade.
 
-## Known dependency advisory
+## Dependency validation
 
-As of 2026-07-25, `npm audit --audit-level=critical` exits successfully with
-zero critical findings and reports 20 transitive findings: 13 high and seven
-moderate. The high paths cover optional local-inference archive/image packages
-(`adm-zip` and nested `sharp`), Promptfoo's YAML parser (`js-yaml`), and
-`brace-expansion` below optional Google-auth cleanup code. The moderate paths
-remain in Promptfoo's agent/MCP dependencies and `@hono/node-server`.
+As of 2026-07-26, `npm audit --omit=dev` reports zero vulnerabilities. Explicit
+npm overrides lift `adm-zip` to `0.6.0`, nested `sharp` to `0.35.3`,
+`brace-expansion` to `5.0.8`, and `@hono/node-server` to `2.0.12`. A scoped
+override also replaces only Promptfoo's exact `js-yaml@5.2.1` dependency with
+the security-fixed `5.2.2`, while preserving
+`@apidevtools/json-schema-ref-parser` on its compatible `js-yaml@4.3.0` line.
 
-On 2026-07-26, `npm view promptfoo version --json` still returned `0.121.19`,
-the exact version already pinned here; no newer upstream release was available
-to test as a non-breaking remediation.
+The scope is intentional. A broad Promptfoo-subtree YAML override also replaces
+the schema parser's v4 dependency and breaks Promptfoo's public Node import.
+Forcing Promptfoo itself to v4 fails because Promptfoo uses the v5 `setTag`
+surface. The exact-version override avoids both failures without downgrading or
+patching Promptfoo.
+
+The resulting dependency tree, the four Promptfoo contract/provider/runner/Red
+Team test files, and the full SkillOps suite pass: 78 files, 799 tests passed,
+and one platform-specific test skipped. The npm registry still reports
+`0.121.19` as the latest Promptfoo release.
 
 SkillOps does not accept request-controlled Promptfoo config files, YAML,
 filesystem patterns, executable providers, archives, images, or local model
 artifacts. It compiles the restricted Suite schema in memory, uses one explicit
 provider bridge, and does not expose Promptfoo's MCP/Hono servers. These
-controls make the reported vulnerable inputs unreachable through supported
-SkillOps requests, but do not remove the installed dependency risk.
+controls also keep unsupported parser and server surfaces outside the SkillOps
+request boundary.
 
-The compatible package-lock-only fixes were applied where available. npm's
-remaining offered remediation changes the exact Promptfoo version outside this
-tested contract, so it requires the full upgrade checklist rather than an
-automatic force-fix. Re-evaluate the findings on every Promptfoo upgrade and
-continue to reject untrusted archive/model/config inputs.
+The compatible overrides are pinned in `package.json` and the lock file.
+Re-run the full upgrade checklist on every Promptfoo change and continue to
+reject untrusted archive/model/config inputs.
 
 ## Official references
 

@@ -201,7 +201,7 @@ Start with the [system architecture](docs/develop/architecture/system_architectu
   but general RC promotion remains blocked on the five-person validation sample,
   independent defect/keyboard review, the corrected-candidate four-job matrix,
   immutable-candidate real-runtime, Broken-to-Repair, performance, browser/axe
-  evidence, the dependency-risk decision, and complete evidence-packet fields.
+  evidence, and complete evidence-packet fields.
   See the [release evidence record](docs/develop/operations/rc-evidence/v0.3.2-rc.1.md).
 - The current four-job cross-platform baseline passed on Ubuntu/Node 22,
   macOS/Node 22, Windows/Node 22, and Ubuntu/Node 24:
@@ -210,7 +210,7 @@ Start with the [system architecture](docs/develop/architecture/system_architectu
   closed; planned SET/ACT/AST work is not part of this implemented release.
 - PromptHub v1 is a read connector. It can list and diff remote versions, but cannot publish, promote, or provide the unsupported push-only and bidirectional modes.
 - Team mode remains local. SaaS tenancy, authenticated network deployment, SSO, and SCIM are deferred.
-- The pinned Promptfoo dependency inherits known transitive `npm audit` advisories. Isolation reduces exposure but does not remove dependency risk. See the [dated advisory and upgrade contract](docs/develop/integrations/promptfoo.md#known-dependency-advisory).
+- Scoped dependency overrides keep the pinned Promptfoo contract compatible while `npm audit` reports zero vulnerabilities. See the [dependency validation and upgrade contract](docs/develop/integrations/promptfoo.md#dependency-validation).
 - A discovered asset is not evidence that it ran. A real non-discovery lifecycle event is required for runtime verification.
 
 ## Contributing
