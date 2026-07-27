@@ -10,8 +10,15 @@ const discoveryLockFile = path.join(dataDir, 'discovery-index.lock')
 const sessionIdentityKeyFile = path.join(dataDir, 'session-identity.key')
 const eventLockFile = path.join(dataDir, 'events.lock')
 const pseudonymPattern = /^hmac-sha256:[a-f0-9]{64}$/
+const eventReasons = new Set(['clear', 'resume', 'logout', 'prompt_input_exit', 'bypass_permissions_disabled', 'other', 'unknown'])
 let sessionIdentityKeyPromise
 let eventCache
+
+function sanitizeEventReason(event) {
+  return event.reason === undefined || eventReasons.has(event.reason)
+    ? event
+    : { ...event, reason: 'unknown' }
+}
 
 function invalidateEventCache() {
   eventCache = undefined
@@ -192,24 +199,38 @@ export function migrateLegacyEvents({ backup = true } = {}) {
       if (error?.code === 'ENOENT') return { migrated: 0, removed: 0, backupFile: undefined }
       throw error
     }
+    const sourceLines = contents.split('\n')
+    const finalRecord = sourceLines.findLastIndex((line) => line.trim())
+    let recoverableTail = -1
+    try {
+      if (parseEventLines(contents).sourceStatus === 'partial') recoverableTail = finalRecord
+    } catch (error) {
+      try { parseEventLines(`${sourceLines.slice(0, finalRecord).join('\n')}\n`) } catch { throw error }
+      recoverableTail = finalRecord
+    }
+    if (recoverableTail >= 0 && !backup) {
+      throw new Error('Event store contains a malformed record; recovery requires a backup and no data was changed.')
+    }
     const events = []
     const lines = []
     let migrated = 0
     let removed = 0
     const occurrences = new Map()
-    for (const line of contents.split('\n')) {
+    for (const [index, line] of sourceLines.entries()) {
       if (!line.trim()) continue
       try {
         const event = JSON.parse(line)
         if (!event || typeof event !== 'object' || Array.isArray(event)) throw new Error('Invalid event row')
         const occurrence = occurrences.get(line) ?? 0
         occurrences.set(line, occurrence + 1)
-        const normalized = await anonymizeEventSession(normalizeEvent(ensureStableLegacyEventId(event, line, occurrence)))
+        const normalized = await anonymizeEventSession(sanitizeEventReason(normalizeEvent(ensureStableLegacyEventId(event, line, occurrence))))
         const serialized = JSON.stringify(normalized)
         if (serialized !== line.trim()) migrated += 1
         events.push(normalized)
         lines.push(serialized)
       } catch {
+        if (index !== finalRecord) throw new Error('Event store contains a malformed record; no data was changed.')
+        if (!backup) throw new Error('Event store contains a malformed record; recovery requires a backup and no data was changed.')
         removed += 1
       }
     }
@@ -235,7 +256,7 @@ export async function eventVersion() {
 }
 
 export async function appendEvent(event) {
-  const normalized = await anonymizeEventSession(normalizeEvent(event))
+  const normalized = await anonymizeEventSession(sanitizeEventReason(normalizeEvent(event)))
   return withEventLock(async () => {
     const snapshot = await readEventStoreUnlocked()
     if (snapshot.sourceStatus === 'partial') throw new Error('Event store has a partial trailing record; no data was changed.')
@@ -247,7 +268,7 @@ export async function appendEvent(event) {
 }
 
 export async function appendEvents(events) {
-  const normalized = await Promise.all(normalizeEvents(events).map(anonymizeEventSession))
+  const normalized = await Promise.all(normalizeEvents(events).map(sanitizeEventReason).map(anonymizeEventSession))
   return withEventLock(async () => {
     const snapshot = await readEventStoreUnlocked()
     if (snapshot.sourceStatus === 'partial') throw new Error('Event store has a partial trailing record; no data was changed.')

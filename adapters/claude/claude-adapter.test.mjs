@@ -216,6 +216,28 @@ describe('Claude Code lifecycle adapter', () => {
     expect(diagnostic).not.toContain('SyntaxError')
   })
 
+  it('does not persist an unrecognized SessionEnd reason', async () => {
+    const root = await temporaryDirectory('skillops-claude-private-reason-')
+    const dataDir = path.join(root, 'data')
+    const project = path.join(root, 'project')
+    const sentinel = 'GP10_RAW_ERROR_SENTINEL'
+    await mkdir(project, { recursive: true })
+
+    await runHook({
+      session_id: 'private-reason-session',
+      cwd: project,
+      hook_event_name: 'SessionEnd',
+      reason: sentinel,
+    }, { SKILLOPS_DATA_DIR: dataDir })
+
+    const raw = await readFile(path.join(dataDir, 'events.jsonl'), 'utf8')
+    expect(raw).not.toContain(sentinel)
+    expect(JSON.parse(raw.trim())).toEqual(expect.objectContaining({
+      event: 'session.completed',
+      reason: 'unknown',
+    }))
+  })
+
   it('resolves namespaced plugin invocations to the installed canonical Skill', async () => {
     const root = await temporaryDirectory('skillops-claude-plugin-alias-')
     const claudeHome = path.join(root, 'claude-home')

@@ -41,6 +41,24 @@ describe('event-store privacy boundary', () => {
     expect(raw).not.toContain('private provider error details')
   })
 
+  it('allowlists event reasons before direct and batch persistence', async () => {
+    const sentinel = 'GP10_RAW_REASON_SENTINEL'
+    const direct = await store.appendEvent({
+      event: 'session.completed',
+      runtime: 'claude-code',
+      reason: sentinel,
+    })
+    const [batch] = await store.appendEvents([{
+      event: 'session.completed',
+      runtime: 'claude-code',
+      reason: sentinel,
+    }])
+
+    expect(direct.reason).toBe('unknown')
+    expect(batch.reason).toBe('unknown')
+    expect(await readFile(store.eventFile, 'utf8')).not.toContain(sentinel)
+  })
+
   it('pseudonymizes session identifiers and embedded event ids with a stable per-install HMAC', async () => {
     const rawSessionId = 'account@example.com/session-123'
     const first = await store.appendEvent({
@@ -106,7 +124,9 @@ describe('event-store privacy boundary', () => {
     expect(snapshot.sourceStatus).toBe('partial')
     await expect(store.appendEvent({ event: 'session.started', runtime: 'codex' })).rejects.toThrow('partial trailing record')
     expect(await readFile(store.eventFile, 'utf8')).toBe(before)
-    await store.migrateLegacyEvents({ backup: false })
+    await expect(store.migrateLegacyEvents({ backup: false })).rejects.toThrow('backup')
+    expect(await readFile(store.eventFile, 'utf8')).toBe(before)
+    await store.migrateLegacyEvents()
   })
 
   it('rejects a malformed final record that was fully written with a newline', async () => {
@@ -115,7 +135,9 @@ describe('event-store privacy boundary', () => {
 
     await expect(store.readEventsWithStatus()).rejects.toThrow('malformed record')
     expect(await readFile(store.eventFile, 'utf8')).toBe(before)
-    await store.migrateLegacyEvents({ backup: false })
+    await expect(store.migrateLegacyEvents({ backup: false })).rejects.toThrow('malformed record')
+    expect(await readFile(store.eventFile, 'utf8')).toBe(before)
+    await writeFile(store.eventFile, '', 'utf8')
   })
 
   it('does not misclassify a complete invalid record without a newline as partial', async () => {
@@ -124,7 +146,9 @@ describe('event-store privacy boundary', () => {
 
     await expect(store.readEventsWithStatus()).rejects.toThrow('malformed record')
     expect(await readFile(store.eventFile, 'utf8')).toBe(before)
-    await store.migrateLegacyEvents({ backup: false })
+    await expect(store.migrateLegacyEvents({ backup: false })).rejects.toThrow('malformed record')
+    expect(await readFile(store.eventFile, 'utf8')).toBe(before)
+    await writeFile(store.eventFile, '', 'utf8')
   })
 
   it('rejects a structurally invalid final event even without a trailing newline', async () => {
@@ -133,7 +157,9 @@ describe('event-store privacy boundary', () => {
 
     await expect(store.readEventsWithStatus()).rejects.toThrow('malformed record')
     expect(await readFile(store.eventFile, 'utf8')).toBe(before)
-    await store.migrateLegacyEvents({ backup: false })
+    await expect(store.migrateLegacyEvents({ backup: false })).rejects.toThrow('malformed record')
+    expect(await readFile(store.eventFile, 'utf8')).toBe(before)
+    await writeFile(store.eventFile, '', 'utf8')
   })
 
   it('fails explicitly and non-destructively for malformed records before the tail', async () => {
@@ -143,7 +169,9 @@ describe('event-store privacy boundary', () => {
 
     await expect(store.readEvents()).rejects.toThrow('malformed record')
     expect(await readFile(store.eventFile, 'utf8')).toBe(before)
-    await store.migrateLegacyEvents({ backup: false })
+    await expect(store.migrateLegacyEvents()).rejects.toThrow('malformed record')
+    expect(await readFile(store.eventFile, 'utf8')).toBe(before)
+    await writeFile(store.eventFile, '', 'utf8')
   })
 
   it('keeps generated legacy event IDs stable across reads, rewrites, and migration', async () => {
@@ -193,7 +221,7 @@ describe('event-store privacy boundary', () => {
     expect(migratedEvents.filter((event) => event.skillId === duplicateSkillId).map((event) => event.id)).toEqual(duplicateIds)
   })
 
-  it('migrates valid legacy rows and drops malformed rows through an explicit recoverable command', async () => {
+  it('migrates valid legacy rows and drops only a truncated tail through an explicit backup-first command', async () => {
     const rawSessionId = 'account@example.com/session-123'
     await writeFile(store.eventFile, `${JSON.stringify({
       id: `legacy:${rawSessionId}:session.started`,
@@ -440,7 +468,7 @@ describe('event-store privacy boundary', () => {
     await expect(store.compactDiscoveryEvents()).rejects.toThrow('partial trailing record')
 
     expect(await readFile(store.eventFile, 'utf8')).toBe(before)
-    await store.migrateLegacyEvents({ backup: false })
+    await store.migrateLegacyEvents()
   })
 
   it('selectively removes generated event ids through a recoverable backup', async () => {
@@ -468,7 +496,7 @@ describe('event-store privacy boundary', () => {
     await expect(store.removeEventsByIdPrefix('codex-desktop:')).rejects.toThrow('partial trailing record')
 
     expect(await readFile(store.eventFile, 'utf8')).toBe(before)
-    await store.migrateLegacyEvents({ backup: false })
+    await store.migrateLegacyEvents()
   })
 
   it('clears local events through a recoverable backup', async () => {
@@ -499,7 +527,7 @@ describe('event-store privacy boundary', () => {
     expect(await readFile(store.eventFile, 'utf8')).toBe(before)
     expect(await backupNames()).toEqual(backupsBefore)
     expect(await readIndex()).toBe(indexBefore)
-    await store.migrateLegacyEvents({ backup: false })
+    await store.migrateLegacyEvents()
   })
 
   it.each([

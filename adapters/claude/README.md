@@ -54,6 +54,11 @@ lifecycle event. A `skill.discovered` record never passes this check.
 | `SubagentStart` matching `.claude/agents/*.md` | Agent match + start | Exact definition match |
 | `Stop` / `StopFailure` | terminal Skill and turn events | Exact lifecycle boundary |
 
+For `SessionEnd`, the adapter preserves only Claude's documented reasons:
+`clear`, `resume`, `logout`, `prompt_input_exit`,
+`bypass_permissions_disabled`, and `other`. A missing or unrecognized reason is
+stored as `unknown`.
+
 Normal `Stop` events produce `skill.completed` with `outcome: "unknown"`. This means the Skill finished running, not that its output passed an evaluation. `StopFailure` produces `skill.failed`. Keep task acceptance tests and A/B evaluations separate from lifecycle telemetry.
 
 Rules remain discovery-only. Inventory presence does not prove that Claude Code loaded or applied a particular Rules file.
@@ -83,6 +88,11 @@ runtime disagree.
 ## Privacy and performance
 
 SkillOps does not store prompt text, command arguments, tool inputs, tool outputs, transcripts, last assistant messages, raw host session IDs, or raw error details. It stores per-install HMAC session pseudonyms, timestamps, runtime metadata, lengths, lifecycle outcomes, and discovered Skill paths.
+
+The shared `normalizeEvent` function type-checks `reason` but does not
+enum-normalize it. As defense in depth, every persisted event-store append and
+explicit migration canonicalizes values outside the six Claude reasons plus
+`unknown` to `unknown`.
 
 High-frequency generic hooks run asynchronously. The hooks that must establish
 or close exact Skill state run synchronously to prevent lifecycle races.

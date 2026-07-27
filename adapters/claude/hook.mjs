@@ -13,6 +13,7 @@ process.env.SKILLOPS_DATA_DIR ||= path.join(projectRoot, 'data')
 const { anonymizeSessionId, appendEvent, appendUniqueDiscoveries, dataDir } = await import('../../app/backend/event-store.mjs')
 const stateDir = path.join(dataDir, 'claude-state')
 const diagnosticFile = path.join(dataDir, 'claude-adapter-errors.log')
+const sessionEndReasons = new Set(['clear', 'resume', 'logout', 'prompt_input_exit', 'bypass_permissions_disabled', 'other'])
 
 function safePathId(value) {
   return String(value || 'unknown').replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 180)
@@ -323,7 +324,7 @@ async function handle(input) {
     await appendEvent({ event: 'turn.completed', ...common, outcome: 'failed' })
   } else if (eventName === 'SessionEnd') {
     await completeActiveSkills(input, 'unknown', false)
-    await appendEvent({ event: 'session.completed', ...common, outcome: 'unknown', reason: input.reason })
+    await appendEvent({ event: 'session.completed', ...common, outcome: 'unknown', reason: sessionEndReasons.has(input.reason) ? input.reason : 'unknown' })
     await rm(sessionStateDirectory(common.sessionId), { recursive: true, force: true })
   }
 }
