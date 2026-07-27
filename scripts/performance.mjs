@@ -64,11 +64,23 @@ export function seededRandom(seed = SEED) {
 async function generateFixture(directory) {
   const dataDirectory = path.join(directory, 'data')
   const runtimeHome = path.join(directory, 'home')
+  const codexAgentsDirectory = path.join(runtimeHome, '.codex/agents')
+  const claudeAgentsDirectory = path.join(runtimeHome, '.claude/agents')
   await Promise.all([
     mkdir(dataDirectory, { recursive: true }),
-    mkdir(path.join(runtimeHome, '.codex'), { recursive: true }),
-    mkdir(path.join(runtimeHome, '.claude'), { recursive: true }),
+    mkdir(codexAgentsDirectory, { recursive: true }),
+    mkdir(claudeAgentsDirectory, { recursive: true }),
   ])
+  for (let start = 0; start < DEFINITION_COUNT; start += 250) {
+    await Promise.all(Array.from({ length: Math.min(250, DEFINITION_COUNT - start) }, (_, offset) => {
+      const index = start + offset
+      const name = `agent-${String(index).padStart(4, '0')}`
+      const version = `1.${index % FIXTURE_DISTRIBUTION.versionMinorModulo}.0`
+      return index % 2
+        ? writeFile(path.join(claudeAgentsDirectory, `${name}.md`), `---\nname: ${name}\nversion: ${version}\n---\nSynthetic performance definition.\n`, 'utf8')
+        : writeFile(path.join(codexAgentsDirectory, `${name}.toml`), `name = "${name}"\nversion = "${version}"\ndescription = "Synthetic performance definition."\ndeveloper_instructions = """Synthetic performance definition."""\n`, 'utf8')
+    }))
+  }
   const eventFile = path.join(dataDirectory, 'events.jsonl')
   const file = await open(eventFile, 'w')
   const hash = createHash('sha256')

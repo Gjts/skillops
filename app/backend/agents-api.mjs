@@ -4,6 +4,7 @@ import { setJsonApiHeaders, sendApiError, sendJson } from './api-response.mjs'
 import { readEventsWithStatus as readStoredEvents } from './event-store.mjs'
 import { EvaluationError } from './evaluations/errors.mjs'
 import { assertLocalApiRequest } from './evaluations/request-guard.mjs'
+import { scanSkillInventory } from './skill-scanner.mjs'
 
 const TERMINAL_EVENTS = new Set(['skill.completed', 'skill.failed'])
 const LIFECYCLE_EVENTS = new Set(['skill.started', 'skill.completed', 'skill.failed', 'subagent.started', 'subagent.completed'])
@@ -99,17 +100,17 @@ function projection(identity, name, runtime, definition, lifecycle, resolvedConf
   }
 }
 
-export function projectAgents(events, { now = Date.now(), recentWindowMs = TELEMETRY_GAP_MS, activityWindowMs = Number.POSITIVE_INFINITY } = {}) {
+export function projectAgents(events, { inventory = [], now = Date.now(), recentWindowMs = TELEMETRY_GAP_MS, activityWindowMs = Number.POSITIVE_INFINITY } = {}) {
   const definitionsByIdentity = new Map()
   const lifecycleByAgent = new Map()
 
+  for (const definition of inventory) {
+    if (definition.kind !== 'agent' || !definition.skillId || !RUNTIMES.has(definition.runtime)) continue
+    const identity = `${definition.runtime}\u0000${definition.skillId}\u0000${definition.sourcePath || definition.source || ''}`
+    definitionsByIdentity.set(identity, definition)
+  }
+
   for (const event of events) {
-    if (event.event === 'skill.discovered' && event.kind === 'agent' && event.skillId && RUNTIMES.has(event.runtime)) {
-      const identity = `${event.runtime}\u0000${event.skillId}\u0000${event.sourcePath || event.source || ''}`
-      const current = definitionsByIdentity.get(identity)
-      if (!current || timestamp(event) > timestamp(current)) definitionsByIdentity.set(identity, event)
-      continue
-    }
     if (!LIFECYCLE_EVENTS.has(event.event) || !RUNTIMES.has(event.runtime)) continue
     const name = agentName(event)
     if (!name) continue
@@ -190,7 +191,7 @@ function listResponse(projected, params, generatedAt) {
   }
 }
 
-export async function handleAgentsApi(request, response, pathname, { readEvents = readStoredEvents, now = () => new Date() } = {}) {
+export async function handleAgentsApi(request, response, pathname, { readEvents = readStoredEvents, scanInventory = scanSkillInventory, now = () => new Date() } = {}) {
   if (pathname !== '/api/agents' && !pathname.startsWith('/api/agents/')) return false
   setJsonApiHeaders(response)
   try {
@@ -201,10 +202,12 @@ export async function handleAgentsApi(request, response, pathname, { readEvents 
     const days = WINDOWS.get(window)
     if (!days) throw badRequest('window must be 7d, 14d, or 30d.')
     const generatedAt = now().toISOString()
-    const eventSnapshot = await readEvents()
+    const [eventSnapshot, inventorySnapshot] = await Promise.all([readEvents(), scanInventory()])
     const events = Array.isArray(eventSnapshot) ? eventSnapshot : eventSnapshot.events
     const sourceStatus = Array.isArray(eventSnapshot) ? 'ok' : eventSnapshot.sourceStatus
-    const projected = projectAgents(events, { now: Date.parse(generatedAt), activityWindowMs: days * 86_400_000 })
+    const inventory = Array.isArray(inventorySnapshot) ? inventorySnapshot : inventorySnapshot?.definitions
+    if (!Array.isArray(inventory)) throw new EvaluationError('Agent inventory returned an invalid result.', 500)
+    const projected = projectAgents(events, { inventory, now: Date.parse(generatedAt), activityWindowMs: days * 86_400_000 })
     const encodedId = pathname === '/api/agents' ? '' : pathname.slice('/api/agents/'.length)
     if (!encodedId) sendJson(response, 200, { ...listResponse(projected, url.searchParams, generatedAt), sourceStatus })
     else {

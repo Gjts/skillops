@@ -40,9 +40,14 @@ function response() {
 async function call(url, events, overrides = {}) {
   const target = response()
   const pathname = new URL(url, 'http://127.0.0.1').pathname
+  const eventRows = Array.isArray(events) ? events : events.events
   await handleAgentsApi(request(url, overrides.request), target, pathname, {
     readEvents: vi.fn().mockResolvedValue(events),
+    scanInventory: vi.fn().mockResolvedValue({
+      definitions: eventRows.filter((item) => item.event === 'skill.discovered'),
+    }),
     now: () => now,
+    ...overrides.dependencies,
   })
   return { response: target, json: target.body ? JSON.parse(target.body) : null }
 }
@@ -58,7 +63,14 @@ const lifecycleEvents = [
 
 describe('Agent projection API', () => {
   it('separates definitions from observed evidence without merging runtimes', () => {
-    const projected = projectAgents(lifecycleEvents, { now: now.getTime(), days: 7 })
+    const projected = projectAgents(
+      lifecycleEvents.filter((item) => item.event !== 'skill.discovered'),
+      {
+        inventory: lifecycleEvents.filter((item) => item.event === 'skill.discovered'),
+        now: now.getTime(),
+        days: 7,
+      },
+    )
     expect(projected.definitions.map((item) => `${item.runtime}:${item.name}`)).toEqual([
       'codex:planner',
       'claude-code:reviewer',
@@ -79,7 +91,7 @@ describe('Agent projection API', () => {
   })
 
   it('uses the fixed 15 minute evidence window independently of the list date range', () => {
-    const projected = projectAgents([
+    const rows = [
       event('definition'),
       event('old-terminal', {
         event: 'skill.completed',
@@ -87,7 +99,11 @@ describe('Agent projection API', () => {
         sourcePath: undefined,
         outcome: 'success',
       }),
-    ], { now: now.getTime(), days: 30 })
+    ]
+    const projected = projectAgents(
+      rows.filter((item) => item.event !== 'skill.discovered'),
+      { inventory: rows.filter((item) => item.event === 'skill.discovered'), now: now.getTime(), days: 30 },
+    )
 
     expect(projected.observed[0]).toMatchObject({
       evidenceState: 'idle',
@@ -127,8 +143,45 @@ describe('Agent projection API', () => {
     }))
   })
 
+  it('lists current live Agent definitions instead of stale discovery history', async () => {
+    const liveDefinition = {
+      skillId: 'live-reviewer',
+      skillVersion: '2.0.0',
+      runtime: 'claude-code',
+      source: 'global',
+      sourcePath: 'home/.claude/agents/live-reviewer.md',
+      kind: 'agent',
+      enabled: true,
+      status: 'active',
+      contentHash: 'a'.repeat(64),
+    }
+    const result = await call('/api/agents?tab=definitions&pageSize=50', [
+      event('stale-definition', {
+        skillId: 'stale-reviewer',
+        sourcePath: 'removed/.codex/agents/stale-reviewer.md',
+      }),
+    ], {
+      dependencies: {
+        scanInventory: vi.fn().mockResolvedValue({ definitions: [liveDefinition] }),
+      },
+    })
+
+    expect(result.response.statusCode).toBe(200)
+    expect(result.json).toMatchObject({ totalItems: 1, available: 1 })
+    expect(result.json.items).toEqual([
+      expect.objectContaining({
+        name: 'live-reviewer',
+        runtime: 'claude-code',
+        definition: expect.objectContaining({
+          sourcePath: liveDefinition.sourcePath,
+          contentHash: liveDefinition.contentHash,
+        }),
+      }),
+    ])
+  })
+
   it('keeps definition condition separate from observed lifecycle evidence', () => {
-    const projected = projectAgents([
+    const rows = [
       event('definition-a', { sourcePath: 'project/.codex/agents/reviewer-a.md' }),
       event('definition-b', { sourcePath: 'project/.codex/agents/reviewer-b.md' }),
       event('terminal', {
@@ -137,7 +190,11 @@ describe('Agent projection API', () => {
         sourcePath: undefined,
         outcome: 'success',
       }),
-    ], { now: now.getTime() })
+    ]
+    const projected = projectAgents(
+      rows.filter((item) => item.event !== 'skill.discovered'),
+      { inventory: rows.filter((item) => item.event === 'skill.discovered'), now: now.getTime() },
+    )
 
     expect(projected.observed[0]).toMatchObject({
       configurationState: 'conflicted',
