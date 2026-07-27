@@ -5,6 +5,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { EvaluationError } from './evaluations/errors.mjs'
 import { computeEvaluationEvidenceHash } from './evaluations/evaluation-store.mjs'
+import { createGitArtifactSource } from './evaluations/git-artifact-source.mjs'
 import { withGovernanceFileLock } from './governance/skeleton-lock.mjs'
 
 const execute = promisify(execFile)
@@ -207,10 +208,13 @@ async function verifyTeamTemplateProvenance(manifestFile, manifest) {
       if (digest(contents) !== file.contentHash) throw new EvaluationError(`Template file ${file.path} does not match its claimed Git commit.`, 409)
     }
     const prefix = `git:${manifest.source.revision}:`
+    const artifactSnapshot = await createGitArtifactSource({ artifactWorkspace: gitRoot }).list({ revision: manifest.source.revision })
+    const artifactsByPath = new Map(artifactSnapshot.items.map((item) => [item.relativePath, item.artifact]))
     for (const asset of manifest.assets) {
       const sourcePath = asset.sourceRef.slice(prefix.length)
-      const contents = await defaultGitBuffer(gitRoot, ['show', `${manifest.source.revision}:${sourcePath}`])
-      if (digest(contents) !== asset.contentHash) throw new EvaluationError(`Template asset ${asset.id} does not match its claimed Git commit.`, 409)
+      if (artifactsByPath.get(sourcePath)?.contentHash !== asset.contentHash) {
+        throw new EvaluationError(`Template asset ${asset.id} does not match its claimed Git commit.`, 409)
+      }
     }
     return { manifestCommit: head.trim(), manifestDigest: digest(JSON.stringify(manifest)) }
   } catch (error) {

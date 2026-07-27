@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { normalizeArtifactDefinition } from '../../shared/evaluation-schema.mjs'
-import { DEFAULT_GATE_POLICY, evaluateGatePolicy, evaluateRedteamGatePolicy } from '../governance/capability-policy.mjs'
+import { DEFAULT_GATE_POLICY, effectiveGatePolicy, evaluateGatePolicy, evaluateRedteamGatePolicy } from '../governance/capability-policy.mjs'
 import { EvaluationError } from './errors.mjs'
 import { computeEvaluationCasesHash, computeEvaluationEvidenceHash } from './evaluation-store.mjs'
 import { normalizeProvider } from './provider-client.mjs'
@@ -169,9 +169,10 @@ export function createEvaluationManager(options = {}) {
         requestedBy: job.summary.requestedBy,
       }, { ...job.runnerOptions, signal: job.controller.signal })
       if (job.controller.signal.aborted) throw Object.assign(new Error('Evaluation execution aborted.'), { name: 'AbortError' })
+      const effectivePolicy = effectiveGatePolicy(policy, job.input.suite.gate)
       const evaluated = result.summary.mode === 'redteam'
-        ? evaluateRedteamGatePolicy(result.summary, policy)
-        : evaluateGatePolicy(result.summary, policy)
+        ? evaluateRedteamGatePolicy(result.summary, effectivePolicy)
+        : evaluateGatePolicy(result.summary, effectivePolicy)
       const completed = {
         ...result.summary,
         provider: { ...result.summary.provider, configurationHash: job.summary.provider.configurationHash },

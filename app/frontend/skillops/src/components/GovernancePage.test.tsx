@@ -56,6 +56,37 @@ describe('governance UI', () => {
     expect(screen.getByRole('button', { name: 'Next page' }).hasAttribute('disabled')).toBe(true)
   })
 
+  it('discards a release preview when pagination selects another Capability', async () => {
+    const first = capability('canary')
+    const second = { ...capability('candidate'), id: 'cap-2', artifact: { ...artifact, artifactId: 'second-skill' } }
+    const preview = {
+      previewToken: 'preview-1', capabilityId: first.id, source: first.artifact.sourceRef, target: first.targetSkeleton,
+      currentHash: 'b'.repeat(64), candidateHash: first.artifact.contentHash,
+      diff: { beforeLines: 10, afterLines: 12, changedLines: 3 }, conflict: false,
+      backup: 'SKILL.md.skillops-backup', rollbackPlan: 'Restore backup.', expiresAt: '2026-07-21T01:00:00.000Z',
+    }
+    const fetchMock = vi.fn((input: string) => {
+      if (input === '/api/capabilities') return response({
+        items: [first], page: 1, pageSize: 50, totalItems: 51, totalPages: 2, hasPrevious: false, hasNext: true,
+      })
+      if (input === '/api/capabilities?page=2&pageSize=50') return response({
+        items: [second], page: 2, pageSize: 50, totalItems: 51, totalPages: 2, hasPrevious: true, hasNext: false,
+      })
+      if (input === '/api/capabilities/cap-1/promote') return response(preview)
+      return response({ error: { message: 'Not found' } }, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<GovernancePage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview promotion' }))
+    expect(await screen.findByRole('region', { name: 'File change preview' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+    expect((await screen.findAllByText('second-skill')).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('region', { name: 'File change preview' })).toBeNull()
+  })
+
   it('pages protected Governance audit with the same memory-only credential', async () => {
     const selected = capability('ready')
     const first = {
@@ -97,6 +128,33 @@ describe('governance UI', () => {
     expect(screen.getByText('Evidence is stale')).toBeTruthy()
     expect(screen.getByText('cccccccccccc')).toBeTruthy()
     expect(screen.getByRole('list', { name: 'Release pipeline' })).toBeTruthy()
+  })
+
+  it('shows authoritative blocked evidence instead of a stale passed run result', async () => {
+    const selected = {
+      ...capability('blocked'),
+      effectiveGateResult: 'failed' as const,
+      effectiveGates: [{ id: 'suite-case-coverage', status: 'failed' as const, blocking: true }],
+      effectivePolicyHash: 'f'.repeat(64),
+    }
+    vi.stubGlobal('fetch', vi.fn((input: string) => {
+      if (input === '/api/capabilities') return response({ items: [selected] })
+      if (input === '/api/evaluation-runs/run-1') return response({
+        id: 'run-1',
+        gateResult: 'passed',
+        evidenceFresh: true,
+        metrics: { casesTotal: 2 },
+        gates: [{ id: 'suite-case-coverage', status: 'passed', blocking: true }],
+      })
+      return response({ error: { message: 'Not found' } }, 404)
+    }))
+
+    render(<GovernancePage />)
+
+    const evidence = await screen.findByRole('region', { name: 'Evidence and gates' })
+    expect(within(evidence).getAllByText('Failed').length).toBeGreaterThan(0)
+    expect(within(evidence).queryByText('Passed')).toBeNull()
+    expect(within(evidence).getByText('Evidence is insufficient to recommend promotion.')).toBeTruthy()
   })
 
   it('sends an in-memory reviewer token for independent approval', async () => {
@@ -243,6 +301,27 @@ describe('governance UI', () => {
     expect(fetchMock.mock.calls.some(([input]) => input === '/api/capabilities/cap-wrong-project/rollback')).toBe(false)
   })
 
+  it('does not offer rollback from a superseded version older than previous Stable', async () => {
+    const oldest = {
+      ...capability('approved'),
+      id: 'cap-oldest',
+      requalifiesStage: 'superseded' as const,
+      releaseTarget: { stableCapabilityId: 'cap-stable', previousStableCapabilityId: 'cap-previous' },
+    }
+    vi.stubGlobal('fetch', vi.fn((input: string) => {
+      if (input === '/api/capabilities') return response({ items: [oldest] })
+      if (input === '/api/capabilities/cap-previous') return response({
+        ...capability('superseded'), id: 'cap-previous', artifact: { ...artifact, version: '2.0.0' },
+      })
+      return response({ error: { message: 'Not found' } }, 404)
+    }))
+
+    render(<GovernancePage />)
+
+    expect((await screen.findAllByText('review-skill')).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: 'Preview rollback' })).toBeNull()
+  })
+
   it('shows the lock-authoritative previous Stable across more than two generations', async () => {
     const current = {
       ...capability('stable'),
@@ -267,6 +346,25 @@ describe('governance UI', () => {
     expect(await screen.findByText('Previous Stable')).toBeTruthy()
     expect(await screen.findByText('review-skill · 2.0.0')).toBeTruthy()
     expect(screen.queryByText('review-skill · 1.0.0')).toBeNull()
+  })
+
+  it('warns when lock-authoritative previous Stable metadata is unavailable', async () => {
+    const current = {
+      ...capability('stable'),
+      id: 'cap-current',
+      releaseTarget: { stableCapabilityId: 'cap-current', previousStableCapabilityId: 'cap-missing' },
+    }
+    vi.stubGlobal('fetch', vi.fn((input: string) => {
+      if (input === '/api/capabilities') return response({ items: [current] })
+      if (input === '/api/capabilities/cap-missing') return response({ error: { message: 'GP10_SENTINEL' } }, 500)
+      if (input === '/api/evaluation-runs/run-1') return response({ id: 'run-1' })
+      return response({ error: { message: 'Not found' } }, 404)
+    }))
+
+    render(<GovernancePage />)
+
+    expect((await screen.findByRole('alert')).textContent).toContain('Governance request failed.')
+    expect(screen.queryByText('GP10_SENTINEL')).toBeNull()
   })
 
   it('requires preview plus a second confirmation before Stable', async () => {

@@ -1,10 +1,10 @@
-import { normalizeManagedEvaluationRunRequest } from '../../shared/evaluation-schema.mjs'
+import { EvaluationSchemaError, normalizeManagedEvaluationRunRequest } from '../../shared/evaluation-schema.mjs'
 import { sendApiError, sendJson, setJsonApiHeaders } from '../api-response.mjs'
 import { createPageEnvelope } from '../page-envelope.mjs'
 import { createArtifactResolver } from './artifact-resolver.mjs'
 import { createEvaluationManager } from './evaluation-manager.mjs'
 import { createEvaluationStore } from './evaluation-store.mjs'
-import { DEFAULT_GATE_POLICY, gatePolicyHash } from '../governance/capability-policy.mjs'
+import { DEFAULT_GATE_POLICY, effectiveGatePolicy, gatePolicyHash } from '../governance/capability-policy.mjs'
 import { createEvaluationReport, renderEvaluationHtmlReport } from './evaluation-report.mjs'
 import { EvaluationError } from './errors.mjs'
 import { normalizeProvider } from './provider-client.mjs'
@@ -20,6 +20,14 @@ function onlyKeys(value, allowed, label) {
   const unknown = Object.keys(value).filter((key) => !allowed.has(key))
   if (unknown.length) throw new EvaluationError(`${label} contains unsupported field: ${unknown[0]}.`, 422)
   return value
+}
+
+function publicManagedEvaluationError(error) {
+  if ((error instanceof EvaluationError || error instanceof EvaluationSchemaError)
+      && error.message.includes(' contains unsupported field: ')) {
+    return new EvaluationError('Evaluation request contains unsupported fields.', error.status)
+  }
+  return error
 }
 
 function routeId(pathname, suffix = '') {
@@ -62,6 +70,7 @@ function publicSuite(suite) {
     artifactKind: suite.artifactKind,
     repeats: suite.repeats,
     ...(suite.matrix ? { matrix: suite.matrix } : {}),
+    ...(suite.gate ? { gate: suite.gate } : {}),
     caseCount: suite.cases.length,
     suiteHash: suite.suiteHash,
     datasetHash: suite.datasetHash,
@@ -79,13 +88,33 @@ function publicSuite(suite) {
 }
 
 function publicRun(run, policyHash) {
-  if (!run || !policyHash) return run
+  if (!run || policyHash === undefined) return run
   return {
     ...run,
     evidenceFresh: run.status === 'completed' && Boolean(run.policyHash)
-      ? run.policyHash === policyHash
+      ? Boolean(policyHash) && run.policyHash === policyHash
       : null,
   }
+}
+
+function suitePolicyHash(services, suite) {
+  return services.policy
+    ? gatePolicyHash(effectiveGatePolicy(services.policy, suite?.gate))
+    : services.policyHash
+}
+
+async function runPolicyHash(services, run) {
+  if (!services.policy || !run?.suiteId) return services.policyHash
+  try {
+    return suitePolicyHash(services, await services.suites.get(run.suiteId))
+  } catch (error) {
+    if (error instanceof EvaluationError && error.status === 404) return null
+    throw error
+  }
+}
+
+function passedRequiredGate(run, id) {
+  return run.gates?.some((gate) => gate.id === id && gate.blocking === true && gate.status === 'passed') === true
 }
 
 function publicDecision(decision) {
@@ -104,9 +133,10 @@ export async function createManagedEvaluationServices(options = {}) {
   const store = options.store || createEvaluationStore(options)
   const suites = options.suites || createSuiteRegistry(options)
   const artifacts = options.artifacts || createArtifactResolver(options)
-  const manager = options.manager || createEvaluationManager({ store, runner: options.runner, concurrency: options.concurrency, policy: options.policy })
+  const policy = options.policy || DEFAULT_GATE_POLICY
+  const manager = options.manager || createEvaluationManager({ store, runner: options.runner, concurrency: options.concurrency, policy })
   await manager.initialize()
-  return { store, suites, artifacts, manager, policyHash: gatePolicyHash(options.policy || DEFAULT_GATE_POLICY) }
+  return { store, suites, artifacts, manager, policy, policyHash: gatePolicyHash(policy) }
 }
 
 let defaultServicesPromise
@@ -141,14 +171,15 @@ export async function handleManagedEvaluationApi(request, response, pathname, op
       })
       sendJson(response, 200, {
         ...result,
-        items: result.items.map((suite) => ({ ...suite, policyHash: services.policyHash })),
+        items: result.items.map((suite) => ({ ...suite, policyHash: suitePolicyHash(services, suite) })),
         generatedAt: new Date().toISOString(),
       })
     } else if (suiteMatch) {
       method(request, 'GET')
       let suiteId
       try { suiteId = decodeURIComponent(suiteMatch[1]) } catch { throw new EvaluationError('Suite ID is invalid.', 422) }
-      sendJson(response, 200, { ...publicSuite(await services.suites.get(suiteId)), policyHash: services.policyHash })
+      const suite = await services.suites.get(suiteId)
+      sendJson(response, 200, { ...publicSuite(suite), policyHash: suitePolicyHash(services, suite) })
     } else if (isRunList && request.method === 'POST') {
       const body = normalizeManagedEvaluationRunRequest(await readEvaluationJsonBody(request))
       const provider = normalizeProvider(body.provider)
@@ -161,7 +192,7 @@ export async function handleManagedEvaluationApi(request, response, pathname, op
         throw new EvaluationError('Suite artifact kind does not match the selected baseline and candidate.', 422)
       }
       const created = await services.manager.enqueue({ ...body, requestedBy: options.teamPrincipal?.id || body.requestedBy, suite, baseline, candidate, provider })
-      sendJson(response, 202, { run: publicRun(created.summary, services.policyHash), reused: created.reused })
+      sendJson(response, 202, { run: publicRun(created.summary, suitePolicyHash(services, suite)), reused: created.reused })
     } else if (isRunList) {
       method(request, 'GET')
       const search = query(request)
@@ -174,27 +205,27 @@ export async function handleManagedEvaluationApi(request, response, pathname, op
       })
       sendJson(response, 200, {
         ...result,
-        items: result.items.map((run) => publicRun(run, services.policyHash)),
+        items: await Promise.all(result.items.map(async (run) => publicRun(run, await runPolicyHash(services, run)))),
         generatedAt: new Date().toISOString(),
       })
     } else if (cancelId) {
       method(request, 'POST')
       await readEvaluationJsonBody(request)
       const cancelled = await services.manager.cancel(cancelId)
-      sendJson(response, 200, { ...cancelled, summary: publicRun(cancelled.summary, services.policyHash) })
+      sendJson(response, 200, { ...cancelled, summary: publicRun(cancelled.summary, await runPolicyHash(services, cancelled.summary)) })
     } else if (decisionId) {
       const run = await services.store.getRun(decisionId)
       if (!run) throw new EvaluationError('Evaluation run was not found.', 404)
       if (request.method === 'POST') {
         const body = onlyKeys(await readEvaluationJsonBody(request), new Set(['decision']), 'Managed evaluation decision')
         if (body.decision === 'create-candidate') {
-          const coverageGate = run.gates?.find((gate) => gate.id === 'suite-case-coverage')
+          const policyHash = await runPolicyHash(services, run)
           if (run.status !== 'completed'
             || run.gateResult !== 'passed'
-            || run.policyHash !== services.policyHash
-            || run.metrics?.suiteCaseCoveragePct !== 100
-            || coverageGate?.status !== 'passed') {
-            throw new EvaluationError('Create Candidate requires current evidence with complete Suite case coverage.', 409)
+            || run.policyHash !== policyHash
+            || !passedRequiredGate(run, 'sample-size')
+            || !passedRequiredGate(run, 'suite-case-coverage')) {
+            throw new EvaluationError('Create Candidate requires current evidence that passed the sample-size and Suite case coverage gates.', 409)
           }
         }
         const result = await services.store.appendDecision(decisionId, body.decision)
@@ -243,10 +274,13 @@ export async function handleManagedEvaluationApi(request, response, pathname, op
       method(request, 'GET')
       const run = await services.store.getRun(runId)
       if (!run) throw new EvaluationError('Evaluation run was not found.', 404)
-      sendJson(response, 200, publicRun(run, services.policyHash))
+      sendJson(response, 200, publicRun(run, await runPolicyHash(services, run)))
     }
   } catch (error) {
-    sendApiError(response, error, 'Evaluation request failed.')
+    const publicError = error instanceof EvaluationError && error.message.startsWith('Unsupported AI provider: ')
+      ? new EvaluationError('Unsupported AI provider.', error.status)
+      : publicManagedEvaluationError(error)
+    sendApiError(response, publicError, 'Evaluation request failed.')
   }
   return true
 }

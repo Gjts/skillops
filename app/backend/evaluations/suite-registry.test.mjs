@@ -73,6 +73,18 @@ describe('Suite Schema v1', () => {
     }))).toThrow('2,000-cell limit')
   })
 
+  it('normalizes bounded Suite evidence thresholds', () => {
+    expect(normalizeEvaluationSuite(validSuite({
+      gate: { minSampleSize: 3, minSuiteCaseCoveragePct: 80 },
+    })).gate).toEqual({ minSampleSize: 3, minSuiteCaseCoveragePct: 80 })
+    expect(() => normalizeEvaluationSuite(validSuite({
+      gate: { minSampleSize: 0, minSuiteCaseCoveragePct: 80 },
+    }))).toThrow('positive integer')
+    expect(() => normalizeEvaluationSuite(validSuite({
+      gate: { minSampleSize: 3, minSuiteCaseCoveragePct: 101 },
+    }))).toThrow('between 0 and 100')
+  })
+
   it('rejects traversal and absolute dataset paths', () => {
     expect(() => normalizeEvaluationSuite({ ...validSuite(), cases: undefined, dataset: '../../secrets.json' })).toThrow('inside evals/datasets')
     expect(() => normalizeEvaluationSuite({ ...validSuite(), cases: undefined, dataset: 'C:\\secrets.json' })).toThrow('inside evals/datasets')
@@ -104,6 +116,16 @@ describe('suite registry', () => {
     expect(suite.cases[0].id).toBe('concise-answer')
     expect(suite.suiteHash).toMatch(/^[a-f0-9]{64}$/)
     expect(suite.datasetHash).toMatch(/^[a-f0-9]{64}$/)
+  })
+
+  it('includes normalized evidence thresholds in Suite metadata and hash', async () => {
+    const root = await fixtureRoot()
+    await writeFile(path.join(root, 'suites', 'gated.json'), JSON.stringify(validSuite({
+      gate: { minSampleSize: 3, minSuiteCaseCoveragePct: 80 },
+    })))
+    const [listed] = await createSuiteRegistry({ evalsRoot: root }).list()
+    expect(listed.gate).toEqual({ minSampleSize: 3, minSuiteCaseCoveragePct: 80 })
+    expect(listed.suiteHash).toMatch(/^[a-f0-9]{64}$/)
   })
 
   it('rejects a dataset path that resolves through a symlink outside evals/datasets', async () => {

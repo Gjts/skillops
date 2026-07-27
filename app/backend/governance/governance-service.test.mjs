@@ -4,7 +4,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { artifactContentHash } from '../evaluations/artifact-definition.mjs'
 import { computeEvaluationEvidenceHash, createEvaluationStore } from '../evaluations/evaluation-store.mjs'
-import { DEFAULT_GATE_POLICY, evaluateGatePolicy, gatePolicyHash } from './capability-policy.mjs'
+import { DEFAULT_GATE_POLICY, effectiveGatePolicy, evaluateGatePolicy, gatePolicyHash } from './capability-policy.mjs'
 import { createCapabilityRegistry } from './capability-registry.mjs'
 import { createGovernanceAuditLog } from './governance-audit.mjs'
 import { createGovernanceServices } from './governance-api.mjs'
@@ -525,6 +525,12 @@ describe('capability governance', () => {
       skeletonLock: setupResult.skeletonLock,
       installer: setupResult.installer,
       teamControlPlane: team,
+      suites: {
+        get: async () => ({
+          suiteHash: 'd'.repeat(64),
+          datasetHash: 'e'.repeat(64),
+        }),
+      },
     })
     const candidate = artifact('1.0.0', 'a')
     const nominated = await service.nominate({
@@ -558,6 +564,63 @@ describe('capability governance', () => {
       evidence: expect.objectContaining({ policyHash: gatePolicyHash(DEFAULT_GATE_POLICY) }),
     }))
   })
+
+  it('marks evidence stale and blocks rebinding when the Suite gate tightens', async () => {
+    const setupResult = await setup()
+    let suite = {
+      gate: { minSampleSize: 2 },
+      suiteHash: 'd'.repeat(64),
+      datasetHash: 'e'.repeat(64),
+    }
+    const service = createGovernanceService({
+      evaluations: setupResult.evaluations,
+      registry: setupResult.registry,
+      skeletonLock: setupResult.skeletonLock,
+      installer: setupResult.installer,
+      resolveSuite: async (suiteId) => {
+        expect(suiteId).toBe('quality')
+        return suite
+      },
+    })
+    const candidate = artifact('1.0.0', 'a')
+    const nominated = await service.nominate({
+      artifact: candidate,
+      owner: 'Artifact Owner',
+      targetSkeleton: 'codex:review',
+    })
+    const quality = runSummary('suite-gate-quality', candidate, undefined, {
+      gatePolicy: effectiveGatePolicy(DEFAULT_GATE_POLICY, suite.gate),
+    })
+    await setupResult.evaluations.appendRun(quality)
+    await setupResult.evaluations.appendDecision(quality.id, 'create-candidate')
+
+    expect(await service.bindEvidence(nominated.capability.id, { runId: quality.id, actor: 'Operator' })).toEqual(expect.objectContaining({
+      stage: 'ready',
+      evidenceStale: false,
+      evidence: expect.objectContaining({
+        policyHash: gatePolicyHash(effectiveGatePolicy(DEFAULT_GATE_POLICY, suite.gate)),
+      }),
+    }))
+
+    suite = { ...suite, gate: { minSampleSize: 3 } }
+    expect(await service.get(nominated.capability.id)).toEqual(expect.objectContaining({ evidenceStale: true }))
+    await expect(service.approve(nominated.capability.id, { reviewer: 'Independent Reviewer' }))
+      .rejects.toThrow('stale')
+
+    expect(await service.bindEvidence(nominated.capability.id, { runId: quality.id, actor: 'Operator' })).toEqual(expect.objectContaining({
+      stage: 'blocked',
+      evidenceStale: false,
+      evidence: expect.objectContaining({
+        policyHash: gatePolicyHash(effectiveGatePolicy(DEFAULT_GATE_POLICY, suite.gate)),
+      }),
+    }))
+
+    suite = { ...suite, suiteHash: 'f'.repeat(64) }
+    expect(await service.get(nominated.capability.id)).toEqual(expect.objectContaining({ evidenceStale: true }))
+    await expect(service.bindEvidence(nominated.capability.id, { runId: quality.id, actor: 'Operator' }))
+      .rejects.toThrow('stale')
+  })
+
   it('binds Team releases to the registered project root through Stable apply and locking', async () => {
     const setupResult = await setup()
     const projectRoot = path.join(setupResult.dataDir, 'registered-project')
@@ -592,6 +655,133 @@ describe('capability governance', () => {
     await service.promote(capability.id, { previewToken: preview.previewToken, confirm: true, actor: 'Operator' })
     expect(applyContexts.at(-1).projectRoot).toBe(projectRoot)
     expect((await service.lockState()).targets[capability.targetKey].stable.capabilityId).toBe(capability.id)
+  })
+
+  it('keeps an omitted Team project binding in local mode', async () => {
+    const setupResult = await setup()
+    let resolverCalls = 0
+    const service = createGovernanceService({
+      evaluations: setupResult.evaluations,
+      registry: setupResult.registry,
+      skeletonLock: setupResult.skeletonLock,
+      installer: setupResult.installer,
+      resolveProjectRoot: async () => {
+        resolverCalls += 1
+        throw new Error('Project ID is invalid.')
+      },
+    })
+
+    const nominated = await service.nominate({
+      artifact: artifact('1.0.0', 'a'),
+      owner: 'Owner',
+      targetSkeleton: 'codex:review',
+    })
+
+    expect(nominated.capability).toEqual(expect.objectContaining({
+      projectId: null,
+      projectRoot: null,
+      targetKey: null,
+    }))
+    expect(resolverCalls).toBe(0)
+  })
+
+  it('preserves a local Prompt target across a second Stable release', async () => {
+    const setupResult = await setup()
+    const service = createGovernanceService({
+      evaluations: setupResult.evaluations,
+      registry: setupResult.registry,
+      skeletonLock: setupResult.skeletonLock,
+      installer: setupResult.installer,
+      resolveProjectRoot: async (projectId) => projectId ? setupResult.stableProjectRoot : null,
+    })
+    const prompt = (hash) => ({
+      kind: 'prompt',
+      artifactId: 'release-summary',
+      version: hash.repeat(40),
+      source: 'prompt-registry',
+      sourceRef: `prompt-registry:${hash.repeat(40)}:prompts%2Frelease.prompt.json:${hash.repeat(64)}`,
+      contentHash: hash.repeat(64),
+      gitCommit: hash.repeat(40),
+    })
+    const first = await ready(service, setupResult.evaluations, prompt('a'), 'prompt-v1', undefined, {
+      targetSkeleton: 'prompt:release-summary',
+    })
+    await service.approve(first.capability.id, { reviewer: 'Reviewer One' })
+    await startCanary(service, first.capability.id)
+    await promote(service, first.capability.id)
+
+    const secondArtifact = prompt('b')
+    const second = await service.nominate({
+      artifact: secondArtifact,
+      owner: 'Owner',
+      targetSkeleton: 'prompt:release-summary',
+    })
+
+    expect(second.capability).toEqual(expect.objectContaining({
+      targetSkeleton: 'prompt:release-summary',
+      targetKey: null,
+      projectId: null,
+      projectRoot: null,
+    }))
+    const quality = runSummary('prompt-v2', secondArtifact, first.capability.artifact)
+    await setupResult.evaluations.appendRun(quality)
+    await setupResult.evaluations.appendDecision(quality.id, 'create-candidate')
+    await service.bindEvidence(second.capability.id, { runId: quality.id, actor: 'Operator' })
+    await service.approve(second.capability.id, { reviewer: 'Reviewer Two' })
+    await startCanary(service, second.capability.id)
+    await expect(promote(service, second.capability.id)).resolves.toEqual(expect.objectContaining({
+      capability: expect.objectContaining({ id: second.capability.id, stage: 'stable' }),
+    }))
+  })
+
+  it('rejects scanner-invisible Workflow Canary targets while accepting a Runtime-native target', async () => {
+    const setupResult = await setup()
+    const stableRoot = path.join(setupResult.dataDir, 'stable-workflow-project')
+    const canaryRoot = path.join(setupResult.dataDir, 'canary-workflow-project')
+    await Promise.all([mkdir(stableRoot, { recursive: true }), mkdir(canaryRoot, { recursive: true })])
+    const contents = '# Release\nRun the release checks.\n'
+    const commit = 'a'.repeat(40)
+    const candidate = {
+      kind: 'workflow',
+      artifactId: 'release',
+      version: '1.0.0',
+      source: 'github',
+      sourceRef: `github:https://github.com/acme/review/blob/${commit}/workflows/release.md#workflows%2Frelease.md`,
+      contentHash: artifactContentHash(contents),
+      gitCommit: commit,
+      runtimeTargets: ['claude-code'],
+    }
+    const installer = createSkeletonInstaller({
+      dataDir: setupResult.dataDir,
+      skeletonRoot: stableRoot,
+      artifacts: { resolve: async () => ({ artifact: candidate, contents }) },
+      home: path.join(setupResult.dataDir, 'home'),
+      codexHome: path.join(setupResult.dataDir, 'codex-home'),
+      claudeHome: path.join(setupResult.dataDir, 'claude-home'),
+      codexAdminSkillsDirectories: [],
+    })
+    const service = createGovernanceService({
+      evaluations: setupResult.evaluations,
+      registry: setupResult.registry,
+      skeletonLock: setupResult.skeletonLock,
+      installer,
+    })
+    const { capability } = await ready(service, setupResult.evaluations, candidate, 'workflow', undefined, {
+      targetSkeleton: '.claude/commands/release.md',
+    })
+    await service.approve(capability.id, { reviewer: 'Reviewer' })
+
+    await expect(service.previewCanary(capability.id, {
+      targetSkeleton: 'workflows/release.md',
+      projectRoot: canaryRoot,
+    })).rejects.toThrow('scanner-visible Runtime path')
+    await expect(service.previewCanary(capability.id, {
+      targetSkeleton: '.claude/commands/release.md',
+      projectRoot: canaryRoot,
+    })).resolves.toEqual(expect.objectContaining({
+      target: '.claude/commands/release.md',
+      projectRoot: canaryRoot,
+    }))
   })
 
   it('reuses the canonical target when a physical target alias already has a Stable owner', async () => {

@@ -6,6 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { artifactPackageHash } from './evaluations/artifact-package.mjs'
 import { computeTeamTemplateHash, createProjectTemplateManager, loadTeamTemplate, verifyTeamTemplateGovernance } from './project-template.mjs'
 import { computeEvaluationEvidenceHash } from './evaluations/evaluation-store.mjs'
 
@@ -299,7 +300,9 @@ describe('Team project templates', () => {
     await mkdir(path.join(source, 'skills', 'review'), { recursive: true })
     await writeFile(path.join(source, 'AGENTS.md'), '# governed\n')
     const skillContents = '# Review Skill\n'
+    const exampleContents = 'Review the changed files before approval.\n'
     await writeFile(path.join(source, 'skills', 'review', 'SKILL.md'), skillContents)
+    await writeFile(path.join(source, 'skills', 'review', 'example.md'), exampleContents)
     await git(source, 'add', '.')
     await git(source, '-c', 'user.name=SkillOps Test', '-c', 'user.email=skillops@example.invalid', 'commit', '-m', 'template assets')
     const revision = await git(source, 'rev-parse', 'HEAD')
@@ -308,7 +311,10 @@ describe('Team project templates', () => {
     const governed = teamTemplate('1.0.0', { 'AGENTS.md': '# governed\n' }, {
       revision,
       repository: 'acme/templates',
-      assetContentHash: contentHash(skillContents),
+      assetContentHash: artifactPackageHash([
+        { relativePath: 'SKILL.md', contents: skillContents },
+        { relativePath: 'example.md', contents: exampleContents },
+      ]),
     })
     await writeFile(manifestFile, `${JSON.stringify(governed, null, 2)}\n`)
     await git(source, 'add', '.')
@@ -324,7 +330,7 @@ describe('Team project templates', () => {
     const forged = teamTemplate('1.0.1', { 'AGENTS.md': '# unreviewed replacement\n' }, {
       revision,
       repository: 'acme/templates',
-      assetContentHash: contentHash(skillContents),
+      assetContentHash: governed.assets[0].contentHash,
     })
     await writeFile(manifestFile, `${JSON.stringify(forged, null, 2)}\n`)
     await git(source, 'add', '.')

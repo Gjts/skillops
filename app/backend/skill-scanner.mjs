@@ -455,6 +455,24 @@ async function createScanState(options = {}) {
   return { projectStart, project, configuredSkills, locations }
 }
 
+export async function classifyRuntimeDefinitionTarget(targetFile, options = {}) {
+  const target = path.resolve(targetFile)
+  const { locations } = await createScanState(options)
+  const matches = locations.filter((location) => {
+    if (location.enabled === false) return false
+    const relative = path.relative(path.resolve(location.directory), target)
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return false
+    const segments = relative.split(path.sep).filter(Boolean)
+    if (segments.length - 1 > (location.maxDepth ?? 3)) return false
+    const name = segments.at(-1)
+    if (location.kind === 'skill') return name === 'SKILL.md'
+    if (location.fileNames) return location.fileNames.includes(name)
+    return name.endsWith(location.fileExtension || '.md')
+  })
+  const location = matches.sort((left, right) => path.resolve(right.directory).length - path.resolve(left.directory).length)[0]
+  return location ? { runtime: location.runtime, kind: location.kind } : null
+}
+
 function shadowDefinition(definition, winner) {
   return {
     ...definition,

@@ -52,6 +52,7 @@ function metadata(entry) {
     artifactKind: entry.suite.artifactKind,
     repeats: entry.suite.repeats,
     ...(entry.suite.matrix ? { matrix: entry.suite.matrix } : {}),
+    ...(entry.suite.gate ? { gate: entry.suite.gate } : {}),
     caseCount: entry.cases.length,
     suiteHash: entry.suiteHash,
     datasetHash: entry.datasetHash,

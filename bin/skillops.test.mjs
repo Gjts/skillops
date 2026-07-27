@@ -25,6 +25,18 @@ describe('SkillOps CLI flags', () => {
     })
   })
 
+  it('prints Team Template help without requiring a manifest', () => {
+    const result = spawnSync(process.execPath, ['bin/skillops.mjs', 'init', '--help'], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+    })
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('Usage:')
+    expect(result.stdout).toContain('--governance-token-env')
+    expect(result.stderr).toBe('')
+  })
+
   it('runs the explicit recoverable legacy event migration', async () => {
     const dataDir = await mkdtemp(path.join(os.tmpdir(), 'skillops-cli-migrate-'))
     temporaryDirectories.push(dataDir)

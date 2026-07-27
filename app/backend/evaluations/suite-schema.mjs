@@ -175,6 +175,30 @@ function normalizeMatrix(value) {
   return { models }
 }
 
+function normalizeGate(value) {
+  if (value === undefined) return undefined
+  const gate = plainObject(value, 'Suite gate')
+  onlyKeys(gate, new Set(['minSampleSize', 'minSuiteCaseCoveragePct']), 'Suite gate')
+  const normalized = {}
+  if (gate.minSampleSize !== undefined) {
+    if (!Number.isInteger(gate.minSampleSize) || gate.minSampleSize < 1) {
+      throw new EvaluationError('Suite gate minSampleSize must be a positive integer.', 422)
+    }
+    normalized.minSampleSize = gate.minSampleSize
+  }
+  if (gate.minSuiteCaseCoveragePct !== undefined) {
+    if (typeof gate.minSuiteCaseCoveragePct !== 'number'
+      || !Number.isFinite(gate.minSuiteCaseCoveragePct)
+      || gate.minSuiteCaseCoveragePct < 0
+      || gate.minSuiteCaseCoveragePct > 100) {
+      throw new EvaluationError('Suite gate minSuiteCaseCoveragePct must be between 0 and 100.', 422)
+    }
+    normalized.minSuiteCaseCoveragePct = gate.minSuiteCaseCoveragePct
+  }
+  if (!Object.keys(normalized).length) throw new EvaluationError('Suite gate requires at least one threshold.', 422)
+  return normalized
+}
+
 export function assertEvaluationMatrixSize(suite, cases) {
   const cells = cases.length * suite.repeats * (suite.matrix?.models.length || 1) * 2
   if (cells > MAX_EVALUATION_CELLS) throw new EvaluationError('Evaluation matrix exceeds the 2,000-cell limit.', 413)
@@ -190,7 +214,7 @@ export function normalizeSuiteDataset(value) {
 
 export function normalizeEvaluationSuite(value) {
   const suite = plainObject(value, 'Evaluation suite')
-  onlyKeys(suite, new Set(['schemaVersion', 'id', 'name', 'version', 'owner', 'sensitivity', 'artifactKind', 'repeats', 'matrix', 'cases', 'dataset', 'redaction']), 'Evaluation suite')
+  onlyKeys(suite, new Set(['schemaVersion', 'id', 'name', 'version', 'owner', 'sensitivity', 'artifactKind', 'repeats', 'matrix', 'gate', 'cases', 'dataset', 'redaction']), 'Evaluation suite')
   if (suite.schemaVersion !== SUITE_SCHEMA_VERSION) throw new EvaluationError('Evaluation suite schemaVersion must be 1.', 422)
   const sensitivity = requiredText(suite.sensitivity, 'Suite sensitivity', 40)
   if (!sensitivities.has(sensitivity)) throw new EvaluationError('Suite sensitivity must be synthetic or sanitized.', 422)
@@ -199,6 +223,7 @@ export function normalizeEvaluationSuite(value) {
   const repeats = suite.repeats === undefined ? 1 : suite.repeats
   if (!Number.isInteger(repeats) || repeats < 1 || repeats > MAX_SUITE_REPEATS) throw new EvaluationError(`Suite repeats must be between 1 and ${MAX_SUITE_REPEATS}.`, 422)
   const matrix = normalizeMatrix(suite.matrix)
+  const gate = normalizeGate(suite.gate)
   const dataset = optionalText(suite.dataset, 'Suite dataset path', 500)
   if (dataset && (pathIsAbsolute(dataset) || dataset.split(/[\\/]+/).some((part) => part === '..') || !/\.json$/i.test(dataset))) {
     throw new EvaluationError('Suite dataset path must be a relative JSON path inside evals/datasets.', 422)
@@ -216,6 +241,7 @@ export function normalizeEvaluationSuite(value) {
     artifactKind,
     repeats,
     ...(matrix ? { matrix } : {}),
+    ...(gate ? { gate } : {}),
     ...(redaction ? { redaction } : {}),
     ...(dataset ? { dataset: dataset.replace(/\\/g, '/') } : { cases: normalizeCases(suite.cases, 'Evaluation suite') }),
   }

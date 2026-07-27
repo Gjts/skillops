@@ -7,7 +7,7 @@ import { artifactContentHash, artifactKindForRuntimeDefinition, normalizeArtifac
 import { artifactPackageHash, normalizeArtifactPackage, readArtifactPackage } from '../evaluations/artifact-package.mjs'
 import { installedArtifactDefinitions } from '../evaluations/candidate-source.mjs'
 import { EvaluationError } from '../evaluations/errors.mjs'
-import { scanInstalledSkills } from '../skill-scanner.mjs'
+import { classifyRuntimeDefinitionTarget, scanInstalledSkills } from '../skill-scanner.mjs'
 import { withGovernanceFileLock } from './skeleton-lock.mjs'
 import { ARTIFACT_REFERENCE_ONLY_KINDS, ARTIFACT_RUNTIME_COMPATIBILITY } from '../../shared/evaluation-schema.mjs'
 
@@ -894,6 +894,15 @@ export function createSkeletonInstaller(options = {}) {
         throw new EvaluationError('Candidate content changed before installation.', 409)
       }
       const { targetFile, root } = await resolveInstallTarget(capability.targetSkeleton, context.projectRoot)
+      if (capability.artifact.kind === 'workflow') {
+        const target = await classifyRuntimeDefinitionTarget(targetFile, {
+          ...options,
+          projectRoot: root || options.projectRoot,
+        })
+        if (!matchesReleasedArtifact(target, capability.artifact)) {
+          throw new EvaluationError('Workflow installation target must be a scanner-visible Runtime path compatible with the released Artifact.', 422)
+        }
+      }
       const installationTarget = packageFiles ? path.dirname(targetFile) : targetFile
       const existing = await lstat(installationTarget).catch((error) => error?.code === 'ENOENT' ? null : Promise.reject(error))
       if (existing) throw new EvaluationError('Installation target already exists.', 409)
@@ -998,6 +1007,7 @@ export function createSkeletonInstaller(options = {}) {
       const token = randomUUID()
       const expiresAt = Date.now() + 10 * 60_000
       if (referenceOnlyArtifact(capability.artifact)) {
+        const project = context.projectRoot ? await projectIdentity(capability.targetSkeleton, context.projectRoot) : null
         const plan = {
           previewToken: token,
           purpose: context.purpose || 'restore',
@@ -1005,6 +1015,7 @@ export function createSkeletonInstaller(options = {}) {
           releaseCapabilityId: capability.id,
           source: capability.artifact.sourceRef,
           target: capability.targetSkeleton,
+          ...(project ? { projectRoot: project.projectRoot } : {}),
           currentHash: null,
           candidateHash: capability.artifact.contentHash,
           diff: { beforeLines: 0, afterLines: 0, changedLines: 1 },

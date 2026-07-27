@@ -45,6 +45,16 @@ export function normalizeGatePolicy(value = DEFAULT_GATE_POLICY) {
   return Object.fromEntries(Object.keys(DEFAULT_GATE_POLICY).map((key) => [key, policy[key]]))
 }
 
+export function effectiveGatePolicy(value = DEFAULT_GATE_POLICY, suiteGate) {
+  const policy = normalizeGatePolicy(value)
+  if (!suiteGate) return policy
+  return normalizeGatePolicy({
+    ...policy,
+    minSampleSize: Math.max(policy.minSampleSize, suiteGate.minSampleSize ?? 0),
+    minSuiteCaseCoveragePct: Math.max(policy.minSuiteCaseCoveragePct, suiteGate.minSuiteCaseCoveragePct ?? 0),
+  })
+}
+
 export function gatePolicyHash(value = DEFAULT_GATE_POLICY) {
   return createHash('sha256').update(canonicalJson(normalizeGatePolicy(value)), 'utf8').digest('hex')
 }

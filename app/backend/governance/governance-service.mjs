@@ -4,7 +4,7 @@ import { normalizeArtifactDefinition } from '../../shared/evaluation-schema.mjs'
 import { canonicalJson } from '../evaluations/suite-registry.mjs'
 import { computeEvaluationEvidenceHash, sanitizePersistedArtifact } from '../evaluations/evaluation-store.mjs'
 import { EvaluationError } from '../evaluations/errors.mjs'
-import { DEFAULT_GATE_POLICY, evaluateGatePolicy, evaluateRedteamGatePolicy, gatePolicyHash, normalizeGatePolicy } from './capability-policy.mjs'
+import { DEFAULT_GATE_POLICY, effectiveGatePolicy, evaluateGatePolicy, evaluateRedteamGatePolicy, gatePolicyHash, normalizeGatePolicy } from './capability-policy.mjs'
 import { createGovernanceAuditLog, governanceCapabilityStateHash } from './governance-audit.mjs'
 import { createCapabilityRegistry, sanitizeCapability } from './capability-registry.mjs'
 import { createSkeletonLock } from './skeleton-lock.mjs'
@@ -73,6 +73,7 @@ export function createGovernanceService(options = {}) {
   const installer = options.installer || createSkeletonInstaller(options)
   const policy = normalizeGatePolicy(options.policy || DEFAULT_GATE_POLICY)
   const resolveGatePolicy = options.resolveGatePolicy
+  const resolveSuite = options.resolveSuite
   const audit = options.audit || createGovernanceAuditLog({ ...options, dataDir: options.dataDir || registry.dataDir })
   const resolveProjectRoot = options.resolveProjectRoot
   const capabilityTargetKey = (capability) => capability.targetKey || capability.targetSkeleton
@@ -91,7 +92,19 @@ export function createGovernanceService(options = {}) {
     if (selected.id !== policyId) throw new EvaluationError('Resolved Gate Policy ID does not match the capability.', 500)
     return selected
   }
+  async function suiteForRun(run) {
+    return typeof resolveSuite === 'function' && run?.suiteId ? resolveSuite(run.suiteId) : null
+  }
+  function suiteMatchesRun(suite, run) {
+    return !suite || (suite.suiteHash === run.suiteHash
+      && (suite.datasetHash || null) === (run.datasetHash || null))
+  }
+  async function effectivePolicyFor(value, suite) {
+    const basePolicy = await policyFor(value)
+    return effectiveGatePolicy(basePolicy, suite?.gate)
+  }
   async function projectRootFor(projectId) {
+    if (projectId == null) return null
     return typeof resolveProjectRoot === 'function' ? resolveProjectRoot(projectId) : null
   }
   async function legacyCandidateOrigin(capability) {
@@ -293,12 +306,20 @@ export function createGovernanceService(options = {}) {
       if (error instanceof EvaluationError && error.status === 409) return true
       throw error
     }
-    const currentPolicy = await policyFor(capability)
+    const quality = await evaluations.getRun(capability.evidence.qualityRunId)
+    if (!validRunEvidence(quality) || quality.evidenceHash !== capability.evidence.qualityEvidenceHash) return true
+    let currentPolicy
+    try {
+      const suite = await suiteForRun(quality)
+      if (!suiteMatchesRun(suite, quality)) return true
+      currentPolicy = await effectivePolicyFor(capability, suite)
+    } catch (error) {
+      if (error instanceof EvaluationError && error.status === 404) return true
+      throw error
+    }
     if (capability.evidence.policyHash !== gatePolicyHash(currentPolicy)
       || capability.evidence.candidateHash !== capability.artifact.contentHash
       || capability.evidence.baselineHash !== capability.baseline?.contentHash) return true
-    const quality = await evaluations.getRun(capability.evidence.qualityRunId)
-    if (!validRunEvidence(quality) || quality.evidenceHash !== capability.evidence.qualityEvidenceHash) return true
     if (capability.evidence.redteamRunId) {
       const redteam = await evaluations.getRun(capability.evidence.redteamRunId)
       if (!validRunEvidence(redteam)
@@ -846,11 +867,9 @@ export function createGovernanceService(options = {}) {
         const projectRoot = await projectRootFor(projectId)
         const stable = await currentStable(requestedTarget, projectRoot)
         const targetSkeleton = stable?.targetSkeleton || requestedTarget
-        const targetKey = stable
-          ? capabilityTargetKey(stable)
-          : projectRoot && installer.targetKey
-            ? await installer.targetKey(targetSkeleton, projectRoot)
-            : null
+        const targetKey = projectRoot && installer.targetKey
+          ? await installer.targetKey(targetSkeleton, projectRoot)
+          : null
         if (authoritativeBaseline && stable) assertArtifact(authoritativeBaseline, stable.artifact, 'Candidate baseline')
         const baseline = stable?.artifact || authoritativeBaseline
         if ([artifact, baseline].some((item) => item?.source === 'prompthub')) {
@@ -936,11 +955,13 @@ export function createGovernanceService(options = {}) {
         if (!['candidate', 'evaluating', 'blocked', 'ready', 'approved', 'canary', 'deprecated', 'superseded'].includes(capability.stage)) {
           throw new EvaluationError('Evidence cannot be rebound from this capability stage.', 409)
         }
-        const gatePolicy = await policyFor(capability)
         const quality = await evaluations.getRun(identity(input?.runId, 'Managed Suite run ID'))
         if (!validRunEvidence(quality) || quality.mode !== 'suite' || !quality.suiteHash) {
           throw new EvaluationError('Only completed Managed Suite evidence can be bound.', 409)
         }
+        const suite = await suiteForRun(quality)
+        if (!suiteMatchesRun(suite, quality)) throw new EvaluationError('Managed Suite evidence is stale.', 409)
+        const gatePolicy = await effectivePolicyFor(capability, suite)
         if ((await registry.list()).some((item) => item.id !== capabilityId
           && (item.originEvaluationRunId === quality.id || item.latestEvidenceRunId === quality.id))) {
           throw new EvaluationError('This Managed Suite run is already bound to another Release Candidate.', 409)

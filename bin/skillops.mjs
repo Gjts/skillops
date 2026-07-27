@@ -47,8 +47,9 @@ export async function main(values = process.argv.slice(2)) {
     else if (command === 'emit') await emit(args)
     else if (command === 'events:migrate') console.log(JSON.stringify(await migrateLegacyEvents(), null, 2))
     else if (command === 'init') {
-      const { projectTemplateInit } = await import('./project-template-cli.mjs')
-      console.log(JSON.stringify(await projectTemplateInit(args), null, 2))
+      const { projectTemplateInit, projectTemplateUsage } = await import('./project-template-cli.mjs')
+      if (args.includes('--help')) console.log(projectTemplateUsage)
+      else console.log(JSON.stringify(await projectTemplateInit(args), null, 2))
     }
     else if (command === 'eval:list') {
       const { evaluationList } = await import('./evaluation-cli.mjs')

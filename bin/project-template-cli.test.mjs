@@ -87,4 +87,40 @@ describe('skillops init', () => {
     await expect(projectTemplateInit(['--approve', '--approval', nomination.id], dependencies)).resolves.toBe(approved)
     expect(templateApprovals.approve).toHaveBeenCalledWith(nomination.id, { reviewer: principal })
   })
+
+  it('resolves an independent configured reviewer from an environment-named token', async () => {
+    const token = 'reviewer-token-that-is-at-least-32-characters'
+    const approved = { id: 'template-approval-1', status: 'approved' }
+    const templateApprovals = {
+      approve: vi.fn(async () => approved),
+    }
+    const dependencies = {
+      environment: {
+        TEAM_REVIEWER_TOKEN: token,
+        SKILLOPS_GOVERNANCE_PRINCIPALS: JSON.stringify([{
+          token,
+          id: 'user:independent-reviewer',
+          displayName: 'Independent Reviewer',
+        }]),
+      },
+      templateApprovals,
+    }
+
+    await expect(projectTemplateInit([
+      '--approve',
+      '--approval', approved.id,
+      '--governance-token-env', 'TEAM_REVIEWER_TOKEN',
+    ], dependencies)).resolves.toBe(approved)
+    expect(templateApprovals.approve).toHaveBeenCalledWith(approved.id, {
+      reviewer: expect.objectContaining({
+        id: 'user:independent-reviewer',
+        assurance: 'configured-bearer-token',
+      }),
+    })
+    await expect(projectTemplateInit([
+      '--approve',
+      '--approval', approved.id,
+      '--governance-token', token,
+    ], dependencies)).rejects.toThrow('--governance-token-env')
+  })
 })

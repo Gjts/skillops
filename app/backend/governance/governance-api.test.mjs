@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest'
 import { EvaluationError } from '../evaluations/errors.mjs'
+import { DEFAULT_GATE_POLICY, effectiveGatePolicy, gatePolicyHash } from './capability-policy.mjs'
 import { handleGovernanceApi } from './governance-api.mjs'
 
 function request(method, url, body, headers = {}, remoteAddress = '127.0.0.1') {
@@ -112,6 +113,87 @@ describe('governance API', () => {
       projectRoot: 'C:\\canary-project',
       confirm: true,
       actor: 'Operator',
+    })
+  })
+
+  it('projects the authoritative effective Capability gates instead of the raw Suite result', async () => {
+    const suiteGate = { minSampleSize: 3 }
+    const strictPolicy = {
+      ...DEFAULT_GATE_POLICY,
+      id: 'strict-v1',
+      minCandidateScore: 95,
+    }
+    const capability = {
+      id: 'cap-1',
+      stage: 'blocked',
+      policyId: strictPolicy.id,
+      projectId: 'project-a',
+      evidenceStale: false,
+      evidence: {
+        qualityRunId: 'run-1',
+        qualityEvidenceHash: 'e'.repeat(64),
+        redteamEvidenceHash: null,
+      },
+    }
+    const governance = service()
+    governance.get.mockResolvedValue(capability)
+    const evaluations = {
+      getRun: vi.fn().mockResolvedValue({
+        id: 'run-1',
+        suiteId: 'quality',
+        suiteHash: 'd'.repeat(64),
+        datasetHash: 'e'.repeat(64),
+        mode: 'suite',
+        status: 'completed',
+        evidenceHash: capability.evidence.qualityEvidenceHash,
+        candidate: {},
+        metrics: {
+          casesTotal: 2,
+          eligibleCases: 2,
+          casesPassed: 2,
+          candidateScore: 90,
+          scoreDeltaPp: 10,
+          passRatePct: 100,
+          regressionRatePct: 0,
+          costDeltaPct: 0,
+          latencyDeltaPct: 0,
+          criticalFindings: 0,
+          highFindings: 0,
+        },
+        gateResult: 'passed',
+      }),
+    }
+    const res = response()
+
+    await handleGovernanceApi(
+      request('GET', '/api/capabilities/cap-1'),
+      res,
+      '/api/capabilities/cap-1',
+      {
+        governanceServices: {
+          governance,
+          evaluations,
+          suites: {
+            get: vi.fn().mockResolvedValue({
+              gate: suiteGate,
+              suiteHash: 'd'.repeat(64),
+              datasetHash: 'e'.repeat(64),
+            }),
+          },
+          gatePolicy: DEFAULT_GATE_POLICY,
+          resolveGatePolicy: vi.fn().mockResolvedValue({ policy: strictPolicy }),
+        },
+      },
+    )
+
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body)).toMatchObject({
+      effectiveGateResult: 'failed',
+      effectivePolicyHash: gatePolicyHash(effectiveGatePolicy(strictPolicy, suiteGate)),
+      effectiveGates: expect.arrayContaining([
+        { id: 'sample-size', status: 'failed', blocking: true },
+        { id: 'candidate-score', status: 'failed', blocking: true },
+      ]),
     })
   })
 

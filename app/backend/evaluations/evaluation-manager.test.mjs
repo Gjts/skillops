@@ -2,6 +2,7 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { DEFAULT_GATE_POLICY, effectiveGatePolicy, gatePolicyHash } from '../governance/capability-policy.mjs'
 import { createEvaluationManager } from './evaluation-manager.mjs'
 import { computeEvaluationEvidenceHash, createEvaluationStore } from './evaluation-store.mjs'
 
@@ -150,6 +151,20 @@ describe('evaluation manager', () => {
     expect(run.subjectHash).toBe(subjectHash)
     expect(run.evidenceHash).toBe(computeEvaluationEvidenceHash({ ...run, evidenceHash: null }))
     expect(computeEvaluationEvidenceHash({ ...run, subjectHash: 'e'.repeat(64), evidenceHash: null })).not.toBe(run.evidenceHash)
+  })
+
+  it('evaluates a run against the stricter effective Suite threshold', async () => {
+    const policy = { ...DEFAULT_GATE_POLICY, minSampleSize: 1, minSuiteCaseCoveragePct: 0 }
+    const gatedSuite = { ...suite, gate: { minSampleSize: 2, minSuiteCaseCoveragePct: 0 } }
+    const { store, manager } = await setup(async (input) => completed(input), { policy })
+    const created = await manager.enqueue(request(1, { suite: gatedSuite }))
+    const run = await waitFor(store, created.summary.id, 'completed')
+
+    expect(run.gateResult).toBe('failed')
+    expect(run.gates.find((gate) => gate.id === 'sample-size')).toEqual({
+      id: 'sample-size', status: 'failed', blocking: true,
+    })
+    expect(run.policyHash).toBe(gatePolicyHash(effectiveGatePolicy(policy, gatedSuite.gate)))
   })
 
   it('supports request idempotency and rejects duplicate active candidate evidence', async () => {

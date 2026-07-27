@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { canonicalJson } from '../evaluations/suite-registry.mjs'
-import { DEFAULT_GATE_POLICY, evaluateGatePolicy, evaluateRedteamGatePolicy, evidenceIsStale, gatePolicyHash, gatePolicyIntegrityMatches, normalizeGatePolicy } from './capability-policy.mjs'
+import { DEFAULT_GATE_POLICY, effectiveGatePolicy, evaluateGatePolicy, evaluateRedteamGatePolicy, evidenceIsStale, gatePolicyHash, gatePolicyIntegrityMatches, normalizeGatePolicy } from './capability-policy.mjs'
 
 const metrics = {
   baselineScore: 80, candidateScore: 80, scoreDeltaPp: 0, casesPassed: 100, casesTotal: 100, eligibleCases: 100, suiteCaseCoveragePct: 100,
@@ -118,6 +118,24 @@ describe('capability gate policy', () => {
       candidate: { runtimeTargets: ['codex', 'claude-code'], compatibility: { codex: 'supported', 'claude-code': 'preview' } },
     }, { ...DEFAULT_GATE_POLICY, requireCompatibility: true })
     expect(incompatible.gateResult).toBe('failed')
+  })
+
+  it('uses the stricter Suite and release-policy evidence thresholds', () => {
+    const policy = { ...DEFAULT_GATE_POLICY, minSampleSize: 2, minSuiteCaseCoveragePct: 50 }
+    expect(effectiveGatePolicy(policy, {
+      minSampleSize: 3,
+      minSuiteCaseCoveragePct: 80,
+    })).toEqual(expect.objectContaining({
+      minSampleSize: 3,
+      minSuiteCaseCoveragePct: 80,
+    }))
+    expect(effectiveGatePolicy({ ...policy, minSampleSize: 4, minSuiteCaseCoveragePct: 90 }, {
+      minSampleSize: 3,
+      minSuiteCaseCoveragePct: 80,
+    })).toEqual(expect.objectContaining({
+      minSampleSize: 4,
+      minSuiteCaseCoveragePct: 90,
+    }))
   })
 
   it('evaluates Red Team findings independently from quality score gates', () => {

@@ -794,6 +794,37 @@ describe('project skeleton installer', () => {
     await expect(wrongRuntime.verify(releaseCapability, releaseCapability.targetSkeleton, root)).rejects.toThrow('kind, Runtime')
   })
 
+  it('binds a reference-only restore preview to its Team project root', async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'skillops-reference-restore-')))
+    temporaryDirectories.push(root)
+    const capability = {
+      id: 'cap-prompt-v1',
+      artifact: {
+        kind: 'prompt',
+        artifactId: 'release-summary',
+        version: 'a'.repeat(40),
+        source: 'prompt-registry',
+        sourceRef: `prompt-registry:${'a'.repeat(40)}:prompts%2Frelease.prompt.json:${'b'.repeat(64)}`,
+        contentHash: 'b'.repeat(64),
+        gitCommit: 'a'.repeat(40),
+      },
+      targetSkeleton: 'prompt:release-summary',
+    }
+    const installer = createSkeletonInstaller({ dataDir: root })
+
+    const preview = await installer.previewRestore(capability, null, {
+      purpose: 'rollback',
+      subjectCapabilityId: 'cap-prompt-v2',
+      projectRoot: root,
+    })
+
+    expect(preview.projectRoot).toBe(root)
+    await expect(installer.apply(preview.previewToken, {
+      ...applyInput(preview),
+      projectRoot: root,
+    })).resolves.toEqual(expect.objectContaining({ applied: true, referenceOnly: true }))
+  })
+
   it('rejects a target outside the explicit resolver allowlist', async () => {
     const { capability, installer } = await setup()
     await expect(installer.preview({ ...capability, targetSkeleton: '../../outside' })).rejects.toThrow('allowlist')

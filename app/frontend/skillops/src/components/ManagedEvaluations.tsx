@@ -367,12 +367,14 @@ export function ManagedEvaluations({ tab, draft, configureProvider = false }: { 
   const eligible = currentRun?.metrics?.eligibleCases || 0
   const suiteCaseCoverage = currentRun?.metrics?.suiteCaseCoveragePct ?? null
   const regressions = cases.filter((item) => item.baseline.pass && !item.candidate.pass)
+  const requiredEvidenceGatesPassed = ['sample-size', 'suite-case-coverage'].every((gateId) =>
+    currentRun?.gates.some((gate) => gate.id === gateId && gate.blocking && gate.status === 'passed'),
+  )
   const evidenceSufficient = currentRun?.status === 'completed'
     && currentRun.gateResult === 'passed'
     && currentRun.evidenceFresh === true
     && evaluated > 0
-    && suiteCaseCoverage === 100
-    && currentRun.gates.some((gate) => gate.id === 'suite-case-coverage' && gate.status === 'passed')
+    && requiredEvidenceGatesPassed
 
   const saveDecision = async (runId: string, value: ManagedDecisionValue) => {
     return apiJson<{ decision: ManagedDecision }>(`/api/evaluations/${encodeURIComponent(runId)}/decision`, {

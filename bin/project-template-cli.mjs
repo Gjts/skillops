@@ -9,6 +9,18 @@ import { createTeamTemplateApprovalStore } from '../app/backend/team-template-ap
 import { evaluationRun } from './evaluation-cli.mjs'
 import { flags } from './cli-flags.mjs'
 
+export const projectTemplateUsage = `Usage:
+  npm run template:init -- --manifest <draft.json> --hash
+  npm run template:init -- --manifest <stable-candidate.json> --nominate [--governance-token-env <name>]
+  npm run template:init -- --approve --approval <approval-id> [--governance-token-env <name>]
+  npm run template:init -- --manifest <team-template.json> --target <project> --mode <greenfield|adopt-existing|migration> [--apply]
+  npm run template:init -- --manifest <team-template.json> --target <project> --status
+  npm run template:init -- --manifest <team-template.json> --target <project> --rollback [--apply]
+
+Governance credentials:
+  --governance-token-env <name>  Read a configured Bearer token from this environment variable.
+                                 Defaults to SKILLOPS_GOVERNANCE_TOKEN when set.`
+
 function required(options, name) {
   const value = options[name]
   if (typeof value !== 'string' || !value.trim()) throw new EvaluationError(`Missing required --${name}.`, 422)
@@ -28,15 +40,27 @@ function governanceServices(dependencies) {
   }
 }
 
+function governanceRequest(options, dependencies) {
+  const explicit = options['governance-token-env'] !== undefined
+  const variable = explicit ? required(options, 'governance-token-env') : 'SKILLOPS_GOVERNANCE_TOKEN'
+  const token = (dependencies.environment || process.env)[variable]
+  if (!token) {
+    if (explicit) throw new EvaluationError(`Governance token environment variable ${variable} is not configured.`, 403)
+    return null
+  }
+  return { headers: { authorization: `Bearer ${token}` } }
+}
+
 export async function projectTemplateInit(args, dependencies = {}) {
   const options = flags(args)
   for (const name of ['approve', 'status', 'apply', 'rollback', 'hash', 'nominate']) {
     if (options[name] !== undefined && options[name] !== true) throw new EvaluationError(`--${name} does not accept a value.`, 422)
   }
   if (options['api-key']) throw new EvaluationError('Use --api-key-env or SKILLOPS_EVAL_API_KEY instead of putting a key on the command line.', 422)
+  if (options['governance-token'] !== undefined) throw new EvaluationError('Use --governance-token-env or SKILLOPS_GOVERNANCE_TOKEN instead of putting a token on the command line.', 422)
   const governance = governanceServices(dependencies)
   if (options.approve === true) {
-    const reviewer = await (dependencies.resolvePrincipal || resolveGovernancePrincipal)(null, dependencies)
+    const reviewer = await (dependencies.resolvePrincipal || resolveGovernancePrincipal)(governanceRequest(options, dependencies), dependencies)
     return governance.templateApprovals.approve(required(options, 'approval'), { reviewer })
   }
   if (options.status === true && (options.apply === true || options.rollback === true)) throw new EvaluationError('--status cannot be combined with --apply or --rollback.', 422)
@@ -49,7 +73,7 @@ export async function projectTemplateInit(args, dependencies = {}) {
   if (options.nominate === true) {
     const manifest = await (dependencies.loadNomination || loadTeamTemplateNomination)(manifestFile)
     await (dependencies.verifyNomination || verifyTeamTemplateNomination)(manifest, governance)
-    const submitter = await (dependencies.resolvePrincipal || resolveGovernancePrincipal)(null, dependencies)
+    const submitter = await (dependencies.resolvePrincipal || resolveGovernancePrincipal)(governanceRequest(options, dependencies), dependencies)
     return governance.templateApprovals.nominate({
       templateId: manifest.id,
       version: manifest.version,

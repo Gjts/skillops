@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest'
+import { DEFAULT_GATE_POLICY, effectiveGatePolicy, gatePolicyHash } from '../governance/capability-policy.mjs'
 import { EvaluationError } from './errors.mjs'
 import { handleManagedEvaluationApi } from './suite-api.mjs'
 
@@ -162,6 +163,36 @@ describe('managed evaluation API', () => {
     expect(oversized.response.statusCode).toBe(413)
   })
 
+  it('does not reflect unsupported request field names', async () => {
+    const sentinel = 'GP10_PRIVATE_FIELD_SENTINEL'
+    const result = await call('POST', '/api/evaluation-runs', {
+      suiteId: 'suite-1',
+      baselineRef: 'local-scan:baseline',
+      candidateRef: 'github:candidate',
+      requestedBy: 'qa',
+      provider: { provider: 'openai', apiKey: 'key', [sentinel]: 'private' },
+    })
+
+    expect(result.response.statusCode).toBe(422)
+    expect(result.json.error.message).toBe('Evaluation request contains unsupported fields.')
+    expect(result.response.body).not.toContain(sentinel)
+  })
+
+  it('does not reflect unsupported provider values', async () => {
+    const sentinel = 'GP10_PRIVATE_PROVIDER_SENTINEL'
+    const result = await call('POST', '/api/evaluation-runs', {
+      suiteId: 'suite-1',
+      baselineRef: 'local-scan:baseline',
+      candidateRef: 'github:candidate',
+      requestedBy: 'qa',
+      provider: { provider: sentinel, apiKey: 'key' },
+    })
+
+    expect(result.response.statusCode).toBe(400)
+    expect(result.json.error.message).toBe('Unsupported AI provider.')
+    expect(result.response.body).not.toContain(sentinel)
+  })
+
   it('supports run filters, safe case pagination, detail, and explicit cancellation', async () => {
     const service = services()
     const list = await call('GET', '/api/evaluation-runs?status=completed&suiteId=suite-1&capabilityId=cap-1&limit=10&cursor=old', undefined, service)
@@ -218,7 +249,7 @@ describe('managed evaluation API', () => {
     expect(rejected.response.body).not.toContain('secret')
   })
 
-  it('fails closed when Create Candidate evidence lacks current complete Suite coverage', async () => {
+  it('fails closed when Create Candidate evidence lacks current required Suite gates', async () => {
     const completed = {
       ...summary,
       mode: 'suite',
@@ -235,15 +266,56 @@ describe('managed evaluation API', () => {
 
     const rejected = await call('POST', '/api/evaluations/run-1/decision', { decision: 'create-candidate' }, service)
     expect(rejected.response.statusCode).toBe(409)
-    expect(rejected.json.error.message).toContain('complete Suite case coverage')
+    expect(rejected.json.error.message).toContain('sample-size and Suite case coverage gates')
     expect(service.store.appendDecision).not.toHaveBeenCalled()
 
     service.store.getRun.mockResolvedValue({
       ...completed,
       metrics: { ...completed.metrics, casesTotal: 2, suiteCaseCoveragePct: 100 },
-      gates: [{ id: 'suite-case-coverage', status: 'passed', blocking: true }],
+      gates: [
+        { id: 'sample-size', status: 'passed', blocking: true },
+        { id: 'suite-case-coverage', status: 'passed', blocking: true },
+      ],
       gateResult: 'passed',
     })
+    expect((await call('POST', '/api/evaluations/run-1/decision', { decision: 'create-candidate' }, service)).response.statusCode).toBe(201)
+  })
+
+  it('uses the effective Suite and policy thresholds for metadata, freshness, and Candidate decisions', async () => {
+    const policy = { ...DEFAULT_GATE_POLICY, minSampleSize: 1, minSuiteCaseCoveragePct: 40 }
+    const gatedSuite = { ...suite, gate: { minSampleSize: 1, minSuiteCaseCoveragePct: 50 } }
+    const effectivePolicyHash = gatePolicyHash(effectiveGatePolicy(policy, gatedSuite.gate))
+    const completed = {
+      ...summary,
+      mode: 'suite',
+      status: 'completed',
+      suiteId: gatedSuite.id,
+      candidate: artifact('candidate', 'b').artifact,
+      metrics: { casesTotal: 1, eligibleCases: 2, suiteCaseCoveragePct: 50 },
+      policyHash: effectivePolicyHash,
+      gates: [
+        { id: 'sample-size', status: 'passed', blocking: true },
+        { id: 'suite-case-coverage', status: 'passed', blocking: true },
+      ],
+      gateResult: 'passed',
+      evidenceHash: 'e'.repeat(64),
+    }
+    const service = services({ policy, policyHash: gatePolicyHash(policy) })
+    service.suites.list.mockResolvedValue([{
+      id: gatedSuite.id,
+      name: gatedSuite.name,
+      gate: gatedSuite.gate,
+      suiteHash: gatedSuite.suiteHash,
+    }])
+    service.suites.get.mockResolvedValue(gatedSuite)
+    service.store.getRun.mockResolvedValue(completed)
+
+    const suites = await call('GET', '/api/evaluation-suites', undefined, service)
+    expect(suites.json.items[0]).toEqual(expect.objectContaining({
+      gate: gatedSuite.gate,
+      policyHash: effectivePolicyHash,
+    }))
+    expect((await call('GET', '/api/evaluation-runs/run-1', undefined, service)).json.evidenceFresh).toBe(true)
     expect((await call('POST', '/api/evaluations/run-1/decision', { decision: 'create-candidate' }, service)).response.statusCode).toBe(201)
   })
 

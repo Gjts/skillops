@@ -208,6 +208,7 @@ export type {
   CandidateSummary,
   EvaluationVariant,
   EvaluationRunSummary,
+  EvaluationSuiteGate,
   EvaluationSuiteMetadata,
   QuickEvaluationMode,
   QuickEvaluationResult,

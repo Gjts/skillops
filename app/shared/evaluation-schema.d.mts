@@ -219,6 +219,11 @@ export interface EvaluationRunSummary {
   errorCode: string | null
 }
 
+export interface EvaluationSuiteGate {
+  minSampleSize?: number
+  minSuiteCaseCoveragePct?: number
+}
+
 export interface EvaluationSuiteMetadata {
   id: string
   name: string
@@ -232,6 +237,7 @@ export interface EvaluationSuiteMetadata {
   suiteHash: string
   datasetHash: string | null
   datasetId: string | null
+  gate?: EvaluationSuiteGate
 }
 
 export type CapabilityStage = 'candidate' | 'evaluating' | 'blocked' | 'ready' | 'approved' | 'canary' | 'stable' | 'deprecated' | 'superseded' | 'rolled-back'
@@ -276,6 +282,9 @@ export interface Capability {
   originEvaluationRunId?: string | null
   latestEvidenceRunId?: string | null
   evidence: CapabilityEvidence | null
+  effectiveGateResult?: 'passed' | 'failed' | 'not-evaluated'
+  effectiveGates?: EvaluationGate[]
+  effectivePolicyHash?: string | null
   approvals: CapabilityApproval[]
   evidenceStale: boolean
   reviewerIdentityAssurance: string

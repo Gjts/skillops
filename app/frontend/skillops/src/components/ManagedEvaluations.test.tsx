@@ -20,7 +20,10 @@ const baseRun = {
     costDeltaPct: null, baselineP95LatencyMs: 10, candidateP95LatencyMs: null, latencyDeltaPct: null,
     criticalFindings: 0, highFindings: 0,
   },
-  policyHash: 'd'.repeat(64), gates: [{ id: 'suite-case-coverage', status: 'passed' as const, blocking: true }],
+  policyHash: 'd'.repeat(64), gates: [
+    { id: 'sample-size', status: 'passed' as const, blocking: true },
+    { id: 'suite-case-coverage', status: 'passed' as const, blocking: true },
+  ],
   evidenceHash: 'e'.repeat(64), gateResult: 'passed' as const, requestedBy: 'qa', requestedAt: '2026-07-21T00:00:00.000Z',
   startedAt: '2026-07-21T00:00:01.000Z', completedAt: '2026-07-21T00:00:02.000Z', errorCode: null, evidenceFresh: true,
 }
@@ -145,6 +148,26 @@ describe('managed evaluations UI', () => {
     expect(screen.getByText(/full prompts and model outputs are not returned/)).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Download JSON report' }).getAttribute('href')).toBe('/api/evaluation-runs/run-1/report?format=json')
     expect(screen.getByRole('link', { name: 'Open HTML report' }).getAttribute('href')).toBe('/api/evaluation-runs/run-1/report?format=html')
+  })
+
+  it('accepts partial Suite coverage when the authoritative required gates passed', async () => {
+    const thresholdRun = {
+      ...baseRun,
+      metrics: { ...baseRun.metrics, eligibleCases: 2, suiteCaseCoveragePct: 50 },
+    }
+    vi.stubGlobal('fetch', vi.fn((input: string) => {
+      if (input === '/api/evaluation-suites') return response({ items: [{ ...suite, gate: { minSampleSize: 1, minSuiteCaseCoveragePct: 50 } }] })
+      if (input === '/api/evaluation-runs?limit=50') return response({ items: [thresholdRun] })
+      if (input.includes('/cases')) return response({ items: [caseResult], nextCursor: null })
+      if (input.includes('/decision')) return response({ decision: null })
+      return response({ error: { message: 'Not found' } }, 404)
+    }))
+
+    render(<ManagedEvaluations tab="history" />)
+    fireEvent.click(await screen.findByRole('button', { name: /Completed.*suite-1.*candidate/ }))
+    expect(await screen.findByText('Candidate meets the configured release gate.')).toBeTruthy()
+    fireEvent.change(screen.getByRole('textbox', { name: 'Target skeleton' }), { target: { value: 'codex:review' } })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create Candidate' }).hasAttribute('disabled')).toBe(false))
   })
 
   it('shows recovered partial history and fails closed for legacy evidence without authoritative coverage', async () => {

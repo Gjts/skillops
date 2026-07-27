@@ -24,6 +24,11 @@ const releaseLabels: Record<ReleaseKind, { confirm: MessageKey; apply: MessageKe
 }
 
 type ReleaseEvidenceRun = EvaluationRunSummary & { evidenceFresh?: boolean | null }
+type GovernanceCapability = Capability & {
+  effectiveGateResult?: EvaluationRunSummary['gateResult']
+  effectiveGates?: EvaluationRunSummary['gates']
+  effectivePolicyHash?: string | null
+}
 type GovernanceAuditEntry = {
   id: string
   action: string
@@ -106,12 +111,12 @@ function shortHash(value?: string | null) {
 
 export function GovernancePage() {
   const { formatDateTime, formatNumber, t } = useI18n()
-  const [items, setItems] = useState<Capability[]>([])
+  const [items, setItems] = useState<GovernanceCapability[]>([])
   const [capabilityPage, setCapabilityPage] = useState(1)
   const [capabilityPageState, setCapabilityPageState] = useState<PageState>({ page: 1, totalItems: 0, totalPages: 0, hasPrevious: false, hasNext: false })
   const [selectedId, setSelectedId] = useState<string | null>(() => new URLSearchParams(window.location.search).get('capability'))
-  const [linkedCapability, setLinkedCapability] = useState<Capability | null>(null)
-  const [previousStable, setPreviousStable] = useState<Capability | null>(null)
+  const [linkedCapability, setLinkedCapability] = useState<GovernanceCapability | null>(null)
+  const [previousStable, setPreviousStable] = useState<GovernanceCapability | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sourceRef, setSourceRef] = useState('')
@@ -125,7 +130,7 @@ export function GovernancePage() {
   const [auditToken, setAuditToken] = useState('')
   const [auditStatus, setAuditStatus] = useState<'locked' | 'loading' | 'loaded' | 'error'>('locked')
   const [auditSourceStatus, setAuditSourceStatus] = useState<'ok' | 'partial'>('ok')
-  const [preview, setPreview] = useState<{ kind: ReleaseKind; capabilityId: string; value: SkeletonChangePreview } | null>(null)
+  const [preview, setPreview] = useState<{ kind: ReleaseKind; capabilityId: string; selectionId: string; value: SkeletonChangePreview } | null>(null)
   const [confirmed, setConfirmed] = useState(false)
   const [evidenceRun, setEvidenceRun] = useState<ReleaseEvidenceRun | null>(null)
   const [audit, setAudit] = useState<GovernanceAuditEntry[]>([])
@@ -135,7 +140,7 @@ export function GovernancePage() {
 
   const load = useCallback(async () => {
     try {
-      const result = await api<PageResponse<Capability>>(capabilityPage === 1 ? '/api/capabilities' : `/api/capabilities?page=${capabilityPage}&pageSize=50`)
+      const result = await api<PageResponse<GovernanceCapability>>(capabilityPage === 1 ? '/api/capabilities' : `/api/capabilities?page=${capabilityPage}&pageSize=50`)
       setItems(result.items)
       setCapabilityPageState({
         page: result.page ?? capabilityPage,
@@ -158,13 +163,18 @@ export function GovernancePage() {
       return
     }
     let live = true
-    api<Capability>(`/api/capabilities/${encodeURIComponent(selectedId)}`)
+    api<GovernanceCapability>(`/api/capabilities/${encodeURIComponent(selectedId)}`)
       .then((item) => { if (live && item.id === selectedId) setLinkedCapability(item) })
       .catch((caught) => { if (live) setError(caught instanceof Error ? caught.message : t('governance.requestFailed')) })
     return () => { live = false }
   }, [items, selectedId, t])
   const selected = useMemo(() => items.find((item) => item.id === selectedId)
     ?? (linkedCapability?.id === selectedId ? linkedCapability : null), [items, linkedCapability, selectedId])
+  const activePreview = preview?.selectionId === selected?.id ? preview : null
+  useEffect(() => {
+    setPreview(null)
+    setConfirmed(false)
+  }, [selectedId])
   useEffect(() => {
     let live = true
     auditRequest.current += 1
@@ -200,13 +210,20 @@ export function GovernancePage() {
     }
     let live = true
     setPreviousStable(null)
-    api<Capability>(`/api/capabilities/${encodeURIComponent(previousStableId)}`)
+    api<GovernanceCapability>(`/api/capabilities/${encodeURIComponent(previousStableId)}`)
       .then((item) => { if (live && item.id === previousStableId) setPreviousStable(item) })
-      .catch(() => {})
+      .catch(() => { if (live) setError(t('governance.requestFailed')) })
     return () => { live = false }
-  }, [items, previousStableId])
+  }, [items, previousStableId, t])
   const latestApproval = selected?.approvals[selected.approvals.length - 1] ?? null
-  const rollbackStableId = selected?.stage === 'approved' && selected.requalifiesStage === 'superseded'
+  const effectiveGates = selected?.effectiveGates ?? []
+  const effectiveGateResult = selected?.effectiveGateResult ?? 'not-evaluated'
+  const insufficientEvidence = effectiveGates.some((gate) => (
+    gate.id === 'sample-size' || gate.id === 'suite-case-coverage'
+  ) && gate.status !== 'passed')
+  const rollbackStableId = selected?.stage === 'approved'
+    && selected.requalifiesStage === 'superseded'
+    && selected.id === selected.releaseTarget?.previousStableCapabilityId
     ? selected.releaseTarget?.stableCapabilityId ?? undefined
     : undefined
 
@@ -287,7 +304,7 @@ export function GovernancePage() {
     }, token || undefined))
   }
   const requestPreview = async (kind: ReleaseKind, capabilityId = selected?.id) => {
-    if (!capabilityId) return
+    if (!capabilityId || !selected) return
     setBusy(true)
     setError(null)
     try {
@@ -295,17 +312,17 @@ export function GovernancePage() {
         action: 'preview',
         ...(kind === 'canary' ? { targetSkeleton: canaryTarget.trim(), projectRoot: canaryProjectRoot.trim() } : {}),
       })
-      setPreview({ kind, capabilityId, value })
+      setPreview({ kind, capabilityId, selectionId: selected.id, value })
       setConfirmed(false)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t('governance.requestFailed'))
     } finally { setBusy(false) }
   }
-  const applyPreview = () => preview && mutate(() => post(`/api/capabilities/${encodeURIComponent(preview.capabilityId)}/${preview.kind}`, {
+  const applyPreview = () => activePreview && mutate(() => post(`/api/capabilities/${encodeURIComponent(activePreview.capabilityId)}/${activePreview.kind}`, {
     action: 'apply',
-    previewToken: preview.value.previewToken,
+    previewToken: activePreview.value.previewToken,
     confirm: true,
-    ...(preview.kind === 'canary' ? { targetSkeleton: preview.value.target, projectRoot: preview.value.projectRoot } : {}),
+    ...(activePreview.kind === 'canary' ? { targetSkeleton: activePreview.value.target, projectRoot: activePreview.value.projectRoot } : {}),
   }))
 
   return (
@@ -372,7 +389,7 @@ export function GovernancePage() {
               <div><dt>{t('governance.previousStable')}</dt><dd>{previousStable ? `${previousStable.artifact.artifactId} · ${previousStable.artifact.version}` : t('evaluations.notAvailable')}</dd></div>
               <div><dt>{t('governance.approvalState')}</dt><dd>{latestApproval ? `${t(latestApproval.decision === 'approved' ? 'governance.stage.approved' : 'governance.approvalRejected')} · ${latestApproval.reviewer}` : t('governance.independentReviewRequired')}</dd></div>
               <div><dt>{t('governance.contentHash')}</dt><dd className="mono" title={selected.artifact.contentHash}>{shortHash(selected.artifact.contentHash)}</dd></div>
-              <div><dt>{t('governance.policyHash')}</dt><dd className="mono" title={selected.evidence?.policyHash}>{shortHash(selected.evidence?.policyHash)}</dd></div>
+              <div><dt>{t('governance.policyHash')}</dt><dd className="mono" title={selected.effectivePolicyHash ?? selected.evidence?.policyHash}>{shortHash(selected.effectivePolicyHash ?? selected.evidence?.policyHash)}</dd></div>
               <div><dt>{t('governance.suiteHash')}</dt><dd className="mono" title={selected.evidence?.suiteHash}>{shortHash(selected.evidence?.suiteHash)}</dd></div>
               <div><dt>{t('governance.evidenceHash')}</dt><dd className="mono" title={selected.evidence?.evidenceHash}>{shortHash(selected.evidence?.evidenceHash)}</dd></div>
             </dl>
@@ -380,14 +397,14 @@ export function GovernancePage() {
               {selected.evidenceStale ? <AlertTriangle size={17} /> : <CheckCircle2 size={17} />}
               <div><strong>{t(selected.evidenceStale ? 'governance.evidenceStale' : selected.evidence ? 'governance.evidenceFresh' : 'governance.evidenceMissing')}</strong>{selected.evidence && <span>{t('governance.boundAt', { time: formatDateTime(selected.evidence.boundAt) })}</span>}</div>
             </div>
-            {evidenceRun && <section className="release-evidence-summary" aria-label={t('governance.evidenceAndGates')}>
+            {selected.evidence && <section className="release-evidence-summary" aria-label={t('governance.evidenceAndGates')}>
               <h4>{t('governance.evidenceAndGates')}</h4>
               <dl>
-                <div><dt>{t('governance.sample')}</dt><dd>{t('governance.evaluatedCases', { count: evidenceRun.metrics?.casesTotal ?? 0 })}</dd></div>
-                <div><dt>{t('governance.gateResult')}</dt><dd>{t(evidenceRun.gateResult === 'passed' ? 'evaluations.gate.passed' : evidenceRun.gateResult === 'failed' ? 'evaluations.gate.failed' : 'evaluations.gate.notAvailable')}</dd></div>
-                <div><dt>{t('governance.evidenceFreshness')}</dt><dd>{t(evidenceRun.evidenceFresh === true ? 'governance.evidenceFresh' : evidenceRun.evidenceFresh === false ? 'governance.evidenceStale' : 'evaluations.notAvailable')}</dd></div>
+                <div><dt>{t('governance.sample')}</dt><dd>{evidenceRun?.metrics?.casesTotal == null ? t('evaluations.notAvailable') : t('governance.evaluatedCases', { count: evidenceRun.metrics.casesTotal })}</dd></div>
+                <div><dt>{t('governance.gateResult')}</dt><dd>{t(effectiveGateResult === 'passed' ? 'evaluations.gate.passed' : effectiveGateResult === 'failed' ? 'evaluations.gate.failed' : 'evaluations.gate.notAvailable')}</dd></div>
               </dl>
-              {(evidenceRun.gates || []).length > 0 && <ul>{evidenceRun.gates.map((gate) => <li key={gate.id}><strong>{gate.id}</strong><span>{t(gate.status === 'passed' ? 'evaluations.gate.passed' : gate.status === 'failed' ? 'evaluations.gate.failed' : 'evaluations.gate.notAvailable')}</span></li>)}</ul>}
+              {effectiveGates.length > 0 && <ul>{effectiveGates.map((gate) => <li key={gate.id}><strong>{gate.id}</strong><span>{t(gate.status === 'passed' ? 'evaluations.gate.passed' : gate.status === 'failed' ? 'evaluations.gate.failed' : 'evaluations.gate.notAvailable')}</span></li>)}</ul>}
+              {insufficientEvidence && <p>{t('evaluations.insufficientEvidence')}</p>}
             </section>}
 
             {(['candidate', 'evaluating', 'blocked'].includes(selected.stage) || (selected.evidenceStale && ['ready', 'canary', 'deprecated', 'superseded'].includes(selected.stage))) && <details className="governance-advanced-action">
@@ -409,7 +426,7 @@ export function GovernancePage() {
 
             {selected.stage === 'approved' && !selected.requalifiesStage && <div className="governance-action"><h4>{t('governance.startCanary')}</h4><label><span>{t('governance.canaryProjectRoot')}</span><input value={canaryProjectRoot} onChange={(event) => setCanaryProjectRoot(event.target.value)} placeholder="/absolute/path/to/canary-project" /></label><label><span>{t('governance.canaryTarget')}</span><input value={canaryTarget} onChange={(event) => setCanaryTarget(event.target.value)} placeholder=".codex/skills/review/SKILL.md" /></label><button className="button primary" type="button" disabled={busy || !canaryProjectRoot.trim() || !canaryTarget.trim()} onClick={() => void requestPreview('canary')}>{t('governance.previewCanary')}</button></div>}
             {selected.stage === 'approved' && selected.requalifiesStage === 'deprecated' && <div className="governance-action"><h4>{t('governance.restoreStable')}</h4><button className="button primary" type="button" disabled={busy} onClick={() => void requestPreview('rollback')}>{t('governance.previewRestore')}</button></div>}
-            {selected.stage === 'approved' && selected.requalifiesStage === 'superseded' && <div className="governance-action"><h4>{t('governance.monitorRollback')}</h4><button className="button danger" type="button" disabled={busy || !rollbackStableId} onClick={() => void requestPreview('rollback', rollbackStableId)}>{t('governance.previewRollback')}</button></div>}
+            {rollbackStableId && <div className="governance-action"><h4>{t('governance.monitorRollback')}</h4><button className="button danger" type="button" disabled={busy} onClick={() => void requestPreview('rollback', rollbackStableId)}>{t('governance.previewRollback')}</button></div>}
             {selected.stage === 'canary' && !selected.evidenceStale && <div className="governance-action"><h4>{t('governance.promoteStable')}</h4><button className="button primary" type="button" disabled={busy} onClick={() => void requestPreview('install')}>{t('governance.previewInstall')}</button><button className="button primary" type="button" disabled={busy} onClick={() => void requestPreview('promote')}>{t('governance.previewPromotion')}</button></div>}
             {selected.stage === 'stable' && <div className="governance-action"><h4>{t('governance.monitorRollback')}</h4><button className="button danger" type="button" disabled={busy} onClick={() => void requestPreview('deprecate')}>{t('governance.previewDeprecation')}</button><button className="button danger" type="button" disabled={busy} onClick={() => void requestPreview('rollback')}>{t('governance.previewRollback')}</button></div>}
             {selected.stage === 'deprecated' && !selected.evidenceStale && <div className="governance-action"><h4>{t('governance.restoreStable')}</h4><button className="button primary" type="button" disabled={busy} onClick={() => void requestPreview('rollback')}>{t('governance.previewRestore')}</button></div>}
@@ -434,23 +451,23 @@ export function GovernancePage() {
                 </div>
               </nav>}
             </section>
-            {preview && <div className="governance-preview" role="region" aria-label={t('governance.changePreview')}>
+            {activePreview && <div className="governance-preview" role="region" aria-label={t('governance.changePreview')}>
               <h4>{t('governance.changePreview')}</h4>
               <dl>
-                <div><dt>{t('governance.sourceRef')}</dt><dd title={preview.value.source}>{preview.value.source}</dd></div>
-                <div><dt>{t('governance.targetSkeleton')}</dt><dd title={preview.value.target}>{preview.value.target}</dd></div>
-                {preview.value.projectRoot && <div><dt>{t('governance.canaryProjectRoot')}</dt><dd title={preview.value.projectRoot}>{preview.value.projectRoot}</dd></div>}
-                <div><dt>{t('governance.currentHash')}</dt><dd title={preview.value.currentHash || undefined}>{shortHash(preview.value.currentHash)}</dd></div>
-                <div><dt>{t('governance.candidateHash')}</dt><dd title={preview.value.candidateHash}>{shortHash(preview.value.candidateHash)}</dd></div>
-                <div><dt>{t('governance.beforeLines')}</dt><dd>{preview.value.diff.beforeLines}</dd></div>
-                <div><dt>{t('governance.afterLines')}</dt><dd>{preview.value.diff.afterLines}</dd></div>
-                <div><dt>{t('governance.changedLines')}</dt><dd>{preview.value.diff.changedLines}</dd></div>
-                <div><dt>{t('governance.backup')}</dt><dd>{preview.value.backup}</dd></div>
-                <div><dt>{t('governance.conflict')}</dt><dd>{t(preview.value.conflict ? 'governance.yes' : 'governance.no')}</dd></div>
+                <div><dt>{t('governance.sourceRef')}</dt><dd title={activePreview.value.source}>{activePreview.value.source}</dd></div>
+                <div><dt>{t('governance.targetSkeleton')}</dt><dd title={activePreview.value.target}>{activePreview.value.target}</dd></div>
+                {activePreview.value.projectRoot && <div><dt>{t('governance.canaryProjectRoot')}</dt><dd title={activePreview.value.projectRoot}>{activePreview.value.projectRoot}</dd></div>}
+                <div><dt>{t('governance.currentHash')}</dt><dd title={activePreview.value.currentHash || undefined}>{shortHash(activePreview.value.currentHash)}</dd></div>
+                <div><dt>{t('governance.candidateHash')}</dt><dd title={activePreview.value.candidateHash}>{shortHash(activePreview.value.candidateHash)}</dd></div>
+                <div><dt>{t('governance.beforeLines')}</dt><dd>{activePreview.value.diff.beforeLines}</dd></div>
+                <div><dt>{t('governance.afterLines')}</dt><dd>{activePreview.value.diff.afterLines}</dd></div>
+                <div><dt>{t('governance.changedLines')}</dt><dd>{activePreview.value.diff.changedLines}</dd></div>
+                <div><dt>{t('governance.backup')}</dt><dd>{activePreview.value.backup}</dd></div>
+                <div><dt>{t('governance.conflict')}</dt><dd>{t(activePreview.value.conflict ? 'governance.yes' : 'governance.no')}</dd></div>
               </dl>
-              <p>{preview.value.rollbackPlan}</p>
-              <label className="governance-confirm"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>{t(releaseLabels[preview.kind].confirm)}</span></label>
-              <button className={releaseLabels[preview.kind].danger ? 'button danger' : 'button primary'} type="button" disabled={busy || !confirmed} onClick={() => void applyPreview()}>{t(releaseLabels[preview.kind].apply)}</button>
+              <p>{activePreview.value.rollbackPlan}</p>
+              <label className="governance-confirm"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>{t(releaseLabels[activePreview.kind].confirm)}</span></label>
+              <button className={releaseLabels[activePreview.kind].danger ? 'button danger' : 'button primary'} type="button" disabled={busy || !confirmed} onClick={() => void applyPreview()}>{t(releaseLabels[activePreview.kind].apply)}</button>
             </div>}
           </>}
         </section>
