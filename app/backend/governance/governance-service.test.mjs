@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -780,7 +780,7 @@ describe('capability governance', () => {
       projectRoot: canaryRoot,
     })).resolves.toEqual(expect.objectContaining({
       target: '.claude/commands/release.md',
-      projectRoot: canaryRoot,
+      projectRoot: await realpath(canaryRoot),
     }))
   })
 
